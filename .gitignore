@@ -12,3 +12,4 @@ web/node_modules/
 web/dist/
 !web/dist/.gitkeep
 cmd/probe/probe-agent
+probe-agent
