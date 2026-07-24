@@ -3,6 +3,18 @@
 All notable changes to PROBE are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [Semantic Versioning](https://semver.org/).
 
+## [v1.6.0] — 2026-07-24
+
+### Changed
+- **Reverted build tag separation** — single unified binary now includes all 3 modes (serve, connect, relay) with no build tags
+- **Deleted stub files** — `serve_stub.go`, `relay_stub.go`, `internal/server/relay_stub.go` (no longer needed)
+- **Updated obfuscation tool** — `isServerCmd()` no longer skips `serve.go`/`relay.go`; all `cmd/probe/` files get full obfuscation
+- **Updated usage text** — removed `[build: -tags server]` references
+
+### Security
+- **VT result: 1/69** (Microsoft Wacapew.C!ml, PUA not trojan) — same as v1.5.0 client-only build. Including server+relay code in the binary does not increase detections. All 68 other engines clean.
+- **Trade-off: RE surface** — unified binary means capturing one agent reveals server, relay, and agent code. Accepted by user directive for operational simplicity.
+
 ## [v1.5.0] — 2026-07-24
 
 ### Added

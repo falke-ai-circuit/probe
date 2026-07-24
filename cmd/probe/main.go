@@ -5,7 +5,7 @@ import (
 	"os"
 )
 
-const appVersion = "v1.5.0"
+const appVersion = "v1.6.0"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -41,9 +41,9 @@ Usage:
   probe <subcommand> [flags]
 
 Subcommands:
-  serve     Start as server (top of tree, listens for agents + operators)  [build: -tags server]
+  serve     Start as server (top of tree, listens for agents + operators)
   connect   Start as client/agent (connects to server or relay)
-  relay     Start as relay bridge (listens downstream, connects upstream)   [build: -tags relay]
+  relay     Start as relay bridge (listens downstream, connects upstream)
   version   Print version
   help      Show this usage
 
