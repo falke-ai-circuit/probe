@@ -3,5 +3,5 @@
 # Usage: ./vt-scan-wrapper.sh <binary_path> [label]
 
 export VT_API_KEY=$(cat ~/.vt_api_key)
-cd /opt/data/workspace-operative/hermes-remote/tools
+cd /opt/data/workspace-operative/probe/tools
 python3 vt-scan.py "$1" "$2"

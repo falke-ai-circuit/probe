@@ -172,7 +172,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follo
 ### Changed
 - **AV evasion breakthrough**: Go 1.23.12 zero-flag build (inside git repo, CGO_ENABLED=0)
   achieves 0/74 VT detections. This contradicts earlier skill data (Go 1.22 was preferred
-  for smaller HermesRemote codebase) — the larger PROBE codebase (10MB) with Go 1.23 runtime
+  for smaller PROBE codebase (formerly HermesRemote)) — the larger PROBE codebase (10MB) with Go 1.23 runtime
   shifts PE features enough to clear Microsoft's Wacatac/Wacapew ML classifiers AND Elastic.
 - Tested 14 variants on VT to find the winning combination
 - Config injection via ldflags disabled (was triggering Wacapew.C!ml); config now via JSON file only
