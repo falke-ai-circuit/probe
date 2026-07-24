@@ -157,8 +157,34 @@ export function TopologyGraph() {
 
   const fetchTopology = useCallback(async () => {
     try {
-      const raw = await api.getTopology() as TopologyData
-      setData(raw)
+      const raw = await api.getTopology() as { nodes: any[]; edges: any[] }
+      // Transform API response to component-expected format
+      const serverNode = raw.nodes.find(n => n.type === 'server')
+      const agentNodes = raw.nodes.filter(n => n.type === 'agent')
+      const relayNodes = raw.nodes.filter(n => n.type === 'relay')
+
+      // Build parent map from edges
+      const parentMap: Record<string, string> = {}
+      for (const e of raw.edges) {
+        parentMap[e.from] = e.to
+      }
+
+      const transform = (n: any): TopologyNode => ({
+        id: n.id,
+        name: n.name,
+        version: n.version,
+        type: n.type,
+        connected: true,
+        parent: parentMap[n.id],
+        relayed: n.relayed || n.id.startsWith('relay/'),
+      })
+
+      const transformed: TopologyData = {
+        server: serverNode ? { id: serverNode.id, name: serverNode.name, version: serverNode.version } : { id: 'server', name: 'server' },
+        agents: agentNodes.map(transform),
+        relays: relayNodes.map(transform),
+      }
+      setData(transformed)
       setError('')
     } catch (e) {
       setError((e as Error).message)

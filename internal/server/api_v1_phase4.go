@@ -207,8 +207,10 @@ func (s *Server) handleV1Topology(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"ok":    true,
-		"nodes": nodes,
-		"edges": edges,
+		"data": map[string]interface{}{
+			"nodes": nodes,
+			"edges": edges,
+		},
 	})
 }
 
