@@ -10,7 +10,6 @@ import (
 	"syscall"
 
 	"github.com/falke-ai-circuit/probe/internal/agent"
-	_ "github.com/falke-ai-circuit/probe/internal/features"
 	"github.com/falke-ai-circuit/probe/internal/modes"
 	"github.com/falke-ai-circuit/probe/internal/relay"
 )
