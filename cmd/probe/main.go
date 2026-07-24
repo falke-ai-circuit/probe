@@ -109,12 +109,14 @@ func runSupervisor(args []string) {
 				Name        string `json:"name"`
 				Mode        string `json:"mode"`
 				Permissions string `json:"permissions"`
+				ConfigPath  string `json:"config_path"`
 			}{
 				Server:      uc.Client.Server,
 				Token:       uc.Client.Token,
 				Name:        uc.Client.Name,
 				Mode:        uc.Client.Mode,
 				Permissions: uc.Client.Permissions,
+				ConfigPath:  *configPath,
 			})
 			if err := mgr.StartMode("connect", cfgJSON); err != nil {
 				fmt.Fprintf(os.Stderr, "Failed to start connect: %v\n", err)
@@ -190,7 +192,7 @@ func runDefaultSupervisor() {
 	// No config file found → start as server with defaults
 	if configPath == "" {
 		fmt.Fprintf(os.Stderr, "PROBE %s — no config file found, starting as server (default)\n", appVersion)
-		runSupervisorWithAutoStart(nil)
+		runSupervisorWithAutoStart(nil, "")
 		return
 	}
 
@@ -201,12 +203,12 @@ func runDefaultSupervisor() {
 	}
 
 	fmt.Fprintf(os.Stderr, "PROBE %s — config: %s\n", appVersion, configPath)
-	runSupervisorWithAutoStart(uc)
+	runSupervisorWithAutoStart(uc, configPath)
 }
 
 // runSupervisorWithAutoStart starts the mode manager, auto-starts modes based
 // on the unified config, then waits for signals.
-func runSupervisorWithAutoStart(uc *UnifiedConfig) {
+func runSupervisorWithAutoStart(uc *UnifiedConfig, configPath string) {
 	mgmtAddr := ":9700"
 	if uc != nil && uc.MgmtAddr != "" {
 		mgmtAddr = uc.MgmtAddr
@@ -257,12 +259,14 @@ func runSupervisorWithAutoStart(uc *UnifiedConfig) {
 			Name        string `json:"name"`
 			Mode        string `json:"mode"`
 			Permissions string `json:"permissions"`
+			ConfigPath  string `json:"config_path"`
 		}{
 			Server:      uc.Client.Server,
 			Token:       uc.Client.Token,
 			Name:        uc.Client.Name,
 			Mode:        uc.Client.Mode,
 			Permissions: uc.Client.Permissions,
+			ConfigPath:  configPath,
 		})
 		if err := mgr.StartMode("connect", cfgJSON); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to start connect: %v\n", err)
@@ -354,6 +358,7 @@ func registerFactories(mgr *modes.Manager) {
 			Name        string `json:"name"`
 			Mode        string `json:"mode"`
 			Permissions string `json:"permissions"`
+			ConfigPath  string `json:"config_path"`
 		}
 		if len(cfg) > 0 {
 			if err := json.Unmarshal(cfg, &c); err != nil {
@@ -382,6 +387,7 @@ func registerFactories(mgr *modes.Manager) {
 			Token:       strings.Trim(c.Token, "\"'"),
 			Name:        name,
 			Permissions: perms,
+			ConfigPath:  c.ConfigPath,
 		}
 		return modes.NewConnectMode(ac), nil
 	})

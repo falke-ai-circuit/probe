@@ -57,6 +57,9 @@ type Config struct {
 	// server on connect (e.g. "exec", "filesystem", "capture"). When empty,
 	// the server treats the agent as having all capabilities (backward compat).
 	Capabilities []string
+	// ConfigPath is the path to the config file used to start this agent.
+	// Used by reconfigure to save updated config back to disk.
+	ConfigPath string
 }
 
 // Agent is the remote agent instance.
@@ -1090,8 +1093,14 @@ func (a *Agent) handleReconfigure(env protocol.Envelope) protocol.Envelope {
 
 	// Try to save updated config to file (if path provided or config file known)
 	savePath := params.SavePath
+	if savePath == "" && a.cfg.ConfigPath != "" {
+		// Use the config file path the agent was started with
+		if _, err := os.Stat(a.cfg.ConfigPath); err == nil {
+			savePath = a.cfg.ConfigPath
+		}
+	}
 	if savePath == "" {
-		// Try common config file names
+		// Try common config file names in working directory
 		for _, name := range []string{"probe.json", "probe-client.json"} {
 			if _, err := os.Stat(name); err == nil {
 				savePath = name

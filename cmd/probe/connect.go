@@ -145,6 +145,7 @@ func runConnect(args []string) {
 		Permissions:    fcfg.Permissions,
 		SandboxDir:     fcfg.SandboxDir,
 		Capabilities:   fcfg.Capabilities,
+		ConfigPath:     *configPath,
 	}
 
 	// Ensure the WebSocket URL includes the /ws path the server expects
