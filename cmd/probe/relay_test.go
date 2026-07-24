@@ -9,8 +9,8 @@ import (
 func buildProbeRelay(t *testing.T) string {
 	t.Helper()
 	binPath := t.TempDir() + "/probe-relay"
-	cmd := exec.Command("go", "build", "-tags", "relay", "-o", binPath, ".")
-	cmd.Dir = "/opt/data/workspace-operative/hermes-remote/cmd/probe"
+	cmd := exec.Command("go", "build", "-o", binPath, ".")
+	cmd.Dir = "."
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Skipf("failed to build probe-relay binary: %v\n%s", err, out)
 	}

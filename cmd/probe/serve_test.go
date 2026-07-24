@@ -9,8 +9,8 @@ import (
 func buildProbeServer(t *testing.T) string {
 	t.Helper()
 	binPath := t.TempDir() + "/probe-server"
-	cmd := exec.Command("go", "build", "-tags", "server", "-o", binPath, ".")
-	cmd.Dir = "/opt/data/workspace-operative/hermes-remote/cmd/probe"
+	cmd := exec.Command("go", "build", "-o", binPath, ".")
+	cmd.Dir = "."
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Skipf("failed to build probe-server binary: %v\n%s", err, out)
 	}
