@@ -3,6 +3,21 @@
 All notable changes to PROBE are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [Semantic Versioning](https://semver.org/).
 
+## [v1.9.1] — 2026-07-24
+
+### Added — Mass Reconfigure & Topology Active/Inactive
+- **Mass reconfigure API** — `POST /api/v1/reconfigure` broadcasts new server URL to all connected agents. Each agent saves updated config and reconnects to new address. Enables server IP migration without touching clients.
+- **Single agent reconfigure** — `POST /api/v1/agents/{id}/reconfigure` sends reconfigure to one agent.
+- **Reconfigure protocol message** — `TypeReconfigure` WebSocket message: agent receives new server_url + optional token, saves config file, closes connection for reconnect.
+- **Topology active/inactive status** — `GET /api/v1/topology` now includes `active` boolean field per node. Active = agent has live WebSocket connection. Inactive = stale registry entry (agent was previously connected but is now offline).
+- **Topology node click → edit dialog** — click any agent node in the topology graph to open a dialog showing agent info (ID, connection type, version) with reconfigure option and link to agent detail page.
+- **Server node click → reconfigure all** — click the server hexagon to open a "Reconfigure All Agents" dialog with server URL + token input.
+- **Inactive node shading** — topology graph nodes for inactive agents rendered with 40% opacity, dashed borders, and red "INACTIVE" label. Edges to inactive agents also dashed and dimmed.
+- **Update fallback naming** — if clean `.exe` filename is locked (existing process), update falls back to `.new` suffix instead of failing.
+
+### Fixed
+- **Version constants** — `Version` in agent.go and `appVersion` in main.go now correctly reflect 1.9.1.
+
 ## [v1.9.0] — 2026-07-24
 
 ### Added — Phase 4: Dynamic Mode Switching & Aware Relay

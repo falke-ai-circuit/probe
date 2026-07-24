@@ -114,6 +114,7 @@ func (s *Server) handleV1Topology(w http.ResponseWriter, r *http.Request) {
 		Version   string `json:"version,omitempty"`
 		Modes     string `json:"modes,omitempty"`
 		Relayed   bool   `json:"relayed,omitempty"`
+		Active    bool   `json:"active"`
 		Children  []TopologyNode `json:"children,omitempty"`
 	}
 
@@ -130,19 +131,21 @@ func (s *Server) handleV1Topology(w http.ResponseWriter, r *http.Request) {
 	var nodes []TopologyNode
 	var edges []TopologyEdge
 
-	// Server node
+	// Server node — always active if server is running
 	nodes = append(nodes, TopologyNode{
-		ID:   "server",
-		Type: "server",
-		Name: s.addr,
+		ID:     "server",
+		Type:   "server",
+		Name:   s.addr,
+		Active: true,
 	})
 
 	// Relay nodes + their agents
 	for _, rs := range relays {
 		relayNode := TopologyNode{
-			ID:   rs.relayID,
-			Type: "relay",
-			Name: rs.relayID,
+			ID:     rs.relayID,
+			Type:   "relay",
+			Name:   rs.relayID,
+			Active: true, // relay is connected if session exists
 		}
 		if rs.metadata != nil {
 			relayNode.Modes = fmt.Sprintf("listen=%s", rs.metadata.ListenAddr)
@@ -159,6 +162,7 @@ func (s *Server) handleV1Topology(w http.ResponseWriter, r *http.Request) {
 					Type:    "agent",
 					Name:    vc.agentID,
 					Relayed: true,
+					Active:  true, // relayed agent is active if it has a channel
 				}
 				if err == nil {
 					agentNode.Version = agentRecord.Version
@@ -186,6 +190,13 @@ func (s *Server) handleV1Topology(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Direct agents (not behind a relay)
+	s.mu.RLock()
+	connMap := make(map[string]bool, len(s.conns))
+	for id := range s.conns {
+		connMap[id] = true
+	}
+	s.mu.RUnlock()
+
 	for _, agentInfo := range agents {
 		// Skip relayed agents (they start with "relay/")
 		if strings.HasPrefix(agentInfo.AgentID, "relay/") {
@@ -196,6 +207,7 @@ func (s *Server) handleV1Topology(w http.ResponseWriter, r *http.Request) {
 			Type:    "agent",
 			Name:    agentInfo.Name,
 			Version: agentInfo.Version,
+			Active:  connMap[agentInfo.AgentID],
 		})
 		edges = append(edges, TopologyEdge{
 			From: agentInfo.AgentID,

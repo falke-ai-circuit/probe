@@ -11,12 +11,13 @@ interface TopologyNode {
   version?: string
   type: 'server' | 'agent' | 'relay'
   connected: boolean
+  active: boolean
   parent?: string  // parent node id (for edge drawing)
   relayed?: boolean // true if connection goes through a relay
 }
 
 interface TopologyData {
-  server: { id: string; name: string; version?: string }
+  server: { id: string; name: string; version?: string; connected: boolean; active: boolean }
   agents: TopologyNode[]
   relays: TopologyNode[]
 }
@@ -90,10 +91,14 @@ function NodeShape({ node, onClick, onDragStart }: {
   onClick: () => void
   onDragStart: (e: React.MouseEvent) => void
 }) {
-  const color = node.connected ? '#00ff41' : '#555'
-  const glow = node.connected ? '0 0 8px rgba(0,255,65,0.6)' : 'none'
+  const active = node.active !== false && node.connected
+  const color = active ? '#00ff41' : '#4a5a4a'
+  const glow = active ? '0 0 8px rgba(0,255,65,0.6)' : 'none'
+  const opacity = active ? 1 : 0.4
+  const strokeDash = active ? 'none' : '4,3'
   const label = node.name || node.id
   const sub = node.version ? `v${node.version}` : ''
+  const statusLabel = active ? '' : 'INACTIVE'
 
   if (node.type === 'server') {
     // Hexagon
@@ -107,11 +112,12 @@ function NodeShape({ node, onClick, onDragStart }: {
       [node.x - s * 0.866, node.y - s * 0.5],
     ].map(p => p.join(',')).join(' ')
     return (
-      <g style={{ cursor: 'pointer' }} onClick={onClick} onMouseDown={onDragStart}>
-        <polygon points={pts} fill="rgba(0,255,65,0.08)" stroke={color} strokeWidth={2}
+      <g style={{ cursor: 'pointer', opacity }} onClick={onClick} onMouseDown={onDragStart}>
+        <polygon points={pts} fill="rgba(0,255,65,0.08)" stroke={color} strokeWidth={2} strokeDasharray={strokeDash}
           style={{ filter: `drop-shadow(${glow})` }} />
         <text x={node.x} y={node.y + 48} textAnchor="middle" fill={color} fontSize={11} fontFamily="monospace">{label}</text>
         {sub && <text x={node.x} y={node.y + 62} textAnchor="middle" fill="#5a7a5a" fontSize={9} fontFamily="monospace">{sub}</text>}
+        {statusLabel && <text x={node.x} y={node.y + 76} textAnchor="middle" fill="#ff4444" fontSize={8} fontFamily="monospace">{statusLabel}</text>}
       </g>
     )
   }
@@ -120,12 +126,13 @@ function NodeShape({ node, onClick, onDragStart }: {
     // Square
     const s = 24
     return (
-      <g style={{ cursor: 'pointer' }} onClick={onClick} onMouseDown={onDragStart}>
+      <g style={{ cursor: 'pointer', opacity }} onClick={onClick} onMouseDown={onDragStart}>
         <rect x={node.x - s} y={node.y - s} width={s * 2} height={s * 2} rx={4}
-          fill="rgba(0,255,65,0.08)" stroke={color} strokeWidth={2}
+          fill="rgba(0,255,65,0.08)" stroke={color} strokeWidth={2} strokeDasharray={strokeDash}
           style={{ filter: `drop-shadow(${glow})` }} />
         <text x={node.x} y={node.y + 42} textAnchor="middle" fill={color} fontSize={11} fontFamily="monospace">{label}</text>
         {sub && <text x={node.x} y={node.y + 56} textAnchor="middle" fill="#5a7a5a" fontSize={9} fontFamily="monospace">{sub}</text>}
+        {statusLabel && <text x={node.x} y={node.y + 70} textAnchor="middle" fill="#ff4444" fontSize={8} fontFamily="monospace">{statusLabel}</text>}
       </g>
     )
   }
@@ -133,11 +140,12 @@ function NodeShape({ node, onClick, onDragStart }: {
   // Agent = circle
   const r = 22
   return (
-    <g style={{ cursor: 'pointer' }} onClick={onClick} onMouseDown={onDragStart}>
-      <circle cx={node.x} cy={node.y} r={r} fill="rgba(0,255,65,0.08)" stroke={color} strokeWidth={2}
+    <g style={{ cursor: 'pointer', opacity }} onClick={onClick} onMouseDown={onDragStart}>
+      <circle cx={node.x} cy={node.y} r={r} fill="rgba(0,255,65,0.08)" stroke={color} strokeWidth={2} strokeDasharray={strokeDash}
         style={{ filter: `drop-shadow(${glow})` }} />
       <text x={node.x} y={node.y + 42} textAnchor="middle" fill={color} fontSize={11} fontFamily="monospace">{label}</text>
       {sub && <text x={node.x} y={node.y + 56} textAnchor="middle" fill="#5a7a5a" fontSize={9} fontFamily="monospace">{sub}</text>}
+      {statusLabel && <text x={node.x} y={node.y + 70} textAnchor="middle" fill="#ff4444" fontSize={8} fontFamily="monospace">{statusLabel}</text>}
     </g>
   )
 }
@@ -179,13 +187,14 @@ export function TopologyGraph() {
         name: n.name,
         version: n.version,
         type: n.type,
-        connected: true,
+        connected: n.active !== false,
+        active: n.active !== false,
         parent: parentMap[n.id],
         relayed: n.relayed || n.id.startsWith('relay/'),
       })
 
       const transformed: TopologyData = {
-        server: serverNode ? { id: serverNode.id, name: serverNode.name, version: serverNode.version } : { id: 'server', name: 'server' },
+        server: serverNode ? { id: serverNode.id, name: serverNode.name, version: serverNode.version, connected: true, active: true } : { id: 'server', name: 'server', connected: true, active: true },
         agents: agentNodes.map(transform),
         relays: relayNodes.map(transform),
       }
@@ -334,14 +343,15 @@ export function TopologyGraph() {
               const from = nodeById(edge.from)
               const to = nodeById(edge.to)
               if (!from || !to) return null
+              const edgeActive = to.active !== false && to.connected
               return (
                 <line
                   key={i}
                   x1={from.x} y1={from.y} x2={to.x} y2={to.y}
-                  stroke={to.connected ? '#00ff41' : '#555'}
+                  stroke={edgeActive ? '#00ff41' : '#4a5a4a'}
                   strokeWidth={1.5}
-                  strokeDasharray={edge.relayed ? '6,4' : 'none'}
-                  opacity={0.6}
+                  strokeDasharray={edge.relayed ? '6,4' : (edgeActive ? 'none' : '4,3')}
+                  opacity={edgeActive ? 0.6 : 0.3}
                 />
               )
             })}
