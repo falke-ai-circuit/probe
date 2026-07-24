@@ -219,3 +219,107 @@ func mustMarshalRawV1(v interface{}) json.RawMessage {
 	data, _ := json.Marshal(v)
 	return data
 }
+
+// handleV1ReconfigureAll broadcasts a reconfigure command to ALL connected agents.
+// POST /api/v1/reconfigure
+// Body: {"server_url":"ws://new-server:80/ws","token":"optional-new-token"}
+// This enables mass migration when the server IP changes — all agents reconnect
+// to the new address, and their local config files are updated.
+func (s *Server) handleV1ReconfigureAll(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ServerURL string `json:"server_url"`
+		Token     string `json:"token,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if req.ServerURL == "" {
+		http.Error(w, "server_url is required", http.StatusBadRequest)
+		return
+	}
+
+	params := mustMarshalRawV1(struct {
+		ServerURL string `json:"server_url"`
+		Token     string `json:"token,omitempty"`
+	}{req.ServerURL, req.Token})
+
+	// Get all connected agents
+	agents := s.registry.ListAgents()
+	results := make([]map[string]interface{}, 0, len(agents))
+
+	for _, agentInfo := range agents {
+		// Skip relayed agents and inactive ones
+		if strings.HasPrefix(agentInfo.AgentID, "relay/") || agentInfo.Status != "active" {
+			continue
+		}
+
+		// Send reconfigure with short timeout (fire and forget — agent will disconnect)
+		_, err := s.forwardToAgentWithTimeout(agentInfo.AgentID, protocol.TypeReconfigure, params, 5*time.Second, "")
+
+		result := map[string]interface{}{
+			"agent":  agentInfo.AgentID,
+			"status": "sent",
+		}
+		if err != nil {
+			result["status"] = "error"
+			result["error"] = err.Error()
+		}
+		results = append(results, result)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":      true,
+		"data":    results,
+		"count":   len(results),
+		"new_url": req.ServerURL,
+	})
+}
+
+// handleV1ReconfigureAgent reconfigures a single agent.
+// POST /api/v1/agents/{id}/reconfigure
+// Body: {"server_url":"ws://new-server:80/ws","token":"optional-new-token"}
+func (s *Server) handleV1ReconfigureAgent(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	if agentID == "" {
+		http.Error(w, "agent id required", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		ServerURL string `json:"server_url"`
+		Token     string `json:"token,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if req.ServerURL == "" {
+		http.Error(w, "server_url is required", http.StatusBadRequest)
+		return
+	}
+
+	params := mustMarshalRawV1(struct {
+		ServerURL string `json:"server_url"`
+		Token     string `json:"token,omitempty"`
+	}{req.ServerURL, req.Token})
+
+	resp, err := s.forwardToAgentWithTimeout(agentID, protocol.TypeReconfigure, params, 10*time.Second, "")
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":    false,
+			"error": err.Error(),
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":    true,
+		"data":  resp,
+		"agent": agentID,
+	})
+}

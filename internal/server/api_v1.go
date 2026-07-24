@@ -391,6 +391,8 @@ func (s *Server) registerV1Routes() {
 	s.mux.HandleFunc("POST /api/v1/agents/{id}/mode", s.handleV1AgentMode)
 	s.mux.HandleFunc("GET /api/v1/agents/{id}/mode", s.handleV1GetAgentMode)
 	s.mux.HandleFunc("GET /api/v1/topology", s.handleV1Topology)
+	s.mux.HandleFunc("POST /api/v1/reconfigure", s.handleV1ReconfigureAll)
+	s.mux.HandleFunc("POST /api/v1/agents/{id}/reconfigure", s.handleV1ReconfigureAgent)
 }
 
 // ---------------------------------------------------------------------------

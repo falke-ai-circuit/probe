@@ -288,6 +288,16 @@ export const api = {
   getAgentMode: (id: string) =>
     apiFetch<unknown>(`/agents/${id}/mode`),
   getTopology: () => apiFetch<unknown>('/topology'),
+  reconfigureAll: (serverUrl: string, token?: string) =>
+    apiFetch<unknown>('/reconfigure', {
+      method: 'POST',
+      body: JSON.stringify({ server_url: serverUrl, token: token || '' }),
+    }),
+  reconfigureAgent: (id: string, serverUrl: string, token?: string) =>
+    apiFetch<unknown>(`/agents/${id}/reconfigure`, {
+      method: 'POST',
+      body: JSON.stringify({ server_url: serverUrl, token: token || '' }),
+    }),
 
   // File transfers (global)
   listTransfers: () => apiFetch<FileTransfer[]>('/transfers'),

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api/client'
-import { Maximize2, Minimize2 } from 'lucide-react'
+import { Maximize2, Minimize2, RefreshCw, X } from 'lucide-react'
 
 // --- Types ---
 
@@ -154,6 +154,11 @@ export function TopologyGraph() {
   const containerRef = useRef<HTMLDivElement>(null)
   const dragState = useRef<{ type: 'pan' | 'node'; id?: string; startX: number; startY: number; origX?: number; origY?: number } | null>(null)
   const [nodeOverrides, setNodeOverrides] = useState<Record<string, { x: number; y: number }>>({})
+  const [selectedNode, setSelectedNode] = useState<TopologyNode | null>(null)
+  const [reconfigureUrl, setReconfigureUrl] = useState('')
+  const [reconfigureToken, setReconfigureToken] = useState('')
+  const [reconfigureResult, setReconfigureResult] = useState('')
+  const [showReconfigureAll, setShowReconfigureAll] = useState(false)
 
   const fetchTopology = useCallback(async () => {
     try {
@@ -211,8 +216,45 @@ export function TopologyGraph() {
   const nodeById = (id: string) => positionedNodes.find(n => n.id === id)
 
   const handleNodeClick = (id: string) => {
-    if (id === data?.server.id) return
-    navigate(`/agents/${id}`)
+    if (id === data?.server.id) {
+      // Server node clicked — open reconfigure-all dialog
+      setShowReconfigureAll(true)
+      setReconfigureUrl('')
+      setReconfigureResult('')
+      return
+    }
+    // Agent/relay node clicked — open edit dialog
+    const node = [...(data?.agents || []), ...(data?.relays || [])].find(n => n.id === id)
+    if (node) {
+      setSelectedNode(node)
+      setReconfigureUrl('')
+      setReconfigureResult('')
+    }
+  }
+
+  const handleReconfigureAgent = async () => {
+    if (!selectedNode || !reconfigureUrl) return
+    try {
+      setReconfigureResult('Sending...')
+      const res = await api.reconfigureAgent(selectedNode.id, reconfigureUrl, reconfigureToken || undefined)
+      setReconfigureResult(`✓ Agent reconnecting to ${reconfigureUrl}`)
+      setTimeout(() => { setSelectedNode(null); setReconfigureResult('') }, 3000)
+    } catch (e) {
+      setReconfigureResult(`✗ ${(e as Error).message}`)
+    }
+  }
+
+  const handleReconfigureAll = async () => {
+    if (!reconfigureUrl) return
+    try {
+      setReconfigureResult('Broadcasting to all agents...')
+      const res = await api.reconfigureAll(reconfigureUrl, reconfigureToken || undefined)
+      const r = res as { count?: number; new_url?: string }
+      setReconfigureResult(`✓ Reconfigure sent to ${r.count || 0} agents → ${r.new_url || reconfigureUrl}`)
+      setTimeout(() => { setShowReconfigureAll(false); setReconfigureResult('') }, 4000)
+    } catch (e) {
+      setReconfigureResult(`✗ ${(e as Error).message}`)
+    }
   }
 
   const handleMouseDown = (e: React.MouseEvent, nodeId?: string) => {
@@ -314,6 +356,91 @@ export function TopologyGraph() {
             ))}
           </g>
         </svg>
+      )}
+
+      {/* Agent edit dialog */}
+      {selectedNode && (
+        <div style={{
+          position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)',
+          background: '#0d130d', border: '1px solid #00ff41', borderRadius: 6, padding: 20,
+          minWidth: 360, zIndex: 20, boxShadow: '0 0 20px rgba(0,255,65,0.15)',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
+            <strong style={{ color: '#00ff41', fontFamily: 'monospace' }}>{selectedNode.name}</strong>
+            <button className="btn btn-sm" onClick={() => setSelectedNode(null)}><X size={14} /></button>
+          </div>
+          <div style={{ fontSize: 11, color: '#5a7a5a', marginBottom: 12, fontFamily: 'monospace' }}>
+            ID: {selectedNode.id} | {selectedNode.relayed ? 'Relayed' : 'Direct'} | {selectedNode.version || '—'}
+          </div>
+          <button className="btn btn-sm" style={{ width: '100%', marginBottom: 12 }}
+            onClick={() => navigate(`/agents/${selectedNode.id}`)}>
+            Open Agent Detail →
+          </button>
+          <div style={{ borderTop: '1px solid #1a2a1a', paddingTop: 12 }}>
+            <div style={{ fontSize: 11, color: '#5a7a5a', marginBottom: 6 }}>RECONFIGURE SERVER</div>
+            <input
+              className="input" style={{ width: '100%', marginBottom: 6, fontSize: 12 }}
+              placeholder="ws://new-server:80/ws"
+              value={reconfigureUrl}
+              onChange={e => setReconfigureUrl(e.target.value)}
+            />
+            <input
+              className="input" style={{ width: '100%', marginBottom: 6, fontSize: 12 }}
+              placeholder="Token (optional, keep existing if empty)"
+              value={reconfigureToken}
+              onChange={e => setReconfigureToken(e.target.value)}
+            />
+            <button className="btn btn-sm" style={{ width: '100%' }}
+              disabled={!reconfigureUrl}
+              onClick={handleReconfigureAgent}>
+              <RefreshCw size={12} /> Reconnect Agent
+            </button>
+            {reconfigureResult && (
+              <div style={{ fontSize: 11, marginTop: 6, fontFamily: 'monospace', color: reconfigureResult.startsWith('✓') ? '#00ff41' : '#ff4444' }}>
+                {reconfigureResult}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Reconfigure all dialog (click server node) */}
+      {showReconfigureAll && (
+        <div style={{
+          position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)',
+          background: '#0d130d', border: '1px solid #00ff41', borderRadius: 6, padding: 20,
+          minWidth: 400, zIndex: 20, boxShadow: '0 0 20px rgba(0,255,65,0.15)',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
+            <strong style={{ color: '#00ff41', fontFamily: 'monospace' }}>Reconfigure All Agents</strong>
+            <button className="btn btn-sm" onClick={() => setShowReconfigureAll(false)}><X size={14} /></button>
+          </div>
+          <div style={{ fontSize: 11, color: '#5a7a5a', marginBottom: 12 }}>
+            Broadcast new server address to all connected agents. They will save the new config and reconnect.
+          </div>
+          <input
+            className="input" style={{ width: '100%', marginBottom: 6, fontSize: 12 }}
+            placeholder="ws://new-server:80/ws"
+            value={reconfigureUrl}
+            onChange={e => setReconfigureUrl(e.target.value)}
+          />
+          <input
+            className="input" style={{ width: '100%', marginBottom: 6, fontSize: 12 }}
+            placeholder="Token (optional, keep existing if empty)"
+            value={reconfigureToken}
+            onChange={e => setReconfigureToken(e.target.value)}
+          />
+          <button className="btn btn-sm" style={{ width: '100%' }}
+            disabled={!reconfigureUrl}
+            onClick={handleReconfigureAll}>
+            <RefreshCw size={12} /> Broadcast to All Agents
+          </button>
+          {reconfigureResult && (
+            <div style={{ fontSize: 11, marginTop: 6, fontFamily: 'monospace', color: reconfigureResult.startsWith('✓') ? '#00ff41' : '#ff4444' }}>
+              {reconfigureResult}
+            </div>
+          )}
+        </div>
       )}
     </div>
   )

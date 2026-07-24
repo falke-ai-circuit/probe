@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -494,6 +495,8 @@ func (a *Agent) handleCommand(conn *websocket.Conn, env protocol.Envelope) {
 		resp = a.handleModeControl(env)
 	case protocol.TypeForwardPolicy:
 		resp = a.handleForwardPolicy(env)
+	case protocol.TypeReconfigure:
+		resp = a.handleReconfigure(env)
 	default:
 		resp = protocol.NewError(env.ID, protocol.ErrInvalidParams, fmt.Sprintf("unknown command: %s", env.Type))
 	}
@@ -1051,4 +1054,103 @@ func (a *Agent) SendModeStatus() {
 	if err := a.writeMessage(conn, env); err != nil {
 		log.Printf("[agent] send mode_status error: %v", err)
 	}
+}
+
+// handleReconfigure processes a reconfigure message from the server.
+// The agent saves the new server URL to its config file (if known) and
+// reconnects to the new server address. This enables mass migration of
+// all agents to a new server IP without manual reconfiguration.
+func (a *Agent) handleReconfigure(env protocol.Envelope) protocol.Envelope {
+	var params struct {
+		ServerURL string `json:"server_url"` // new WebSocket URL
+		Token     string `json:"token,omitempty"` // new auth token (optional, keep existing if empty)
+		SavePath  string `json:"save_path,omitempty"` // path to save updated config
+	}
+	if err := json.Unmarshal(env.Params, &params); err != nil {
+		return protocol.NewError(env.ID, protocol.ErrInvalidParams, err.Error())
+	}
+
+	if params.ServerURL == "" {
+		return protocol.NewError(env.ID, protocol.ErrInvalidParams, "server_url is required")
+	}
+
+	// Ensure /ws path
+	newURL := params.ServerURL
+	if !strings.Contains(newURL, "/ws") {
+		newURL = strings.TrimRight(newURL, "/") + "/ws"
+	}
+
+	// Update token if provided
+	newToken := a.cfg.Token
+	if params.Token != "" {
+		newToken = params.Token
+	}
+
+	log.Printf("[agent] reconfigure: %s → %s", a.cfg.URL, newURL)
+
+	// Try to save updated config to file (if path provided or config file known)
+	savePath := params.SavePath
+	if savePath == "" {
+		// Try common config file names
+		for _, name := range []string{"probe.json", "probe-client.json"} {
+			if _, err := os.Stat(name); err == nil {
+				savePath = name
+				break
+			}
+		}
+	}
+
+	if savePath != "" {
+		// Read existing config, update server field, write back
+		cfgData, err := os.ReadFile(savePath)
+		if err == nil {
+			var cfgMap map[string]interface{}
+			if err := json.Unmarshal(cfgData, &cfgMap); err == nil {
+				// Update server URL — handle both flat and structured formats
+				if _, hasClient := cfgMap["client"]; hasClient {
+					if clientMap, ok := cfgMap["client"].(map[string]interface{}); ok {
+						clientMap["server"] = newURL
+						if params.Token != "" {
+							clientMap["token"] = newToken
+						}
+					}
+				} else {
+					// Legacy flat format
+					cfgMap["server"] = newURL
+					if params.Token != "" {
+						cfgMap["token"] = newToken
+					}
+				}
+				updatedData, _ := json.MarshalIndent(cfgMap, "", "  ")
+				if err := os.WriteFile(savePath, updatedData, 0644); err != nil {
+					log.Printf("[agent] reconfigure: failed to save config: %v", err)
+				} else {
+					log.Printf("[agent] reconfigure: config saved to %s", savePath)
+				}
+			}
+		}
+	}
+
+	// Update in-memory config
+	a.cfg.URL = newURL
+	a.cfg.Token = newToken
+
+	// Force reconnect by closing current connection
+	// The agent's Run() loop will reconnect with the new URL
+	go func() {
+		time.Sleep(500 * time.Millisecond) // give response time to send
+		a.mu.Lock()
+		if a.conn != nil {
+			a.conn.Close()
+		}
+		a.mu.Unlock()
+		log.Printf("[agent] reconfigure: closing connection for reconnect to %s", newURL)
+	}()
+
+	return protocol.NewResult(env.ID, "reconfigure", struct {
+		OldServer string `json:"old_server"`
+		NewServer string `json:"new_server"`
+		Status    string `json:"status"`
+		SavedTo   string `json:"saved_to,omitempty"`
+	}{a.cfg.URL, newURL, "reconnecting", savePath})
 }

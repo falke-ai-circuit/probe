@@ -91,6 +91,7 @@ const (
 	TypeModeControlResult = "mode_control_result"  // Agent → Server: confirms mode change
 	TypeModeStatus        = "mode_status"          // Agent → Server: reports current mode status
 	TypeForwardPolicy     = "forward_policy"       // Server → Agent: set client forwarding policy (relay/local)
+	TypeReconfigure       = "reconfigure"          // Server → Agent: reconnect to new server address
 
 	// --- Phase 7: New capabilities ---
 

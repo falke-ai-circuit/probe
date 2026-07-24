@@ -93,13 +93,22 @@ func (a *Agent) handleAgentUpdate(env protocol.Envelope) protocol.Envelope {
 	if !strings.HasSuffix(strings.ToLower(newExePath), ".exe") {
 		newExePath = newExePath + ".exe"
 	}
-	// Remove any previous file at this path
+	// Remove any previous file at this path (ignore error — may be locked)
 	os.Remove(newExePath)
 	if err := os.Rename(tmpPath, newExePath); err != nil {
-		// If rename fails (cross-volume etc), try copy
+		// If rename fails (file locked, cross-volume, etc), try copy
 		if copyErr := copyFileAgent(tmpPath, newExePath); copyErr != nil {
-			os.Remove(tmpPath)
-			return protocol.NewError(env.ID, protocol.ErrInternal, fmt.Sprintf("move new exe failed: rename=%v, copy=%v", err, copyErr))
+			// Both rename and copy failed — fall back to .new suffix
+			fallbackPath := currentExe + ".new"
+			os.Remove(fallbackPath)
+			if err2 := os.Rename(tmpPath, fallbackPath); err2 != nil {
+				if copyErr2 := copyFileAgent(tmpPath, fallbackPath); copyErr2 != nil {
+					os.Remove(tmpPath)
+					return protocol.NewError(env.ID, protocol.ErrInternal, fmt.Sprintf("move new exe failed: rename=%v, copy=%v, fallback=%v", err, copyErr, copyErr2))
+				}
+			}
+			newExePath = fallbackPath
+			log.Printf("[update] fell back to .new path: %s", newExePath)
 		}
 	}
 	os.Remove(tmpPath) // clean up temp file if rename left it
