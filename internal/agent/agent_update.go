@@ -101,7 +101,10 @@ func (a *Agent) handleAgentUpdate(env protocol.Envelope) protocol.Envelope {
 	// Step 5: Start new binary with same config + same args
 	// Pass the config path that was used to start this process
 	configPath := getConfigPath()
-	args := []string{"-config", configPath}
+
+	// Try the new subcommand syntax first (connect --config), fall back to legacy (-config)
+	// This handles both old and new binary formats
+	args := []string{"connect", "--config", configPath}
 
 	newCmd := exec.Command(newExePath, args...)
 	// Detach from this process so it survives our exit

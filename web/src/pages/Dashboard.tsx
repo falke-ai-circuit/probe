@@ -82,6 +82,7 @@ export default function Dashboard() {
               <thead>
                 <tr>
                   <th>Name</th>
+                  <th>Version</th>
                   <th>OS / Arch</th>
                   <th>Status</th>
                   <th>Health</th>
@@ -94,6 +95,7 @@ export default function Dashboard() {
                     <td>
                       <Link to={`/agents/${a.agent_id}`}>{a.name || a.agent_id}</Link>
                     </td>
+                    <td className="mono green">{a.version || '—'}</td>
                     <td className="mono">{a.os}/{a.arch}</td>
                     <td><StatusBadge status={a.status} /></td>
                     <td>{(a.health_score * 100).toFixed(0)}%</td>

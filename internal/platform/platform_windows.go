@@ -317,18 +317,34 @@ func (p *windowsPlatform) CaptureDisplay(display int, quality int) (protocol.Cap
 	}
 	defer procDeleteDC.Call(dcMem)
 
-	// Create compatible bitmap
-	bmp, _, _ := procCreateCompatibleBM.Call(dcSrc, uintptr(width), uintptr(height))
+	// Setup BITMAPINFO for 32-bit DIB (no color table needed for 32-bit)
+	var bi bitmapInfoHeader
+	bi.Size = uint32(unsafe.Sizeof(bi))
+	bi.Width = int32(width)
+	bi.Height = int32(-height) // negative = top-down (correct scanline order)
+	bi.Planes = 1
+	bi.BitCount = 32
+	bi.Compression = BI_RGB
+
+	// CreateDIBSection: creates a DIB and gives us a pointer to the pixel data
+	var pixelPtr unsafe.Pointer
+	bmp, _, _ := procCreateDIBSection.Call(
+		dcMem,
+		uintptr(unsafe.Pointer(&bi)),
+		DIB_RGB_COLORS,
+		uintptr(unsafe.Pointer(&pixelPtr)),
+		0, 0,
+	)
 	if bmp == 0 {
-		return protocol.CaptureResult{}, fmt.Errorf("CreateCompatibleBitmap failed")
+		return protocol.CaptureResult{}, fmt.Errorf("CreateDIBSection failed")
 	}
 	defer procDeleteObject.Call(bmp)
 
-	// Select bitmap into DC
+	// Select DIB into memory DC
 	oldObj, _, _ := procSelectObject.Call(dcMem, bmp)
 	defer procSelectObject.Call(dcMem, oldObj)
 
-	// BitBlt screen → memory DC
+	// BitBlt screen → memory DC (copies screen pixels into our DIB)
 	ret, _, _ := procBitBlt.Call(
 		dcMem, 0, 0, uintptr(width), uintptr(height),
 		dcSrc, 0, 0, SRCCOPY,
@@ -337,37 +353,16 @@ func (p *windowsPlatform) CaptureDisplay(display int, quality int) (protocol.Cap
 		return protocol.CaptureResult{}, fmt.Errorf("BitBlt failed")
 	}
 
-	// Setup BITMAPINFO for GetDIBits
-	bi := bitmapInfo{}
-	bi.Header.Size = uint32(unsafe.Sizeof(bi.Header))
-	bi.Header.Width = int32(width)
-	bi.Header.Height = int32(height) // positive = bottom-up
-	bi.Header.Planes = 1
-	bi.Header.BitCount = 32
-	bi.Header.Compression = BI_RGB
-
-	// Allocate buffer for pixel data
+	// Create image.RGBA from the DIB pixel data (already BGRA, top-down)
 	pixelSize := width * height * 4
-	pixels := make([]byte, pixelSize)
+	pixels := (*[1 << 30]byte)(pixelPtr)[:pixelSize:pixelSize]
 
-	// GetDIBits copies bitmap data into our buffer
-	ret2, _, _ := procGetDIBits.Call(
-		dcMem, bmp, 0, uintptr(height),
-		uintptr(unsafe.Pointer(&pixels[0])),
-		uintptr(unsafe.Pointer(&bi)),
-		DIB_RGB_COLORS,
-	)
-	if ret2 == 0 {
-		return protocol.CaptureResult{}, fmt.Errorf("GetDIBits failed")
-	}
-
-	// Convert BGRA → RGBA and create image.RGBA
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 	for i := 0; i < pixelSize; i += 4 {
-		img.Pix[i] = pixels[i+2]   // R
+		img.Pix[i] = pixels[i+2]   // R ← B
 		img.Pix[i+1] = pixels[i+1] // G
-		img.Pix[i+2] = pixels[i]   // B
-		img.Pix[i+3] = 255         // A
+		img.Pix[i+2] = pixels[i]   // B ← R
+		img.Pix[i+3] = 255         // A (BGRA has no alpha)
 	}
 
 	// Encode as JPEG

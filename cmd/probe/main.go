@@ -14,7 +14,7 @@ import (
 	"github.com/falke-ai-circuit/probe/internal/relay"
 )
 
-const appVersion = "v1.7.0"
+const appVersion = "v1.8.4"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -24,6 +24,14 @@ func main() {
 
 	sub := os.Args[1]
 	args := os.Args[2:]
+
+	// Backward compatibility: if the first arg is a flag (starts with -),
+	// treat it as a legacy connect invocation (old update code passes
+	// "-config path" without the "connect" subcommand).
+	if strings.HasPrefix(sub, "-") && sub != "--version" && sub != "-version" && sub != "--help" && sub != "-h" {
+		sub = "connect"
+		args = os.Args[1:]
+	}
 
 	switch sub {
 	case "serve":

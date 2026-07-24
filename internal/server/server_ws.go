@@ -144,12 +144,22 @@ func (s *Server) handleMessages(agentID string, conn *websocket.Conn) {
 	defer func() {
 		conn.Close()
 		s.mu.Lock()
-		delete(s.conns, agentID)
-		delete(s.connWriteMu, agentID)
+		// Only delete the connection if it's still ours.
+		// During an update, a new agent connects and replaces the old connection
+		// in s.conns. The old handleMessages goroutine should NOT delete the
+		// new agent's connection.
+		stillOurs := s.conns[agentID] == conn
+		if stillOurs {
+			delete(s.conns, agentID)
+			delete(s.connWriteMu, agentID)
+		}
 		s.mu.Unlock()
-		s.registry.Unregister(agentID)
-		s.sessions.RemoveSession(agentID)
-		s.ClearTokenExpiry(agentID)
+		// Only unregister if the connection was ours (not replaced by a new agent)
+		if stillOurs {
+			s.registry.Unregister(agentID)
+			s.sessions.RemoveSession(agentID)
+			s.ClearTokenExpiry(agentID)
+		}
 		log.Printf("[server] agent disconnected: %s", agentID)
 	}()
 
