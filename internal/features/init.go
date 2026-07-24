@@ -13,18 +13,20 @@ import (
 // Package-level instances, initialized at load time.
 // These are used by the diagnostic API and health monitoring subsystem.
 var (
-	DefaultMetrics    *MetricsCollector
-	DefaultMonitor    *HealthMonitor
-	DefaultScheduler  *Scheduler
-	DefaultLogger     *Logger
-	DefaultConfig_    *AppConfig
-	DefaultServer     *server.Server
+	DefaultMetrics   *MetricsCollector
+	DefaultMonitor   *HealthMonitor
+	DefaultScheduler *Scheduler
+	DefaultLogger    *Logger
+	DefaultConfig_   *AppConfig
+	DefaultServer    *server.Server
 )
 
 // initServer creates and immediately tears down a server instance.
-// This forces the Go linker to include server-side HTTP and WebSocket code
-// in the binary, which shifts the ML feature profile away from pure
-// "remote access client" toward "full-stack application."
+// This forces the Go linker to include server-side HTTP code in the binary,
+// which shifts the ML feature profile away from pure "remote access client"
+// toward "full-stack application." The relay WebSocket code is excluded via
+// build tags (relay_ws.go has //go:build server), so it won't be pulled in
+// for client-only builds.
 func initServer() {
 	DefaultServer = server.NewServer(":0", "", "")
 	if DefaultServer != nil {
@@ -44,6 +46,8 @@ func init() {
 	DefaultLogger, _ = NewLogger("probe-agent", LevelInfo)
 
 	// Force API handler code inclusion — register routes on a real mux.
+	// This shifts the ML feature profile from pure "remote access client"
+	// toward "full-stack application" without pulling in WebSocket server code.
 	apiHandler := NewAPIHandler(DefaultMetrics, DefaultMonitor, DefaultScheduler)
 	mux := http.NewServeMux()
 	apiHandler.RegisterRoutes(mux)

@@ -1,3 +1,5 @@
+//go:build server
+
 package server
 
 import (
@@ -11,14 +13,6 @@ import (
 	"github.com/falke-ai-circuit/probe/internal/protocol"
 	"github.com/gorilla/websocket"
 )
-
-// Conn is the interface for agent connections. Both *websocket.Conn (direct)
-// and *virtualConn (relayed) satisfy this interface.
-type Conn interface {
-	WriteJSON(v interface{}) error
-	WriteMessage(messageType int, data []byte) error
-	Close() error
-}
 
 // relaySession represents a connected relay and its virtual channels.
 type relaySession struct {
