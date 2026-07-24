@@ -1,0 +1,219 @@
+package server
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/falke-ai-circuit/probe/internal/protocol"
+)
+
+// handleV1AgentMode sends a mode_control command to an agent via WebSocket.
+// POST /api/v1/agents/{id}/mode
+// Body: {"action":"start","mode":"relay","config":{"listen":":7701","upstream":"ws://...","token":"..."}}
+func (s *Server) handleV1AgentMode(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	if agentID == "" {
+		http.Error(w, "agent id required", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		Action string          `json:"action"` // "start" or "stop"
+		Mode   string          `json:"mode"`   // "serve", "connect", "relay"
+		Config json.RawMessage `json:"config"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if req.Action == "" || req.Mode == "" {
+		http.Error(w, "action and mode are required", http.StatusBadRequest)
+		return
+	}
+
+	// Build the mode_control protocol message params
+	params := mustMarshalRawV1(struct {
+		Action string          `json:"action"`
+		Mode   string          `json:"mode"`
+		Config json.RawMessage `json:"config"`
+	}{req.Action, req.Mode, req.Config})
+
+	// Forward to agent and wait for response
+	resp, err := s.forwardToAgentWithTimeout(agentID, protocol.TypeModeControl, params, 15*time.Second, "")
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":    false,
+			"error": err.Error(),
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":     true,
+		"data":   resp,
+		"agent":  agentID,
+		"action": req.Action,
+		"mode":   req.Mode,
+	})
+}
+
+// handleV1GetAgentMode returns the current mode status for an agent.
+// GET /api/v1/agents/{id}/mode
+func (s *Server) handleV1GetAgentMode(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	if agentID == "" {
+		http.Error(w, "agent id required", http.StatusBadRequest)
+		return
+	}
+
+	// Check if agent is connected
+	s.mu.RLock()
+	_, connected := s.conns[agentID]
+	s.mu.RUnlock()
+
+	if !connected {
+		http.Error(w, "agent not connected", http.StatusNotFound)
+		return
+	}
+
+	// Return cached mode status from session context (if available)
+	// The agent sends mode_status on connect and on mode change
+	modeStatus := s.sessions.GetMemory(agentID, "mode_status")
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":         true,
+		"agent":      agentID,
+		"connected":  true,
+		"mode_status": modeStatus,
+	})
+}
+
+// handleV1Topology returns the full relay topology tree.
+// GET /api/v1/topology
+func (s *Server) handleV1Topology(w http.ResponseWriter, r *http.Request) {
+	// Build topology from relay sessions + agent registry
+	s.relayMu.RLock()
+	relays := make([]*relaySession, 0, len(s.relays))
+	for _, rs := range s.relays {
+		relays = append(relays, rs)
+	}
+	s.relayMu.RUnlock()
+
+	type TopologyNode struct {
+		ID        string `json:"id"`
+		Type      string `json:"type"` // "server", "relay", "agent"
+		Name      string `json:"name"`
+		Version   string `json:"version,omitempty"`
+		Modes     string `json:"modes,omitempty"`
+		Relayed   bool   `json:"relayed,omitempty"`
+		Children  []TopologyNode `json:"children,omitempty"`
+	}
+
+	type TopologyEdge struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+		Type string `json:"type"` // "direct", "relay", "relayed"
+	}
+
+	// Get all agents from registry
+	agents := s.registry.ListAgents()
+
+	// Build nodes and edges
+	var nodes []TopologyNode
+	var edges []TopologyEdge
+
+	// Server node
+	nodes = append(nodes, TopologyNode{
+		ID:   "server",
+		Type: "server",
+		Name: s.addr,
+	})
+
+	// Relay nodes + their agents
+	for _, rs := range relays {
+		relayNode := TopologyNode{
+			ID:   rs.relayID,
+			Type: "relay",
+			Name: rs.relayID,
+		}
+		if rs.metadata != nil {
+			relayNode.Modes = fmt.Sprintf("listen=%s", rs.metadata.ListenAddr)
+		}
+
+		// Find agents behind this relay
+		rs.channelsMu.RLock()
+		for _, vc := range rs.channels {
+			if vc.agentID != "" {
+				// Find agent info from registry
+				agentRecord, err := s.registry.GetHealth(vc.agentID)
+				agentNode := TopologyNode{
+					ID:      vc.agentID,
+					Type:    "agent",
+					Name:    vc.agentID,
+					Relayed: true,
+				}
+				if err == nil {
+					agentNode.Version = agentRecord.Version
+				}
+				relayNode.Children = append(relayNode.Children, agentNode)
+			}
+		}
+		rs.channelsMu.RUnlock()
+
+		nodes = append(nodes, relayNode)
+		edges = append(edges, TopologyEdge{
+			From: rs.relayID,
+			To:   "server",
+			Type: "relay",
+		})
+
+		// Add edges for relayed agents
+		for _, child := range relayNode.Children {
+			edges = append(edges, TopologyEdge{
+				From: child.ID,
+				To:   rs.relayID,
+				Type: "relayed",
+			})
+		}
+	}
+
+	// Direct agents (not behind a relay)
+	for _, agentInfo := range agents {
+		// Skip relayed agents (they start with "relay/")
+		if strings.HasPrefix(agentInfo.AgentID, "relay/") {
+			continue
+		}
+		nodes = append(nodes, TopologyNode{
+			ID:      agentInfo.AgentID,
+			Type:    "agent",
+			Name:    agentInfo.Name,
+			Version: agentInfo.Version,
+		})
+		edges = append(edges, TopologyEdge{
+			From: agentInfo.AgentID,
+			To:   "server",
+			Type: "direct",
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":    true,
+		"nodes": nodes,
+		"edges": edges,
+	})
+}
+
+// mustMarshalRawV1 marshals a value to json.RawMessage (for API v1 handlers).
+func mustMarshalRawV1(v interface{}) json.RawMessage {
+	data, _ := json.Marshal(v)
+	return data
+}

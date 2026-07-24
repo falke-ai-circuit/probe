@@ -76,6 +76,11 @@ type Agent struct {
 	debugMgr       *debugManager
 	streamMgr      *streamManager
 
+	// Phase 4: optional mode manager for dynamic mode switching.
+	// When set, the agent can handle mode_control messages from the server
+	// to start/stop serve/connect/relay modes at runtime.
+	modeMgr        *modeManagerRef
+
 	// spawnedPIDs tracks PIDs of processes started by this agent (proc_start or exec).
 	// In sandboxed mode, only these PIDs can be killed — protecting other system processes.
 	spawnedPIDs   map[int]bool
@@ -485,6 +490,10 @@ func (a *Agent) handleCommand(conn *websocket.Conn, env protocol.Envelope) {
 		resp = a.handleFileSearch(env)
 	case protocol.TypeSysInfo:
 		resp = a.handleSysInfo(env)
+	case protocol.TypeModeControl:
+		resp = a.handleModeControl(env)
+	case protocol.TypeForwardPolicy:
+		resp = a.handleForwardPolicy(env)
 	default:
 		resp = protocol.NewError(env.ID, protocol.ErrInvalidParams, fmt.Sprintf("unknown command: %s", env.Type))
 	}
@@ -925,7 +934,121 @@ func (a *Agent) SendPrompt(prompt string) {
 }
 
 // Version is the agent version.
-const Version = "1.8.5"
+const Version = "1.9.0"
 
 func getOS() string   { return runtime.GOOS }
 func getArch() string { return runtime.GOARCH }
+
+// --- Phase 4: Dynamic mode switching ---
+
+// modeManagerRef is a lightweight reference to a mode manager that allows
+// the agent to start/stop modes at runtime. This avoids importing the modes
+// package directly (which would create a circular dependency).
+type modeManagerRef struct {
+	startFn func(mode string, cfg json.RawMessage) error
+	stopFn  func(mode string) error
+	statusFn func() map[string]bool
+}
+
+// SetModeManager connects the agent to a mode manager for remote control.
+func (a *Agent) SetModeManager(startFn func(string, json.RawMessage) error, stopFn func(string) error, statusFn func() map[string]bool) {
+	a.modeMgr = &modeManagerRef{startFn: startFn, stopFn: stopFn, statusFn: statusFn}
+}
+
+// handleModeControl processes mode_control messages from the server.
+// It starts or stops a mode (serve/connect/relay) on the agent at runtime.
+func (a *Agent) handleModeControl(env protocol.Envelope) protocol.Envelope {
+	if a.modeMgr == nil {
+		return protocol.NewError(env.ID, "mode_manager_unavailable",
+			"this agent does not have a mode manager (not running in supervisor mode)")
+	}
+
+	var params struct {
+		Action string          `json:"action"`
+		Mode   string          `json:"mode"`
+		Config json.RawMessage `json:"config"`
+	}
+	if err := json.Unmarshal(env.Params, &params); err != nil {
+		return protocol.NewError(env.ID, protocol.ErrInvalidParams, err.Error())
+	}
+
+	switch params.Action {
+	case "start":
+		if err := a.modeMgr.startFn(params.Mode, params.Config); err != nil {
+			return protocol.NewResult(env.ID, protocol.TypeModeControlResult, struct {
+				Mode   string `json:"mode"`
+				Action string `json:"action"`
+				Status string `json:"status"`
+				Error  string `json:"error"`
+			}{params.Mode, "start", "error", err.Error()})
+		}
+		return protocol.NewResult(env.ID, protocol.TypeModeControlResult, struct {
+			Mode   string `json:"mode"`
+			Action string `json:"action"`
+			Status string `json:"status"`
+		}{params.Mode, "start", "running"})
+
+	case "stop":
+		if err := a.modeMgr.stopFn(params.Mode); err != nil {
+			return protocol.NewResult(env.ID, protocol.TypeModeControlResult, struct {
+				Mode   string `json:"mode"`
+				Action string `json:"action"`
+				Status string `json:"status"`
+				Error  string `json:"error"`
+			}{params.Mode, "stop", "error", err.Error()})
+		}
+		return protocol.NewResult(env.ID, protocol.TypeModeControlResult, struct {
+			Mode   string `json:"mode"`
+			Action string `json:"action"`
+			Status string `json:"status"`
+		}{params.Mode, "stop", "stopped"})
+
+	default:
+		return protocol.NewError(env.ID, protocol.ErrInvalidParams,
+			fmt.Sprintf("unknown action: %s (must be 'start' or 'stop')", params.Action))
+	}
+}
+
+// handleForwardPolicy processes forward_policy messages from the server.
+// This is used for server-as-relay selective forwarding (Step 11).
+// Currently a stub — full implementation in Step 11.
+func (a *Agent) handleForwardPolicy(env protocol.Envelope) protocol.Envelope {
+	var params struct {
+		Agent  string `json:"agent"`
+		Action string `json:"action"` // "relay" or "local"
+	}
+	if err := json.Unmarshal(env.Params, &params); err != nil {
+		return protocol.NewError(env.ID, protocol.ErrInvalidParams, err.Error())
+	}
+	// Stub: log the policy, return success
+	log.Printf("[agent] forward_policy: agent=%s action=%s (not yet implemented)", params.Agent, params.Action)
+	return protocol.NewResult(env.ID, protocol.TypeModeControlResult, struct {
+		Agent  string `json:"agent"`
+		Action string `json:"action"`
+		Status string `json:"status"`
+	}{params.Agent, params.Action, "accepted"})
+}
+
+// SendModeStatus sends the current mode status to the server.
+// Called on connect and on mode change.
+func (a *Agent) SendModeStatus() {
+	if a.modeMgr == nil {
+		return
+	}
+	a.mu.Lock()
+	conn := a.conn
+	a.mu.Unlock()
+	if conn == nil {
+		return
+	}
+
+	status := a.modeMgr.statusFn()
+	env := protocol.Envelope{
+		ID:     fmt.Sprintf("mode-status-%d", time.Now().UnixMilli()),
+		Type:   protocol.TypeModeStatus,
+		Result: mustMarshal(status),
+	}
+	if err := a.writeMessage(conn, env); err != nil {
+		log.Printf("[agent] send mode_status error: %v", err)
+	}
+}

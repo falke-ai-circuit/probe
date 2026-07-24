@@ -17,11 +17,20 @@ var frameMagic byte = 0x7B // default, overridden by Relay.Run()
 
 // ControlMessage is sent on channelID=0 for relay lifecycle events.
 type ControlMessage struct {
-	Type      string `json:"type"`       // "relay_register", "channel_open", "channel_close", "heartbeat"
-	ChannelID uint32 `json:"channel_id,omitempty"`
-	RelayID   string `json:"relay_id,omitempty"`
-	Token     string `json:"token,omitempty"`
+	Type      string          `json:"type"`       // "relay_register", "channel_open", "channel_close", "heartbeat"
+	ChannelID uint32          `json:"channel_id,omitempty"`
+	RelayID   string          `json:"relay_id,omitempty"`
+	Token     string          `json:"token,omitempty"`
 	AgentInfo json.RawMessage `json:"agent_info,omitempty"` // for channel_open: the agent's AgentInfo envelope
+	Metadata  *RelayMetadata  `json:"metadata,omitempty"`   // Phase 4: relay topology metadata
+}
+
+// RelayMetadata carries relay topology information to the server.
+type RelayMetadata struct {
+	ListenAddr string `json:"listen_addr,omitempty"`
+	MaxAgents  int    `json:"max_agents,omitempty"`
+	Upstream   string `json:"upstream,omitempty"`
+	AgentCount int    `json:"agent_count,omitempty"` // updated on channel_open/close
 }
 
 // Frame parses a relay framing header from a byte slice.

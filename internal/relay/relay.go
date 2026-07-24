@@ -129,11 +129,26 @@ func (r *Relay) connectUpstream() error {
 	r.upstreamOK.Store(true)
 	r.upstreamMu.Unlock()
 
+	// Generate relay ID if not set
+	relayID := r.cfg.RelayID
+	if relayID == "" {
+		var idBytes [8]byte
+		rand.Read(idBytes[:])
+		relayID = fmt.Sprintf("relay-%x", idBytes[:4])
+		r.cfg.RelayID = relayID
+	}
+
 	// Send relay registration as first message (binary, channelID=0)
+	// with metadata for topology awareness (Phase 4).
 	reg := ControlMessage{
 		Type:    "relay_register",
-		RelayID: r.cfg.RelayID,
+		RelayID: relayID,
 		Token:   r.cfg.Token,
+		Metadata: &RelayMetadata{
+			ListenAddr: r.cfg.ListenAddr,
+			MaxAgents:  r.cfg.MaxAgents,
+			Upstream:   r.cfg.UpstreamURL,
+		},
 	}
 	frame, err := MakeControlFrame(r.magic, reg)
 	if err != nil {
@@ -145,7 +160,7 @@ func (r *Relay) connectUpstream() error {
 		return fmt.Errorf("send registration: %w", err)
 	}
 
-	log.Printf("[relay] connected to upstream %s", r.cfg.UpstreamURL)
+	log.Printf("[relay] connected to upstream %s (id=%s)", r.cfg.UpstreamURL, relayID)
 	return nil
 }
 

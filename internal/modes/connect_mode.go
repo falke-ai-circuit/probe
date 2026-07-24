@@ -1,6 +1,7 @@
 package modes
 
 import (
+	"encoding/json"
 	"log"
 	"sync"
 
@@ -14,6 +15,12 @@ type ConnectMode struct {
 	ag      *agent.Agent
 	cfg     agent.Config
 	doneCh  chan struct{}
+
+	// Phase 4: optional mode manager reference for dynamic mode switching.
+	// When set, the agent can handle mode_control messages from the server.
+	mgrStart  func(string, json.RawMessage) error
+	mgrStop   func(string) error
+	mgrStatus func() map[string]bool
 }
 
 // NewConnectMode creates a new connect mode with the given agent config.
@@ -22,6 +29,13 @@ func NewConnectMode(cfg agent.Config) *ConnectMode {
 		cfg:    cfg,
 		doneCh: make(chan struct{}),
 	}
+}
+
+// SetModeManager connects this connect mode to a mode manager for remote control.
+func (c *ConnectMode) SetModeManager(start func(string, json.RawMessage) error, stop func(string) error, status func() map[string]bool) {
+	c.mgrStart = start
+	c.mgrStop = stop
+	c.mgrStatus = status
 }
 
 func (c *ConnectMode) Name() string { return "connect" }
@@ -33,6 +47,10 @@ func (c *ConnectMode) Start() error {
 		return nil
 	}
 	c.ag = agent.New(c.cfg)
+	// Wire up mode manager if available
+	if c.mgrStart != nil {
+		c.ag.SetModeManager(c.mgrStart, c.mgrStop, c.mgrStatus)
+	}
 	c.running = true
 
 	go func() {

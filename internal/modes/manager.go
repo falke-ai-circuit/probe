@@ -75,6 +75,12 @@ func (m *Manager) StartMode(name string, cfg json.RawMessage) error {
 		if err != nil {
 			return fmt.Errorf("create mode %s: %w", name, err)
 		}
+
+		// Phase 4: wire mode manager to connect mode for remote control
+		if cm, ok := mode.(*ConnectMode); ok {
+			cm.SetModeManager(m.StartMode, m.StopMode, m.Status)
+		}
+
 		m.mu.Lock()
 		m.modes[name] = mode
 		m.mu.Unlock()
@@ -94,6 +100,13 @@ func (m *Manager) StartMode(name string, cfg json.RawMessage) error {
 	}
 	log.Printf("[modes] starting %s", name)
 	return mode.Start()
+}
+
+// GetMode returns a mode by name, or nil if not found.
+func (m *Manager) GetMode(name string) Mode {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.modes[name]
 }
 
 // StopMode stops a running mode by name.

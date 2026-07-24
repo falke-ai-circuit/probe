@@ -114,6 +114,10 @@ type Server struct {
 	allowedCIDR    *net.IPNet
 	allowedCIDRs   []*net.IPNet // additional always-allowed ranges (localhost, docker)
 	ipFilterActive bool
+
+	// Phase 4: relay registry — tracks connected relays for topology view
+	relayMu sync.RWMutex
+	relays  map[string]*relaySession // relayID → session
 }
 
 // startTime records when the server process began, used by /health for uptime.
@@ -133,6 +137,7 @@ func NewServer(addr string, token string, registryPath string) *Server {
 		connWriteMu:   make(map[string]*sync.Mutex),
 		pendingReqs:   make(map[string]chan protocol.Envelope),
 		pendingUpdates: make(map[string]*pendingUpdate),
+		relays:        make(map[string]*relaySession),
 		tunnels:       make(map[string]*Tunnel),
 		tokenExpiry:   make(map[string]time.Time),
 		rotatedTokens: make(map[string]string),

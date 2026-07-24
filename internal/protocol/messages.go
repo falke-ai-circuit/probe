@@ -86,6 +86,12 @@ const (
 	TypeAgentUpdate     = "agent_update"      // Server tells agent to download + start new binary
 	TypeAgentUpdateResult = "agent_update_result" // Agent confirms: new process started, old PID reported
 
+	// Phase 4: Dynamic mode switching
+	TypeModeControl       = "mode_control"        // Server → Agent: start/stop a mode (serve/connect/relay)
+	TypeModeControlResult = "mode_control_result"  // Agent → Server: confirms mode change
+	TypeModeStatus        = "mode_status"          // Agent → Server: reports current mode status
+	TypeForwardPolicy     = "forward_policy"       // Server → Agent: set client forwarding policy (relay/local)
+
 	// --- Phase 7: New capabilities ---
 
 	// SOCKS5 Proxy (Server → Agent)

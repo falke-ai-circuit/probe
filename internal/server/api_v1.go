@@ -386,6 +386,11 @@ func (s *Server) registerV1Routes() {
 
 	// Login endpoint (username/password → operator token)
 	s.mux.HandleFunc("POST /api/v1/login", s.handleV1Login)
+
+	// Phase 4: Dynamic mode switching & topology
+	s.mux.HandleFunc("POST /api/v1/agents/{id}/mode", s.handleV1AgentMode)
+	s.mux.HandleFunc("GET /api/v1/agents/{id}/mode", s.handleV1GetAgentMode)
+	s.mux.HandleFunc("GET /api/v1/topology", s.handleV1Topology)
 }
 
 // ---------------------------------------------------------------------------

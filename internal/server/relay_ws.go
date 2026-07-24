@@ -12,6 +12,14 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// relayMetadata holds topology information sent by the relay during registration.
+type relayMetadata struct {
+	ListenAddr string `json:"listen_addr,omitempty"`
+	MaxAgents  int    `json:"max_agents,omitempty"`
+	Upstream   string `json:"upstream,omitempty"`
+	AgentCount int    `json:"agent_count,omitempty"`
+}
+
 // relaySession represents a connected relay and its virtual channels.
 type relaySession struct {
 	relayID    string
@@ -20,6 +28,7 @@ type relaySession struct {
 	writeMu    sync.Mutex // shared across ALL virtual channels on this relay
 	channels   map[uint32]*virtualConn
 	channelsMu sync.RWMutex
+	metadata   *relayMetadata
 }
 
 // virtualConn represents a single agent behind a relay. It implements
@@ -89,9 +98,10 @@ func (s *Server) handleRelayConnection(conn *websocket.Conn, firstData []byte) {
 	}
 
 	var reg struct {
-		Type    string `json:"type"`
-		RelayID string `json:"relay_id"`
-		Token   string `json:"token"`
+		Type     string          `json:"type"`
+		RelayID  string          `json:"relay_id"`
+		Token    string          `json:"token"`
+		Metadata json.RawMessage `json:"metadata,omitempty"`
 	}
 	if err := json.Unmarshal(payload, &reg); err != nil {
 		log.Printf("[server] relay registration parse error: %v", err)
@@ -105,14 +115,36 @@ func (s *Server) handleRelayConnection(conn *websocket.Conn, firstData []byte) {
 		return
 	}
 
+	// Parse metadata if present (Phase 4)
+	var meta *relayMetadata
+	if len(reg.Metadata) > 0 {
+		meta = &relayMetadata{}
+		if err := json.Unmarshal(reg.Metadata, meta); err != nil {
+			log.Printf("[server] relay metadata parse error: %v", err)
+			meta = nil // non-fatal
+		}
+	}
+
+	// Generate relay ID if not provided
+	relayID := reg.RelayID
+	if relayID == "" {
+		relayID = fmt.Sprintf("relay-%d", time.Now().UnixMilli())
+	}
+
 	session := &relaySession{
-		relayID:  reg.RelayID,
+		relayID:  relayID,
 		magic:    magic,
 		conn:     conn,
 		channels: make(map[uint32]*virtualConn),
+		metadata: meta,
 	}
 
-	log.Printf("[server] relay connected: id=%s, magic=0x%02X", reg.RelayID, magic)
+	// Store relay session in server's relay registry
+	s.relayMu.Lock()
+	s.relays[relayID] = session
+	s.relayMu.Unlock()
+
+	log.Printf("[server] relay connected: id=%s, magic=0x%02X", relayID, magic)
 
 	// Main loop: read framed messages from relay and dispatch
 	for {
@@ -159,10 +191,13 @@ func (s *Server) handleRelayConnection(conn *websocket.Conn, firstData []byte) {
 			var info protocol.AgentInfo
 			if env.Result != nil {
 				if err := json.Unmarshal(env.Result, &info); err == nil {
+					// Apply relay prefix: relay/{relay_id}/{agent_name}
 					agentID := info.Name
 					if agentID == "" {
 						agentID = fmt.Sprintf("relay-%s-ch%d", session.relayID, chanID)
 					}
+					// Prefix with relay path for topology visibility
+					agentID = fmt.Sprintf("relay/%s/%s", session.relayID, agentID)
 					vc.agentID = agentID
 					s.registry.Register(agentID, info.Name, info.Version, info.OS, info.Arch, info.Mode, info.Capabilities)
 					s.sessions.CreateSession(agentID)
@@ -266,6 +301,12 @@ func (s *Server) cleanupRelaySession(session *relaySession) {
 		}
 		delete(session.channels, chanID)
 	}
+
+	// Remove relay from server's relay registry
+	s.relayMu.Lock()
+	delete(s.relays, session.relayID)
+	s.relayMu.Unlock()
+
 	log.Printf("[server] relay %s: cleaned up %d channels", session.relayID, len(session.channels))
 }
 
