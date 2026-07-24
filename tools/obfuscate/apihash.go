@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -62,6 +64,9 @@ func applyAPIHashing(dir string) {
 		}
 		if strings.Contains(path, "internal/evasion") {
 			return nil // skip generated evasion package — XOR handles its strings
+		}
+		if strings.Contains(path, "internal/rtinit") {
+			return nil // skip generated runtime init package — raw syscalls needed
 		}
 		if strings.Contains(path, "vendor/") {
 			return nil
@@ -126,6 +131,9 @@ func applyAPIHashing(dir string) {
 		}
 		if strings.Contains(path, "internal/evasion") {
 			return nil // skip generated evasion package
+		}
+		if strings.Contains(path, "internal/rtinit") {
+			return nil // skip generated runtime init package
 		}
 		if strings.Contains(path, "vendor/") {
 			return nil
@@ -295,6 +303,9 @@ func transformAPIRefs(path string, src []byte) (string, int) {
 }
 
 // generateAPIHashHelper creates the zapihash.go file with hash constants and resolver.
+// The resolver uses encrypted name tables — plaintext API names are NOT stored
+// in the binary. Names are XOR-encrypted at generation time and decrypted at
+// runtime inside the resolver function.
 func generateAPIHashHelper(pkgName string, apiMap map[apiRef]bool) string {
 	var sb strings.Builder
 
@@ -303,11 +314,26 @@ func generateAPIHashHelper(pkgName string, apiMap map[apiRef]bool) string {
 	sb.WriteString("import (\n")
 	sb.WriteString("	\"crypto/sha256\"\n")
 	sb.WriteString("	\"encoding/binary\"\n")
-	sb.WriteString("	\"fmt\"\n")
 	sb.WriteString("	\"syscall\"\n")
+	sb.WriteString("	\"unsafe\"\n")
 	sb.WriteString(")\n\n")
 
-	// Generate hash constants for each unique DLL name and proc name
+	// Generate hash function
+	sb.WriteString("func _apiHash(name string) uint64 {\n")
+	sb.WriteString("	h := sha256.Sum256([]byte(name))\n")
+	sb.WriteString("	return binary.LittleEndian.Uint64(h[:8])\n")
+	sb.WriteString("}\n\n")
+
+	// Helper to decrypt a name at runtime
+	sb.WriteString("func _decName(enc []byte, key byte) string {\n")
+	sb.WriteString("	r := make([]byte, len(enc))\n")
+	sb.WriteString("	for i, v := range enc {\n")
+	sb.WriteString("		r[i] = v ^ key\n")
+	sb.WriteString("	}\n")
+	sb.WriteString("	return string(r)\n")
+	sb.WriteString("}\n\n")
+
+	// Generate encrypted name tables and hash constants
 	dllNames := make(map[string]bool)
 	procNames := make(map[string]bool)
 	for ref := range apiMap {
@@ -319,61 +345,85 @@ func generateAPIHashHelper(pkgName string, apiMap map[apiRef]bool) string {
 		}
 	}
 
-	// Generate hash function
-	sb.WriteString("func _apiHash(name string) uint64 {\n")
-	sb.WriteString("\th := sha256.Sum256([]byte(name))\n")
-	sb.WriteString("\treturn binary.LittleEndian.Uint64(h[:8])\n")
+	// Generate encrypted DLL name entries with pre-computed hashes
+	sortedDLLs := sortedKeys(dllNames)
+	sb.WriteString("type _encName struct {\n")
+	sb.WriteString("	hash uint64\n")
+	sb.WriteString("	enc  []byte\n")
+	sb.WriteString("	key  byte\n")
 	sb.WriteString("}\n\n")
 
-	// Generate hash constants for DLL names
-	sortedDLLs := sortedKeys(dllNames)
+	sb.WriteString("var _encDLLs = []_encName{\n")
 	for _, name := range sortedDLLs {
 		hashConst := hashConstName(name)
-		// Compute the actual hash value at init time — we use a var with init
-		sb.WriteString(fmt.Sprintf("var %s = _apiHash(%q)\n", hashConst, name))
+		key := randKey()
+		encrypted := xorEncrypt([]byte(name), key)
+		hashVal := computeHash(name)
+		sb.WriteString(fmt.Sprintf("	{0x%x, %s, 0x%02x}, // %s\n",
+			hashVal, bytesLiteral(encrypted), key, hashConst))
 	}
-	sb.WriteString("\n")
+	sb.WriteString("}\n\n")
 
-	// Generate hash constants for proc names
+	// Generate encrypted proc name entries
 	sortedProcs := sortedKeys(procNames)
+	sb.WriteString("var _encProcs = []_encName{\n")
 	for _, name := range sortedProcs {
 		hashConst := hashConstName(name)
-		sb.WriteString(fmt.Sprintf("var %s = _apiHash(%q)\n", hashConst, name))
+		key := randKey()
+		encrypted := xorEncrypt([]byte(name), key)
+		hashVal := computeHash(name)
+		sb.WriteString(fmt.Sprintf("	{0x%x, %s, 0x%02x}, // %s\n",
+			hashVal, bytesLiteral(encrypted), key, hashConst))
+	}
+	sb.WriteString("}\n\n")
+
+	// Generate hash constants for direct reference (pre-computed)
+	for _, name := range sortedDLLs {
+		hashConst := hashConstName(name)
+		hashVal := computeHash(name)
+		sb.WriteString(fmt.Sprintf("var %s uint64 = 0x%x\n", hashConst, hashVal))
+	}
+	sb.WriteString("\n")
+	for _, name := range sortedProcs {
+		hashConst := hashConstName(name)
+		hashVal := computeHash(name)
+		sb.WriteString(fmt.Sprintf("var %s uint64 = 0x%x\n", hashConst, hashVal))
 	}
 	sb.WriteString("\n")
 
-	// Generate resolver — wraps syscall.NewLazyDLL and NewProc with hash verification
-	sb.WriteString("// _resolveDLLByName loads a LazyDLL by matching its hash against known names.\n")
+	// Generate resolver — decrypts names at runtime, no plaintext in binary
+	sb.WriteString("// _resolveDLLByName loads a LazyDLL by matching its hash.\n")
 	sb.WriteString("func _resolveDLLByName(hashVar uint64) *syscall.LazyDLL {\n")
-	sb.WriteString("	knownDLLs := []string{\n")
-	for _, name := range sortedDLLs {
-		sb.WriteString(fmt.Sprintf("		%q,\n", name))
-	}
-	sb.WriteString("	}\n")
-	sb.WriteString("	for _, name := range knownDLLs {\n")
-	sb.WriteString("		if _apiHash(name) == hashVar {\n")
+	sb.WriteString("	for _, e := range _encDLLs {\n")
+	sb.WriteString("		if e.hash == hashVar {\n")
+	sb.WriteString("			name := _decName(e.enc, e.key)\n")
 	sb.WriteString("			return syscall.NewLazyDLL(name)\n")
 	sb.WriteString("		}\n")
 	sb.WriteString("	}\n")
-	sb.WriteString("	panic(fmt.Sprintf(\"unknown DLL hash: 0x%x\", hashVar))\n")
+	sb.WriteString("	return nil\n")
 	sb.WriteString("}\n\n")
 
-	sb.WriteString("// _resolveProcByName finds a LazyProc by hash-verified name.\n")
+	sb.WriteString("// _resolveProcByName finds a LazyProc by hash.\n")
 	sb.WriteString("func _resolveProcByName(dll *syscall.LazyDLL, hashVar uint64) *syscall.LazyProc {\n")
-	sb.WriteString("	knownProcs := []string{\n")
-	for _, name := range sortedProcs {
-		sb.WriteString(fmt.Sprintf("		%q,\n", name))
-	}
-	sb.WriteString("	}\n")
-	sb.WriteString("	for _, name := range knownProcs {\n")
-	sb.WriteString("		if _apiHash(name) == hashVar {\n")
+	sb.WriteString("	for _, e := range _encProcs {\n")
+	sb.WriteString("		if e.hash == hashVar {\n")
+	sb.WriteString("			name := _decName(e.enc, e.key)\n")
 	sb.WriteString("			return dll.NewProc(name)\n")
 	sb.WriteString("		}\n")
 	sb.WriteString("	}\n")
-	sb.WriteString("	panic(fmt.Sprintf(\"unknown proc hash: 0x%x\", hashVar))\n")
+	sb.WriteString("	return nil\n")
 	sb.WriteString("}\n\n")
 
+	// Suppress unused import warning
+	sb.WriteString("var _ = unsafe.Pointer(nil)\n")
+
 	return sb.String()
+}
+
+// computeHash computes the SHA-256 hash of a name and returns the first 8 bytes as uint64.
+func computeHash(name string) uint64 {
+	h := sha256.Sum256([]byte(name))
+	return binary.LittleEndian.Uint64(h[:8])
 }
 
 // hashConstName generates a Go-safe variable name from a DLL/proc name.
