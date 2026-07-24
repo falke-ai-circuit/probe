@@ -42,6 +42,7 @@ type ServerOptions struct {
 	AdminPassword   string
 	OperatorPath    string
 	VTAPIKey        string
+	Version         string
 }
 
 // NewServerMode creates a new server mode with the given options.
@@ -76,6 +77,7 @@ func (s *ServerMode) Start() error {
 	}
 
 	s.srv.SetTokenTTL(s.opts.TokenTTL)
+	s.srv.SetVersion(s.opts.Version)
 	s.srv.SetRequireAPIAuth(s.opts.RequireAPIAuth)
 	s.srv.SetEnrollmentPath(s.opts.EnrollmentPath)
 	s.srv.SetCADir(s.opts.CADir)

@@ -415,6 +415,7 @@ func (s *Server) handleV1Health(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status":         "ok",
+		"server_version": s.version,
 		"total_agents":   total,
 		"active_agents":  active,
 		"stale_agents":   stale,

@@ -133,10 +133,11 @@ func (s *Server) handleV1Topology(w http.ResponseWriter, r *http.Request) {
 
 	// Server node — always active if server is running
 	nodes = append(nodes, TopologyNode{
-		ID:     "server",
-		Type:   "server",
-		Name:   s.addr,
-		Active: true,
+		ID:      "server",
+		Type:    "server",
+		Name:    s.addr,
+		Active:  true,
+		Version: s.version,
 	})
 
 	// Relay nodes + their agents

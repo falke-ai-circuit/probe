@@ -348,6 +348,7 @@ func registerFactories(mgr *modes.Manager) {
 		if opts.AllowedCIDR == "" {
 			opts.AllowedCIDR = "0.0.0.0/0"
 		}
+		opts.Version = appVersion
 		return modes.NewServerMode(opts), nil
 	})
 

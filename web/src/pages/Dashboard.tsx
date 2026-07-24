@@ -50,6 +50,9 @@ export default function Dashboard() {
         <div className="stat-card">
           <div className="stat-label">Server Status</div>
           <div className="stat-value green">{health?.status || '…'}</div>
+          {health?.server_version && (
+            <div className="stat-sub mono dim">{health.server_version.startsWith('v') ? health.server_version : `v${health.server_version}`}</div>
+          )}
         </div>
         <div className="stat-card">
           <div className="stat-label">Total Agents</div>

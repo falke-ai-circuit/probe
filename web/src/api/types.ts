@@ -30,6 +30,7 @@ export interface AgentRecord {
 
 export interface HealthInfo {
   status: string
+  server_version?: string
   total_agents: number
   active_agents: number
   stale_agents: number

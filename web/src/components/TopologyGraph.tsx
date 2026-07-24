@@ -97,7 +97,8 @@ function NodeShape({ node, onClick, onDragStart }: {
   const opacity = active ? 1 : 0.4
   const strokeDash = active ? 'none' : '4,3'
   const label = node.name || node.id
-  const sub = node.version ? `v${node.version}` : ''
+  const rawVer = node.version || ''
+  const sub = rawVer ? (rawVer.startsWith('v') ? rawVer : `v${rawVer}`) : ''
   const statusLabel = active ? '' : 'INACTIVE'
 
   if (node.type === 'server') {

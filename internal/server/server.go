@@ -35,6 +35,7 @@ type Server struct {
 	rateLimit *RateLimiter
 	srv       *http.Server
 	mux       *http.ServeMux
+	version   string // server build version (set by NewServerWithVersion)
 
 	// TLS configuration for the server (optional).
 	certFile     string
@@ -187,6 +188,11 @@ func NewServerWithTLSRateLimit(addr string, token string, registryPath string, c
 	srv.rateLimit = NewRateLimiter(rlCfg.RatePerSec, rlCfg.Burst, rlCfg.MaxConcurrent)
 	srv.proxy.SetRateLimiter(srv.rateLimit)
 	return srv
+}
+
+// SetVersion sets the server build version string (shown in health/topology API).
+func (s *Server) SetVersion(v string) {
+	s.version = v
 }
 
 // SetTokenTTL configures the server-side token rotation interval. When ttl > 0

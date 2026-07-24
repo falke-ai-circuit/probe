@@ -128,6 +128,7 @@ func runServe(args []string) {
 		srv = server.NewServerWithRateLimit(*addr, *token, *registryPath, rlCfg)
 	}
 	srv.SetTokenTTL(*tokenTTL)
+	srv.SetVersion(appVersion)
 	srv.SetRequireAPIAuth(*requireAPIAuth)
 	srv.SetEnrollmentPath(*enrollmentPath)
 	srv.SetCADir(*caDir)

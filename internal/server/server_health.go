@@ -22,10 +22,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	resp := map[string]interface{}{
-		"status":        "ok",
-		"total_agents":  total,
-		"active_agents": active,
-		"stale_agents":  stale,
+		"status":         "ok",
+		"server_version": s.version,
+		"total_agents":   total,
+		"active_agents":  active,
+		"stale_agents":   stale,
 		"uptime_seconds": int64(time.Since(startTime).Seconds()),
 	}
 	w.Header().Set("Content-Type", "application/json")
