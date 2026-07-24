@@ -376,6 +376,13 @@ func (s *Server) registerV1Routes() {
 	// Screen streaming (v1)
 	s.mux.HandleFunc("POST /api/v1/agents/{id}/stream-start", s.handleV1StreamStart)
 	s.mux.HandleFunc("POST /api/v1/agents/{id}/stream-stop", s.handleV1StreamStop)
+	s.mux.HandleFunc("GET /api/v1/agents/{id}/stream-frame", s.handleV1StreamFrame)
+
+	// Input (mouse/keyboard) (v1)
+	s.mux.HandleFunc("POST /api/v1/agents/{id}/pointer-click", s.handleV1PointerClick)
+	s.mux.HandleFunc("POST /api/v1/agents/{id}/key-press", s.handleV1KeyPress)
+	s.mux.HandleFunc("POST /api/v1/agents/{id}/key-combo", s.handleV1KeyCombo)
+	s.mux.HandleFunc("POST /api/v1/agents/{id}/text-input", s.handleV1TextInput)
 
 	// Login endpoint (username/password → operator token)
 	s.mux.HandleFunc("POST /api/v1/login", s.handleV1Login)

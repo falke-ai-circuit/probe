@@ -232,9 +232,8 @@ func (s *Server) handleMessages(agentID string, conn *websocket.Conn) {
 			s.handleAgentUpdateResult(agentID, env)
 
 		case protocol.TypeStreamData:
-			// Agent sent a screen stream frame. Store it in session memory.
-			// In a full implementation this would forward to connected viewers.
-			s.sessions.AddMemory(agentID, "last_stream_frame", string(env.Result))
+			// Agent sent a screen stream frame. Store as latest frame for polling.
+			s.sessions.SetMemory(agentID, "last_stream_frame", string(env.Result))
 
 		default:
 			// Check if this is a response to a pending request (exec, fs_read, etc.)

@@ -116,6 +116,43 @@ export const api = {
     }),
   capture: (id: string) =>
     apiFetch<unknown>(`/agents/${id}/capture`, { method: 'POST', body: '{}' }),
+
+  // Screen streaming
+  streamStart: (id: string, display: number, fps: number, quality: number) =>
+    apiFetch<unknown>(`/api/v1/agents/${id}/stream-start`, {
+      method: 'POST',
+      body: JSON.stringify({ display, fps, quality }),
+    }),
+  streamStop: (id: string, streamId: string) =>
+    apiFetch<unknown>(`/api/v1/agents/${id}/stream-stop`, {
+      method: 'POST',
+      body: JSON.stringify({ stream_id: streamId }),
+    }),
+  streamFrame: (id: string) =>
+    apiFetch<unknown>(`/api/v1/agents/${id}/stream-frame`),
+
+  // Input (mouse/keyboard)
+  pointerClick: (id: string, x: number, y: number, button: string) =>
+    apiFetch<unknown>(`/api/v1/agents/${id}/pointer-click`, {
+      method: 'POST',
+      body: JSON.stringify({ x, y, button }),
+    }),
+  keyPress: (id: string, key: string) =>
+    apiFetch<unknown>(`/api/v1/agents/${id}/key-press`, {
+      method: 'POST',
+      body: JSON.stringify({ key }),
+    }),
+  keyCombo: (id: string, keys: string[]) =>
+    apiFetch<unknown>(`/api/v1/agents/${id}/key-combo`, {
+      method: 'POST',
+      body: JSON.stringify({ keys }),
+    }),
+  textInput: (id: string, text: string) =>
+    apiFetch<unknown>(`/api/v1/agents/${id}/text-input`, {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    }),
+
   tunnelOpen: (id: string, port: number, target: string) =>
     apiFetch<unknown>(`/agents/${id}/tunnel`, {
       method: 'POST',

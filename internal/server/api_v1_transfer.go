@@ -304,3 +304,126 @@ func (s *Server) handleV1StreamStop(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
+
+// handleV1StreamFrame returns the latest stream frame for an agent.
+// GET /api/v1/agents/{id}/stream-frame
+// Lightweight polling endpoint — agent pushes frames via WebSocket, server stores
+// the latest one. Frontend polls this at the desired FPS.
+func (s *Server) handleV1StreamFrame(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	if _, ok := s.v1CheckAuth(w, r, "capture"); !ok {
+		return
+	}
+	frameJSON := s.sessions.GetMemory(agentID, "last_stream_frame")
+	if frameJSON == "" {
+		writeError(w, http.StatusNotFound, "NO_FRAME", "no stream frame available")
+		return
+	}
+	// Parse the stored frame JSON and re-wrap in API envelope
+	var frameObj interface{}
+	if err := json.Unmarshal([]byte(frameJSON), &frameObj); err != nil {
+		writeError(w, http.StatusInternalServerError, "PARSE_ERROR", "failed to parse frame")
+		return
+	}
+	writeJSON(w, http.StatusOK, frameObj)
+}
+
+// handleV1PointerClick sends a mouse click to an agent.
+// POST /api/v1/agents/{id}/pointer-click
+// Body: {"x": 100, "y": 200, "button": "left"}
+func (s *Server) handleV1PointerClick(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	if _, ok := s.v1CheckAuth(w, r, "input"); !ok {
+		return
+	}
+	var params protocol.InputParams
+	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid JSON: "+err.Error())
+		return
+	}
+	resp, err := s.forwardToAgent(agentID, protocol.TypePointerClick, params)
+	if err != nil {
+		if strings.Contains(err.Error(), "timed out") {
+			writeError(w, http.StatusGatewayTimeout, "TIMEOUT", err.Error())
+		} else {
+			writeError(w, http.StatusServiceUnavailable, "AGENT_UNREACHABLE", err.Error())
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleV1KeyPress sends a single key press to an agent.
+// POST /api/v1/agents/{id}/key-press
+// Body: {"key": "Enter"}
+func (s *Server) handleV1KeyPress(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	if _, ok := s.v1CheckAuth(w, r, "input"); !ok {
+		return
+	}
+	var params protocol.InputParams
+	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid JSON: "+err.Error())
+		return
+	}
+	resp, err := s.forwardToAgent(agentID, protocol.TypeKeyPress, params)
+	if err != nil {
+		if strings.Contains(err.Error(), "timed out") {
+			writeError(w, http.StatusGatewayTimeout, "TIMEOUT", err.Error())
+		} else {
+			writeError(w, http.StatusServiceUnavailable, "AGENT_UNREACHABLE", err.Error())
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleV1KeyCombo sends a key combination to an agent.
+// POST /api/v1/agents/{id}/key-combo
+// Body: {"keys": ["Ctrl", "C"]}
+func (s *Server) handleV1KeyCombo(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	if _, ok := s.v1CheckAuth(w, r, "input"); !ok {
+		return
+	}
+	var params protocol.InputParams
+	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid JSON: "+err.Error())
+		return
+	}
+	resp, err := s.forwardToAgent(agentID, protocol.TypeKeyCombo, params)
+	if err != nil {
+		if strings.Contains(err.Error(), "timed out") {
+			writeError(w, http.StatusGatewayTimeout, "TIMEOUT", err.Error())
+		} else {
+			writeError(w, http.StatusServiceUnavailable, "AGENT_UNREACHABLE", err.Error())
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleV1TextInput sends text input to an agent.
+// POST /api/v1/agents/{id}/text-input
+// Body: {"text": "Hello World"}
+func (s *Server) handleV1TextInput(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	if _, ok := s.v1CheckAuth(w, r, "input"); !ok {
+		return
+	}
+	var params protocol.InputParams
+	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid JSON: "+err.Error())
+		return
+	}
+	resp, err := s.forwardToAgent(agentID, protocol.TypeTextInput, params)
+	if err != nil {
+		if strings.Contains(err.Error(), "timed out") {
+			writeError(w, http.StatusGatewayTimeout, "TIMEOUT", err.Error())
+		} else {
+			writeError(w, http.StatusServiceUnavailable, "AGENT_UNREACHABLE", err.Error())
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}

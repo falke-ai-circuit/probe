@@ -1,20 +1,23 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../../api/client'
-import { Folder, File, ArrowUp, RefreshCw, ChevronLeft, Info } from 'lucide-react'
+import { Folder, File, ArrowUp, RefreshCw, ChevronLeft, Download } from 'lucide-react'
 
 interface FileEntry { name: string; size: number; is_dir: boolean; mod_time?: string }
 
 export function FilesTab({ agentId }: { agentId: string }) {
-  const [path, setPath] = useState('C:\\')
-  const [entries, setEntries] = useState<FileEntry[]>([])
+  const [leftPath, setLeftPath] = useState('C:\\')
+  const [leftEntries, setLeftEntries] = useState<FileEntry[]>([])
+  const [rightPath, setRightPath] = useState('C:\\')
+  const [rightEntries, setRightEntries] = useState<FileEntry[]>([])
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [activePane, setActivePane] = useState<'left' | 'right'>('left')
   const [selected, setSelected] = useState<FileEntry | null>(null)
   const [fileContent, setFileContent] = useState('')
   const [viewingPath, setViewingPath] = useState('')
   const [showViewer, setShowViewer] = useState(false)
 
-  const listDir = useCallback(async (dir: string) => {
+  const listDir = useCallback(async (dir: string, setPath: (p: string) => void, setEntries: (e: FileEntry[]) => void) => {
     setLoading(true); setError(''); setSelected(null)
     try {
       const res = await api.fsList(agentId, dir)
@@ -25,76 +28,123 @@ export function FilesTab({ agentId }: { agentId: string }) {
     finally { setLoading(false) }
   }, [agentId])
 
-  useEffect(() => { listDir('C:\\') }, [listDir])
+  useEffect(() => {
+    listDir('C:\\', setLeftPath, setLeftEntries)
+    listDir('C:\\', setRightPath, setRightEntries)
+  }, [listDir])
 
-  const navigateTo = (entry: FileEntry) => { if (!entry.is_dir) return; const sep = path.endsWith('\\') || path.endsWith('/') ? '' : '\\'; listDir(path + sep + entry.name) }
-  const goUp = () => { if (path === 'C:\\' || path === '/' || path === '.') return; const parts = path.split(/[\\/]/); parts.pop(); let p = parts.join('\\'); if (p && !p.includes(':')) p += '\\'; if (!p) p = 'C:\\'; listDir(p) }
+  const joinPath = (base: string, name: string) => {
+    const sep = base.endsWith('\\') || base.endsWith('/') ? '' : '\\'
+    return base + sep + name
+  }
 
-  const readFile = async (entry: FileEntry) => {
-    if (entry.is_dir) return; setLoading(true); setError('')
+  const goUp = (path: string): string => {
+    if (path === 'C:\\' || path === '/' || path === '.') return path
+    const parts = path.split(/[\\/]/); parts.pop()
+    let p = parts.join('\\')
+    if (p && !p.includes(':')) p += '\\'
+    if (!p) p = 'C:\\'
+    return p
+  }
+
+  // Click a folder: navigate in the ACTIVE pane
+  const onFolderClick = (entry: FileEntry, currentPath: string) => {
+    if (!entry.is_dir) return
+    const newPath = joinPath(currentPath, entry.name)
+    if (activePane === 'left') listDir(newPath, setLeftPath, setLeftEntries)
+    else listDir(newPath, setRightPath, setRightEntries)
+  }
+
+  // Single click: select + show in opposite pane if folder
+  const onEntryClick = (entry: FileEntry, currentPath: string) => {
+    setSelected(entry)
+    if (entry.is_dir) {
+      // Preview folder contents in opposite pane
+      const newPath = joinPath(currentPath, entry.name)
+      if (activePane === 'left') listDir(newPath, setRightPath, setRightEntries)
+      else listDir(newPath, setLeftPath, setLeftEntries)
+    }
+  }
+
+  // Double click: navigate into folder or open file
+  const onEntryDoubleClick = (entry: FileEntry, currentPath: string) => {
+    if (entry.is_dir) onFolderClick(entry, currentPath)
+    else readFile(entry, currentPath)
+  }
+
+  const readFile = async (entry: FileEntry, currentPath: string) => {
+    setLoading(true); setError('')
     try {
-      const sep = path.endsWith('\\') || path.endsWith('/') ? '' : '\\'
-      const fp = path + sep + entry.name
+      const fp = joinPath(currentPath, entry.name)
       const res = await api.fsRead(agentId, fp)
       const c = typeof res === 'string' ? res : (res as { content?: string })?.content || JSON.stringify(res, null, 2)
       setFileContent(c); setViewingPath(fp); setShowViewer(true)
     } catch (e) { setError((e as Error).message) } finally { setLoading(false) }
   }
 
-  const onFileClick = (entry: FileEntry) => { setSelected(entry); if (!entry.is_dir) readFile(entry) }
-
   if (showViewer) {
-    return (<div><div className="toolbar"><button className="btn btn-sm" onClick={() => setShowViewer(false)}><ChevronLeft size={14} /> Back</button><span className="mono dim">{viewingPath}</span></div><div className="terminal-output" style={{ minHeight: '200px' }}>{fileContent}</div></div>)
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+        <div className="toolbar" style={{ flexShrink: 0 }}>
+          <button className="btn btn-sm" onClick={() => setShowViewer(false)}><ChevronLeft size={14} /> Back</button>
+          <span className="mono dim">{viewingPath}</span>
+        </div>
+        <div className="terminal-output" style={{ flex: 1, minHeight: 0 }}>{fileContent}</div>
+      </div>
+    )
   }
 
-  return (
-    <div>
-      <div className="toolbar">
-        <button className="btn btn-sm" onClick={goUp}><ArrowUp size={14} /> Up</button>
-        <button className="btn btn-sm" onClick={() => listDir(path)}><RefreshCw size={14} /> Refresh</button>
-        <input type="text" value={path} onChange={e => setPath(e.target.value)} onKeyDown={e => e.key === 'Enter' && listDir(path)} className="mono" style={{ flex: 1, padding: '5px 10px', border: '1px solid var(--border-glow)', borderRadius: 'var(--radius)', background: 'var(--bg-input)', color: 'var(--green)', fontFamily: 'var(--font-mono)' }} />
-      </div>
-      {error && <div className="error-msg">{error}</div>}
-      <div className="file-browser">
-        <div className="file-pane">
-          <div className="file-pane-header"><Folder size={14} /> {path}</div>
-          <div className="file-list">
-            {loading ? <div className="loading">Loading…</div> :
-             entries.length === 0 && !error ? <div className="empty-state">Empty directory</div> :
-             <div>
+  const renderPane = (side: 'left' | 'right', path: string, entries: FileEntry[]) => {
+    const isActive = activePane === side
+    const setPath = side === 'left' ? setLeftPath : setRightPath
+    const setEntries = side === 'left' ? setLeftEntries : setRightEntries
+    return (
+      <div
+        className={`file-pane ${isActive ? 'active' : ''}`}
+        onClick={() => setActivePane(side)}
+        style={isActive ? { borderColor: 'var(--green)', boxShadow: '0 0 8px rgba(0,255,65,0.1)' } : {}}
+      >
+        <div className="file-pane-header">
+          <Folder size={14} /> {path}
+        </div>
+        <div className="file-list">
+          {loading && isActive ? <div className="loading">Loading…</div> :
+           entries.length === 0 && !error ? <div className="empty-state">Empty directory</div> :
+           <div>
              <div className="file-item file-header" style={{ cursor: 'default', fontWeight: 600, fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', borderBottom: '1px solid var(--border)', marginBottom: 4 }}>
                <span className="file-icon" />
                <span className="file-name">Name</span>
                <span className="file-size">Size</span>
              </div>
              {entries.map((e, i) => (
-              <div key={i} className={`file-item ${e.is_dir ? 'dir' : ''} ${selected === e ? 'selected' : ''}`} onClick={() => onFileClick(e)} onDoubleClick={() => navigateTo(e)}>
+              <div
+                key={i}
+                className={`file-item ${e.is_dir ? 'dir' : ''} ${selected === e && isActive ? 'selected' : ''}`}
+                onClick={() => onEntryClick(e, path)}
+                onDoubleClick={() => onEntryDoubleClick(e, path)}
+              >
                 <span className="file-icon">{e.is_dir ? <Folder size={14} /> : <File size={14} />}</span>
                 <span className="file-name">{e.name}</span>
                 <span className="file-size">{e.is_dir ? '—' : formatSize(e.size)}</span>
               </div>
             ))}
-            </div>
-            }
-          </div>
+           </div>}
         </div>
-        <div className="file-pane">
-          <div className="file-pane-header"><Info size={14} /> Details</div>
-          <div className="file-list" style={{ padding: '14px' }}>
-            {selected ? (
-              <div>
-                <div style={{ marginBottom: 12 }}>{selected.is_dir ? <Folder size={32} color="var(--green)" /> : <File size={32} />}</div>
-                <div className="mono" style={{ fontSize: 14, marginBottom: 10, wordBreak: 'break-all' }}>{selected.name}</div>
-                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>Type: {selected.is_dir ? 'Directory' : 'File'}</div>
-                {!selected.is_dir && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>Size: {formatSize(selected.size)}</div>}
-                {selected.mod_time && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>Modified: {selected.mod_time}</div>}
-                <div style={{ marginTop: 14 }}>
-                  {!selected.is_dir ? <button className="btn btn-primary btn-sm" onClick={() => readFile(selected)}>View Content</button> : <button className="btn btn-primary btn-sm" onClick={() => navigateTo(selected)}>Open Directory</button>}
-                </div>
-              </div>
-            ) : <div className="empty-state">Select a file to view details</div>}
-          </div>
-        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+      <div className="toolbar" style={{ flexShrink: 0 }}>
+        <button className="btn btn-sm" onClick={() => { listDir(goUp(activePane === 'left' ? leftPath : rightPath), activePane === 'left' ? setLeftPath : setRightPath, activePane === 'left' ? setLeftEntries : setRightEntries) }}><ArrowUp size={14} /> Up</button>
+        <button className="btn btn-sm" onClick={() => { if (activePane === 'left') listDir(leftPath, setLeftPath, setLeftEntries); else listDir(rightPath, setRightPath, setRightEntries) }}><RefreshCw size={14} /> Refresh</button>
+        <input type="text" value={activePane === 'left' ? leftPath : rightPath} onChange={e => { if (activePane === 'left') setLeftPath(e.target.value); else setRightPath(e.target.value) }} onKeyDown={e => { if (e.key === 'Enter') { const p = activePane === 'left' ? leftPath : rightPath; listDir(p, activePane === 'left' ? setLeftPath : setRightPath, activePane === 'left' ? setLeftEntries : setRightEntries) } }} className="mono" style={{ flex: 1, padding: '5px 10px', border: '1px solid var(--border-glow)', borderRadius: 'var(--radius)', background: 'var(--bg-input)', color: 'var(--green)', fontFamily: 'var(--font-mono)' }} />
+      </div>
+      {error && <div className="error-msg">{error}</div>}
+      <div className="file-browser" style={{ flex: 1, minHeight: 0 }}>
+        {renderPane('left', leftPath, leftEntries)}
+        {renderPane('right', rightPath, rightEntries)}
       </div>
     </div>
   )

@@ -76,6 +76,36 @@ func (sm *SessionManager) AddMemory(agentID, key, value string) {
 	}
 }
 
+// SetMemory sets a key-value memory entry, replacing any existing value for that key.
+// Used for high-frequency updates like stream frames to avoid unbounded slice growth.
+func (sm *SessionManager) SetMemory(agentID, key, value string) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if ctx, ok := sm.sessions[agentID]; ok {
+		for i, m := range ctx.Memories {
+			if m.Key == key {
+				ctx.Memories[i].Value = value
+				return
+			}
+		}
+		ctx.Memories = append(ctx.Memories, Memory{Key: key, Value: value})
+	}
+}
+
+// GetMemory retrieves the last value for a key, or empty string if not found.
+func (sm *SessionManager) GetMemory(agentID, key string) string {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	if ctx, ok := sm.sessions[agentID]; ok {
+		for i := len(ctx.Memories) - 1; i >= 0; i-- {
+			if ctx.Memories[i].Key == key {
+				return ctx.Memories[i].Value
+			}
+		}
+	}
+	return ""
+}
+
 // AddSkill adds a skill to an agent's session.
 func (sm *SessionManager) AddSkill(agentID, name, description string) {
 	sm.mu.Lock()

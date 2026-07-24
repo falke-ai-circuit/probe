@@ -38,8 +38,8 @@ export function TerminalTab({ agentId }: { agentId: string }) {
   useEffect(() => { inputRef.current?.focus() }, [])
 
   return (
-    <div>
-      <div className="toolbar">
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+      <div className="toolbar" style={{ flexShrink: 0 }}>
         <button className="btn btn-sm" onClick={() => setHistory([])}><Trash2 size={14} /> Clear</button>
         <span className="dim" style={{ fontSize: 11, marginLeft: 8 }}>↑↓ history · Ctrl+L clear</span>
       </div>
@@ -48,7 +48,7 @@ export function TerminalTab({ agentId }: { agentId: string }) {
           history.map((h, i) => (<div key={i}><span style={{ color: '#666' }}>$ </span><span style={{ color: '#fff' }}>{h.cmd}</span>{'\n'}{h.output}{'\n'}</div>))}
         {running && <span className="dim">Executing…</span>}
       </div>
-      <div className="terminal-input-row">
+      <div className="terminal-input-row" style={{ flexShrink: 0 }}>
         <span className="prompt">$</span>
         <input ref={inputRef} type="text" value={cmd} onChange={e => setCmd(e.target.value)} onKeyDown={handleKey} placeholder="Enter command…" disabled={running} autoFocus />
         <button className="btn btn-primary btn-sm" onClick={() => exec(cmd)} disabled={running || !cmd.trim()}><Play size={14} /> Run</button>

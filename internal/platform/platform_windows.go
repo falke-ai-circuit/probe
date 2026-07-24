@@ -275,16 +275,130 @@ func (p *windowsPlatform) ScreenStreamStop(streamID string) error {
 }
 
 func (p *windowsPlatform) Click(x int, y int, button string) error {
-	return fmt.Errorf("pointer input not available")
+	if button == "" {
+		button = "left"
+	}
+	// Use Win32 API via PowerShell Add-Type for mouse events
+	script := fmt.Sprintf(`Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class MouseInput {
+    [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, IntPtr dwExtraInfo);
+    public const uint MOVE = 0x0001;
+    public const uint LEFTDOWN = 0x0002;
+    public const uint LEFTUP = 0x0004;
+    public const uint RIGHTDOWN = 0x0008;
+    public const uint RIGHTUP = 0x0010;
+    public const uint MIDDLEDOWN = 0x0020;
+    public const uint MIDDLEUP = 0x0040;
+    public static void Click(int x, int y, string button) {
+        SetCursorPos(x, y);
+        System.Threading.Thread.Sleep(20);
+        if (button == "right") {
+            mouse_event(RIGHTDOWN | RIGHTUP, 0, 0, 0, IntPtr.Zero);
+        } else if (button == "middle") {
+            mouse_event(MIDDLEDOWN | MIDDLEUP, 0, 0, 0, IntPtr.Zero);
+        } else {
+            mouse_event(LEFTDOWN | LEFTUP, 0, 0, 0, IntPtr.Zero);
+        }
+    }
+}
+"@
+[MouseInput]::Click(%d, %d, "%s")`, x, y, button)
+	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
+	return cmd.Run()
 }
 func (p *windowsPlatform) TypeText(text string) error {
-	return fmt.Errorf("text input not available")
+	// Send text via SendKeys, escaping special characters
+	escaped := strings.ReplaceAll(text, "{", "{{")
+	escaped = strings.ReplaceAll(escaped, "}", "}}")
+	escaped = strings.ReplaceAll(escaped, "+", "{+}")
+	escaped = strings.ReplaceAll(escaped, "^", "{^}")
+	escaped = strings.ReplaceAll(escaped, "%", "{%%}")
+	escaped = strings.ReplaceAll(escaped, "~", "{~}")
+	escaped = strings.ReplaceAll(escaped, "(", "{(}")
+	escaped = strings.ReplaceAll(escaped, ")", "{)}")
+	escaped = strings.ReplaceAll(escaped, "[", "{[}")
+	escaped = strings.ReplaceAll(escaped, "]", "{]}")
+	script := fmt.Sprintf(`Add-Type -AssemblyName System.Windows.Forms
+[System.Windows.Forms.SendKeys]::SendWait("%s")`, escaped)
+	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
+	return cmd.Run()
 }
 func (p *windowsPlatform) KeyPress(key string) error {
-	return fmt.Errorf("keypress not available")
+	// Map common key names to SendWait codes
+	keyMap := map[string]string{
+		"Enter": "{ENTER}", "Return": "{ENTER}",
+		"Tab": "{TAB}", "Escape": "{ESC}", "Esc": "{ESC}",
+		"Backspace": "{BACKSPACE}", "Delete": "{DELETE}",
+		"Space": " ", "Up": "{UP}", "Down": "{DOWN}",
+		"Left": "{LEFT}", "Right": "{RIGHT}",
+		"Home": "{HOME}", "End": "{END}",
+		"PageUp": "{PGUP}", "PageDown": "{PGDN}",
+		"F1": "{F1}", "F2": "{F2}", "F3": "{F3}", "F4": "{F4}",
+		"F5": "{F5}", "F6": "{F6}", "F7": "{F7}", "F8": "{F8}",
+		"F9": "{F9}", "F10": "{F10}", "F11": "{F11}", "F12": "{F12}",
+	}
+	code, ok := keyMap[key]
+	if !ok {
+		// Single character — send as-is
+		if len(key) == 1 {
+			code = key
+		} else {
+			code = "{" + key + "}"
+		}
+	}
+	script := fmt.Sprintf(`Add-Type -AssemblyName System.Windows.Forms
+[System.Windows.Forms.SendKeys]::SendWait("%s")`, code)
+	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
+	return cmd.Run()
 }
 func (p *windowsPlatform) KeyCombo(keys []string) error {
-	return fmt.Errorf("key combo not available")
+	// Build SendWait combo string: Ctrl+C → ^c
+	if len(keys) == 0 {
+		return fmt.Errorf("no keys specified")
+	}
+	// Map modifier names to SendKeys prefix
+	modifierMap := map[string]string{
+		"Ctrl": "^", "Control": "^",
+		"Alt": "%", "Shift": "+",
+		"Win": "{WIN}",
+	}
+	prefix := ""
+	lastKey := ""
+	for _, k := range keys {
+		if m, ok := modifierMap[k]; ok {
+			prefix += m
+		} else {
+			lastKey = k
+		}
+	}
+	if lastKey == "" {
+		return fmt.Errorf("no non-modifier key in combo")
+	}
+	// Map last key to code
+	keyMap := map[string]string{
+		"Enter": "{ENTER}", "Tab": "{TAB}", "Escape": "{ESC}",
+		"Space": " ", "Up": "{UP}", "Down": "{DOWN}",
+		"Left": "{LEFT}", "Right": "{RIGHT}",
+		"F1": "{F1}", "F2": "{F2}", "F3": "{F3}", "F4": "{F4}",
+		"F5": "{F5}", "F6": "{F6}", "F7": "{F7}", "F8": "{F8}",
+		"F9": "{F9}", "F10": "{F10}", "F11": "{F11}", "F12": "{F12}",
+	}
+	code, ok := keyMap[lastKey]
+	if !ok {
+		if len(lastKey) == 1 {
+			code = lastKey
+		} else {
+			code = "{" + lastKey + "}"
+		}
+	}
+	combo := prefix + code
+	script := fmt.Sprintf(`Add-Type -AssemblyName System.Windows.Forms
+[System.Windows.Forms.SendKeys]::SendWait("%s")`, combo)
+	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
+	return cmd.Run()
 }
 
 // System
