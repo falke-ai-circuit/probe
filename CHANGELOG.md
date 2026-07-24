@@ -3,6 +3,28 @@
 All notable changes to PROBE are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [Semantic Versioning](https://semver.org/).
 
+## [v1.9.0] — 2026-07-24
+
+### Added — Phase 4: Dynamic Mode Switching & Aware Relay
+- **Default supervisor startup** — `probe` with no subcommand auto-detects mode from config file (probe.json or probe-client.json). If config has `client.server` → starts as client, no server → starts as server, relay section → also starts relay.
+- **Unified config format** — new structured JSON config with `server`, `client`, `relay` sections. Legacy flat config (`{"server":"...","token":"...","name":"..."}`) still works via automatic detection.
+- **Relay prefix naming** — relayed agents registered as `relay/{relay_id}/{agent_name}` in server registry for topology visibility.
+- **Relay metadata in registration** — `relay_register` control message extended with `metadata` field (listen_addr, max_agents, upstream, agent_count).
+- **Agent mode_status reporting** — agents report current mode status to server on connect and on mode change via `mode_status` protocol message.
+- **Server→agent mode_control** — new `mode_control` protocol message allows server to remotely start/stop modes (serve/connect/relay) on any agent via WebSocket.
+- **Server REST API for mode control**:
+  - `POST /api/v1/agents/{id}/mode` — send mode_control to agent (start/stop serve/connect/relay)
+  - `GET /api/v1/agents/{id}/mode` — get agent's current mode status
+  - `GET /api/v1/topology` — returns full network topology as nodes + edges graph
+- **WebUI Modes tab** — new tab in Agent Detail with 3 mode cards (Serve/Connect/Relay), status indicators, Start/Stop toggle buttons, relay config editing (listen address, upstream URL, agent tokens), 5s polling.
+- **WebUI Topology graph** — live SVG graph on Dashboard showing server (hexagon), agents (circles), and relays (squares) with edges (solid=direct, dashed=relayed). Features drag-to-reposition, zoom/pan, click-to-navigate, fullscreen toggle, 5s auto-refresh.
+- **Forward policy stub** — `forward_policy` protocol message for server-as-relay selective forwarding (full implementation in Step 11).
+- **Design document** — `DESIGN_PHASE4.md` with full architecture, protocol changes, API changes, 14-step implementation plan.
+
+### Protocol
+- New message types: `mode_control`, `mode_control_result`, `mode_status`, `forward_policy`
+- `relay_register` extended with `metadata` field (backward compatible — old relays still work)
+
 ## [v1.7.0] — 2026-07-24
 
 ### Added
