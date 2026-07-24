@@ -2,135 +2,188 @@ package features
 
 import (
 	"fmt"
-	"sort"
+	"math"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
-type MetricType int
-
-const (
-	MetricCounter MetricType = iota
-	MetricGauge
-	MetricHistogram
-	MetricTimer
-)
-
-type Metric struct {
-	Name      string            `json:"name"`
-	Type      MetricType        `json:"type"`
-	Value     float64           `json:"value"`
-	Count     int64             `json:"count"`
-	Sum       float64           `json:"sum"`
-	Min       float64           `json:"min"`
-	Max       float64           `json:"max"`
-	Labels    map[string]string `json:"labels,omitempty"`
-	UpdatedAt time.Time         `json:"updatedAt"`
-}
-
+// MetricsCollector tracks application metrics: counters, gauges, histograms.
 type MetricsCollector struct {
-	mu      sync.RWMutex
-	metrics map[string]*Metric
+	mu         sync.RWMutex
+	counters   map[string]*int64
+	gauges     map[string]*uint64
+	histograms map[string]*Histogram
+	startTime  time.Time
 }
 
+// Histogram tracks value distribution with configurable buckets.
+type Histogram struct {
+	mu      sync.Mutex
+	buckets []float64
+	counts  []int64
+	sum     float64
+	count   int64
+	min     float64
+	max     float64
+}
+
+// NewMetricsCollector creates a new metrics collector.
 func NewMetricsCollector() *MetricsCollector {
-	return &MetricsCollector{metrics: make(map[string]*Metric)}
-}
-
-func (c *MetricsCollector) IncrementCounter(name string, delta float64) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	m, ok := c.metrics[name]
-	if !ok {
-		m = &Metric{Name: name, Type: MetricCounter, UpdatedAt: time.Now()}
-		c.metrics[name] = m
+	return &MetricsCollector{
+		counters:   make(map[string]*int64),
+		gauges:     make(map[string]*uint64),
+		histograms: make(map[string]*Histogram),
+		startTime:  time.Now(),
 	}
-	atomic.AddInt64(&m.Count, 1)
-	m.Value += delta
-	m.UpdatedAt = time.Now()
 }
 
-func (c *MetricsCollector) SetGauge(name string, value float64) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	m, ok := c.metrics[name]
+// IncrementCounter atomically increments a named counter.
+func (m *MetricsCollector) IncrementCounter(name string, delta int64) {
+	m.mu.RLock()
+	ptr, ok := m.counters[name]
+	m.mu.RUnlock()
 	if !ok {
-		m = &Metric{Name: name, Type: MetricGauge, UpdatedAt: time.Now()}
-		c.metrics[name] = m
-	}
-	m.Value = value
-	m.UpdatedAt = time.Now()
-}
-
-func (c *MetricsCollector) RecordHistogram(name string, value float64) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	m, ok := c.metrics[name]
-	if !ok {
-		m = &Metric{Name: name, Type: MetricHistogram, Min: value, Max: value, UpdatedAt: time.Now()}
-		c.metrics[name] = m
-	}
-	m.Count++
-	m.Sum += value
-	if value < m.Min { m.Min = value }
-	if value > m.Max { m.Max = value }
-	m.Value = m.Sum / float64(m.Count)
-	m.UpdatedAt = time.Now()
-}
-
-type Timer struct {
-	name      string
-	collector *MetricsCollector
-	start     time.Time
-}
-
-func (c *MetricsCollector) StartTimer(name string) *Timer {
-	return &Timer{name: name, collector: c, start: time.Now()}
-}
-
-func (t *Timer) Stop() time.Duration {
-	elapsed := time.Since(t.start)
-	t.collector.RecordHistogram(t.name+"_duration_ms", float64(elapsed.Milliseconds()))
-	return elapsed
-}
-
-func (c *MetricsCollector) GetAllMetrics() []Metric {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	results := make([]Metric, 0, len(c.metrics))
-	for _, m := range c.metrics { results = append(results, *m) }
-	sort.Slice(results, func(i, j int) bool { return results[i].Name < results[j].Name })
-	return results
-}
-
-func (c *MetricsCollector) FormatMetrics() string {
-	metrics := c.GetAllMetrics()
-	result := fmt.Sprintf("=== Metrics Report (%d metrics) ===\n", len(metrics))
-	for _, m := range metrics {
-		var typeStr string
-		switch m.Type {
-		case MetricCounter: typeStr = "counter"
-		case MetricGauge: typeStr = "gauge"
-		case MetricHistogram: typeStr = "histogram"
-		case MetricTimer: typeStr = "timer"
+		m.mu.Lock()
+		ptr, ok = m.counters[name]
+		if !ok {
+			var v int64
+			ptr = &v
+			m.counters[name] = ptr
 		}
-		result += fmt.Sprintf("  %s [%s]: value=%.2f count=%d", m.Name, typeStr, m.Value, m.Count)
-		if m.Type == MetricHistogram { result += fmt.Sprintf(" min=%.2f max=%.2f avg=%.2f", m.Min, m.Max, m.Value) }
-		result += fmt.Sprintf(" updated=%s\n", m.UpdatedAt.Format(time.RFC3339))
+		m.mu.Unlock()
+	}
+	atomic.AddInt64(ptr, delta)
+}
+
+// SetGauge sets a named gauge to a specific value.
+func (m *MetricsCollector) SetGauge(name string, value float64) {
+	m.mu.RLock()
+	ptr, ok := m.gauges[name]
+	m.mu.RUnlock()
+	if !ok {
+		m.mu.Lock()
+		ptr, ok = m.gauges[name]
+		if !ok {
+			var v uint64
+			ptr = &v
+			m.gauges[name] = ptr
+		}
+		m.mu.Unlock()
+	}
+	atomic.StoreUint64(ptr, math.Float64bits(value))
+}
+
+// ObserveHistogram records a value in a histogram.
+func (m *MetricsCollector) ObserveHistogram(name string, value float64, buckets []float64) {
+	m.mu.RLock()
+	h, ok := m.histograms[name]
+	m.mu.RUnlock()
+	if !ok {
+		m.mu.Lock()
+		h, ok = m.histograms[name]
+		if !ok {
+			h = NewHistogram(buckets)
+			m.histograms[name] = h
+		}
+		m.mu.Unlock()
+	}
+	h.Observe(value)
+}
+
+// NewHistogram creates a histogram with the given bucket boundaries.
+func NewHistogram(buckets []float64) *Histogram {
+	return &Histogram{
+		buckets: buckets,
+		counts:  make([]int64, len(buckets)+1),
+		min:     math.MaxFloat64,
+		max:     0,
+	}
+}
+
+// Observe records a value.
+func (h *Histogram) Observe(value float64) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.sum += value
+	h.count++
+	if value < h.min {
+		h.min = value
+	}
+	if value > h.max {
+		h.max = value
+	}
+	for i, bound := range h.buckets {
+		if value <= bound {
+			h.counts[i]++
+			return
+		}
+	}
+	h.counts[len(h.buckets)]++
+}
+
+// GetCounter returns the current value of a counter.
+func (m *MetricsCollector) GetCounter(name string) int64 {
+	m.mu.RLock()
+	ptr, ok := m.counters[name]
+	m.mu.RUnlock()
+	if !ok {
+		return 0
+	}
+	return atomic.LoadInt64(ptr)
+}
+
+// GetGauge returns the current value of a gauge.
+func (m *MetricsCollector) GetGauge(name string) float64 {
+	m.mu.RLock()
+	ptr, ok := m.gauges[name]
+	m.mu.RUnlock()
+	if !ok {
+		return 0
+	}
+	return math.Float64frombits(atomic.LoadUint64(ptr))
+}
+
+// Snapshot returns a map of all current metric values.
+func (m *MetricsCollector) Snapshot() map[string]interface{} {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	result := make(map[string]interface{})
+	result["uptime_seconds"] = time.Since(m.startTime).Seconds()
+	result["goroutines"] = runtime.NumGoroutine()
+	for name, ptr := range m.counters {
+		result["counter_"+name] = atomic.LoadInt64(ptr)
+	}
+	for name, ptr := range m.gauges {
+		result["gauge_"+name] = math.Float64frombits(atomic.LoadUint64(ptr))
+	}
+	for name, h := range m.histograms {
+		h.mu.Lock()
+		result["histogram_"+name] = map[string]interface{}{
+			"count": h.count,
+			"sum":   h.sum,
+			"min":   h.min,
+			"max":   h.max,
+			"avg":   h.sum / math.Max(1, float64(h.count)),
+		}
+		h.mu.Unlock()
 	}
 	return result
 }
 
-func (c *MetricsCollector) Reset() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.metrics = make(map[string]*Metric)
-}
-
-func (c *MetricsCollector) GetMetric(name string) *Metric {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if m, ok := c.metrics[name]; ok { return m }
-	return nil
+// FormatMetrics returns metrics as formatted text.
+func (m *MetricsCollector) FormatMetrics() string {
+	snap := m.Snapshot()
+	var buf string
+	buf = fmt.Sprintf("=== Metrics Snapshot ===\n")
+	buf += fmt.Sprintf("Uptime: %.0f seconds\n", snap["uptime_seconds"])
+	buf += fmt.Sprintf("Goroutines: %d\n", snap["goroutines"])
+	for name, ptr := range m.counters {
+		buf += fmt.Sprintf("counter %s: %d\n", name, atomic.LoadInt64(ptr))
+	}
+	for name, ptr := range m.gauges {
+		buf += fmt.Sprintf("gauge %s: %.2f\n", name, math.Float64frombits(atomic.LoadUint64(ptr)))
+	}
+	return buf
 }

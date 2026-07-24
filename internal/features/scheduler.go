@@ -2,107 +2,264 @@ package features
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
 
-type Task struct {
-	Name        string
-	Interval    time.Duration
-	LastRun     time.Time
-	NextRun     time.Time
-	RunCount    int64
-	LastElapsed time.Duration
-	LastError   error
-	taskFunc    func() error
-}
-
-type Scheduler struct {
-	mu      sync.Mutex
-	tasks   map[string]*Task
-	stopCh  chan struct{}
+// TaskScheduler manages periodic background tasks.
+type TaskScheduler struct {
+	mu     sync.Mutex
+	tasks  []ScheduledTask
+	stopCh chan struct{}
 	running bool
 }
 
-func NewScheduler() *Scheduler {
-	return &Scheduler{tasks: make(map[string]*Task), stopCh: make(chan struct{})}
+// ScheduledTask represents a recurring task.
+type ScheduledTask struct {
+	Name     string
+	Interval time.Duration
+	Function func() error
+	LastRun  time.Time
+	NextRun  time.Time
+	RunCount int64
+	LastError string
 }
 
-func (s *Scheduler) Register(name string, interval time.Duration, taskFunc func() error) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, exists := s.tasks[name]; exists {
-		return fmt.Errorf("task already registered: %s", name)
+// NewScheduler creates a new task scheduler.
+func NewScheduler() *TaskScheduler {
+	return &TaskScheduler{
+		stopCh: make(chan struct{}),
 	}
-	s.tasks[name] = &Task{Name: name, Interval: interval, NextRun: time.Now().Add(interval), taskFunc: taskFunc}
-	return nil
 }
 
-func (s *Scheduler) Start() {
+// Register adds a task to the scheduler.
+func (s *TaskScheduler) Register(name string, interval time.Duration, fn func() error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.running { return }
+	s.tasks = append(s.tasks, ScheduledTask{
+		Name:     name,
+		Interval: interval,
+		Function: fn,
+		NextRun:  time.Now().Add(interval),
+	})
+}
+
+// Start begins executing scheduled tasks.
+func (s *TaskScheduler) Start() {
+	s.mu.Lock()
+	if s.running {
+		s.mu.Unlock()
+		return
+	}
 	s.running = true
+	s.mu.Unlock()
+
 	go func() {
 		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
-			case <-s.stopCh: return
-			case now := <-ticker.C: s.runDueTasks(now)
+			case <-ticker.C:
+				s.runDueTasks()
+			case <-s.stopCh:
+				return
 			}
 		}
 	}()
 }
 
-func (s *Scheduler) Stop() {
+// Stop halts the scheduler.
+func (s *TaskScheduler) Stop() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.running { close(s.stopCh); s.running = false }
+	if s.running {
+		s.running = false
+		close(s.stopCh)
+	}
+	s.mu.Unlock()
 }
 
-func (s *Scheduler) runDueTasks(now time.Time) {
+// runDueTasks executes tasks whose next run time has passed.
+func (s *TaskScheduler) runDueTasks() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, task := range s.tasks {
-		if now.Before(task.NextRun) { continue }
-		start := time.Now()
-		err := task.taskFunc()
-		elapsed := time.Since(start)
-		task.LastRun = start
+	now := time.Now()
+	var due []int
+	for i := range s.tasks {
+		if now.After(s.tasks[i].NextRun) || now.Equal(s.tasks[i].NextRun) {
+			due = append(due, i)
+		}
+	}
+	s.mu.Unlock()
+
+	for _, idx := range due {
+		s.mu.Lock()
+		task := &s.tasks[idx]
+		s.mu.Unlock()
+		err := task.Function()
+		s.mu.Lock()
+		task.LastRun = now
 		task.NextRun = now.Add(task.Interval)
 		task.RunCount++
-		task.LastElapsed = elapsed
-		task.LastError = err
+		if err != nil {
+			task.LastError = err.Error()
+		} else {
+			task.LastError = ""
+		}
+		s.mu.Unlock()
 	}
 }
 
-type TaskInfo struct {
-	Name        string    `json:"name"`
-	Interval    string    `json:"interval"`
-	LastRun     time.Time `json:"lastRun"`
-	NextRun     time.Time `json:"nextRun"`
-	RunCount    int64     `json:"runCount"`
-	LastElapsed string    `json:"lastElapsed"`
-	HasError    bool      `json:"hasError"`
-}
-
-func (s *Scheduler) GetTaskInfo() []TaskInfo {
+// GetTasks returns a copy of all scheduled tasks.
+func (s *TaskScheduler) GetTasks() []ScheduledTask {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	infos := make([]TaskInfo, 0, len(s.tasks))
-	for _, task := range s.tasks {
-		infos = append(infos, TaskInfo{Name: task.Name, Interval: task.Interval.String(), LastRun: task.LastRun, NextRun: task.NextRun, RunCount: task.RunCount, LastElapsed: task.LastElapsed.String(), HasError: task.LastError != nil})
+	tasks := make([]ScheduledTask, len(s.tasks))
+	copy(tasks, s.tasks)
+	sort.Slice(tasks, func(i, j int) bool {
+		return tasks[i].NextRun.Before(tasks[j].NextRun)
+	})
+	return tasks
+}
+
+// FormatSchedule returns the schedule as text.
+func (s *TaskScheduler) FormatSchedule() string {
+	tasks := s.GetTasks()
+	var buf strings.Builder
+	buf.WriteString("=== Scheduled Tasks ===\n")
+	for _, t := range tasks {
+		status := "waiting"
+		if t.RunCount > 0 {
+			status = fmt.Sprintf("ran %d times, last: %s", t.RunCount, t.LastRun.Format(time.RFC3339))
+			if t.LastError != "" {
+				status += fmt.Sprintf(" ERROR: %s", t.LastError)
+			}
+		}
+		buf.WriteString(fmt.Sprintf("  %s (every %s): %s\n", t.Name, t.Interval, status))
 	}
-	sort.Slice(infos, func(i, j int) bool { return infos[i].Name < infos[j].Name })
-	return infos
+	return buf.String()
 }
 
-func (s *Scheduler) Unregister(name string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, exists := s.tasks[name]; !exists { return fmt.Errorf("task not found: %s", name) }
-	delete(s.tasks, name)
+// ConfigManager handles application configuration with validation.
+type ConfigManager struct {
+	mu       sync.RWMutex
+	data     map[string]interface{}
+	filePath string
+	modified time.Time
+}
+
+// NewConfigManager creates a new config manager.
+func NewConfigManager(filePath string) *ConfigManager {
+	return &ConfigManager{
+		data:     make(map[string]interface{}),
+		filePath: filePath,
+	}
+}
+
+// Set stores a configuration value.
+func (c *ConfigManager) Set(key string, value interface{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.data[key] = value
+	c.modified = time.Now()
+}
+
+// Get retrieves a configuration value.
+func (c *ConfigManager) Get(key string) (interface{}, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	val, ok := c.data[key]
+	return val, ok
+}
+
+// GetString retrieves a string configuration value with default.
+func (c *ConfigManager) GetString(key, def string) string {
+	val, ok := c.Get(key)
+	if !ok {
+		return def
+	}
+	s, ok := val.(string)
+	if !ok {
+		return def
+	}
+	return s
+}
+
+// GetInt retrieves an integer configuration value with default.
+func (c *ConfigManager) GetInt(key string, def int) int {
+	val, ok := c.Get(key)
+	if !ok {
+		return def
+	}
+	switch v := val.(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	default:
+		return def
+	}
+}
+
+// Validate checks that all required keys are present.
+func (c *ConfigManager) Validate(required []string) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, key := range required {
+		if _, ok := c.data[key]; !ok {
+			return fmt.Errorf("missing required config key: %s", key)
+		}
+	}
 	return nil
+}
+
+// Save writes configuration to file.
+func (c *ConfigManager) Save() error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	dir := filepath.Dir(c.filePath)
+	if dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("failed to create config directory: %w", err)
+		}
+	}
+	var buf strings.Builder
+	for key, val := range c.data {
+		buf.WriteString(fmt.Sprintf("%s=%v\n", key, val))
+	}
+	return os.WriteFile(c.filePath, []byte(buf.String()), 0644)
+}
+
+// Load reads configuration from file.
+func (c *ConfigManager) Load() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	data, err := os.ReadFile(c.filePath)
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) == 2 {
+			c.data[parts[0]] = parts[1]
+		}
+	}
+	c.modified = time.Now()
+	return nil
+}
+
+// GetModifiedTime returns when the config was last modified.
+func (c *ConfigManager) GetModifiedTime() time.Time {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.modified
 }

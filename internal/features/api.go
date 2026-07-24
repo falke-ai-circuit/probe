@@ -1,143 +1,226 @@
 package features
 
-// APIHandler provides HTTP REST API endpoints for the diagnostic dashboard.
-// These endpoints expose system information, health checks, and metrics
-// in a JSON format suitable for monitoring dashboards.
-
 import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
-// APIHandler manages HTTP API endpoints.
-type APIHandler struct {
+// APIServer provides a REST API for diagnostics and monitoring.
+type APIServer struct {
+	mu        sync.RWMutex
 	metrics   *MetricsCollector
 	monitor   *HealthMonitor
-	scheduler *Scheduler
-	logger    *Logger
+	scheduler *TaskScheduler
+	config    *ConfigManager
+	server    *http.Server
+	mux       *http.ServeMux
 }
 
-// NewAPIHandler creates a new API handler with the given components.
-func NewAPIHandler(metrics *MetricsCollector, monitor *HealthMonitor, scheduler *Scheduler) *APIHandler {
-	return &APIHandler{
+// NewAPIServer creates a new diagnostic API server.
+func NewAPIServer(metrics *MetricsCollector, monitor *HealthMonitor, scheduler *TaskScheduler, config *ConfigManager) *APIServer {
+	s := &APIServer{
 		metrics:   metrics,
 		monitor:   monitor,
 		scheduler: scheduler,
+		config:    config,
+		mux:       http.NewServeMux(),
+	}
+	s.registerRoutes()
+	return s
+}
+
+func (s *APIServer) registerRoutes() {
+	s.mux.HandleFunc("/api/v1/health", s.handleHealth)
+	s.mux.HandleFunc("/api/v1/metrics", s.handleMetrics)
+	s.mux.HandleFunc("/api/v1/system", s.handleSystem)
+	s.mux.HandleFunc("/api/v1/tasks", s.handleTasks)
+	s.mux.HandleFunc("/api/v1/config", s.handleConfig)
+	s.mux.HandleFunc("/api/v1/alerts", s.handleAlerts)
+}
+
+// Start begins serving the API.
+func (s *APIServer) Start(addr string) error {
+	s.mu.Lock()
+	s.server = &http.Server{
+		Addr:         addr,
+		Handler:      s.mux,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+	}
+	s.mu.Unlock()
+	return s.server.ListenAndServe()
+}
+
+// Stop halts the API server.
+func (s *APIServer) Stop() error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.server != nil {
+		return s.server.Close()
+	}
+	return nil
+}
+
+func (s *APIServer) handleHealth(w http.ResponseWriter, r *http.Request) {
+	status := s.monitor.GetStatus()
+	sysInfo := CollectSystemInfo()
+	response := map[string]interface{}{
+		"status":   status,
+		"uptime":   time.Since(s.monitor.startTime).Seconds(),
+		"hostname": sysInfo.Hostname,
+		"goroutines": runtime.NumGoroutine(),
+		"checks":   len(s.monitor.checks),
+		"alerts":   len(s.monitor.GetAlerts()),
+	}
+	writeJSON(w, response)
+}
+
+func (s *APIServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	snap := s.metrics.Snapshot()
+	writeJSON(w, snap)
+}
+
+func (s *APIServer) handleSystem(w http.ResponseWriter, r *http.Request) {
+	info := CollectSystemInfo()
+	var memStats runtime.MemStats
+	runtime.ReadMemStats(&memStats)
+	response := map[string]interface{}{
+		"hostname":   info.Hostname,
+		"os":         info.OS,
+		"arch":       info.Arch,
+		"cpus":       info.CPUs,
+		"go_version": info.GoVersion,
+		"memory_alloc":   memStats.Alloc,
+		"memory_sys":     memStats.Sys,
+		"memory_total":   memStats.TotalAlloc,
+		"gc_count":       memStats.NumGC,
+		"goroutines":     runtime.NumGoroutine(),
+	}
+	writeJSON(w, response)
+}
+
+func (s *APIServer) handleTasks(w http.ResponseWriter, r *http.Request) {
+	tasks := s.scheduler.GetTasks()
+	writeJSON(w, tasks)
+}
+
+func (s *APIServer) handleConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		s.config.mu.RLock()
+		data := make(map[string]interface{}, len(s.config.data))
+		for k, v := range s.config.data {
+			data[k] = v
+		}
+		s.config.mu.RUnlock()
+		writeJSON(w, data)
 	}
 }
 
-// RegisterRoutes registers all API routes on the given mux.
-func (h *APIHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/api/v1/health", h.handleHealth)
-	mux.HandleFunc("/api/v1/metrics", h.handleMetrics)
-	mux.HandleFunc("/api/v1/system", h.handleSystemInfo)
-	mux.HandleFunc("/api/v1/tasks", h.handleTasks)
-	mux.HandleFunc("/api/v1/version", h.handleVersion)
-	mux.HandleFunc("/api/v1/status", h.handleStatus)
+func (s *APIServer) handleAlerts(w http.ResponseWriter, r *http.Request) {
+	alerts := s.monitor.GetAlerts()
+	writeJSON(w, alerts)
 }
 
-// handleHealth returns the current health status as JSON.
-func (h *APIHandler) handleHealth(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	
-	status := h.monitor.RunChecks()
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(status)
-}
-
-// handleMetrics returns all collected metrics.
-func (h *APIHandler) handleMetrics(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	
-	metrics := h.metrics.GetAllMetrics()
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(metrics)
-}
-
-// handleSystemInfo returns system diagnostic information.
-func (h *APIHandler) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	
-	info, err := CollectSystemInfo()
-	if err != nil {
-		http.Error(w, fmt.Sprintf("collect system info: %v", err), http.StatusInternalServerError)
-		return
-	}
-	
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(info)
-}
-
-// handleTasks returns scheduled task information.
-func (h *APIHandler) handleTasks(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	
-	tasks := h.scheduler.GetTaskInfo()
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(tasks)
-}
-
-// handleVersion returns the application version information.
-func (h *APIHandler) handleVersion(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"version":   "1.0.0",
-		"buildDate": time.Now().Format(time.RFC3339),
-		"component": "PROBE Client",
-	})
-}
-
-// handleStatus returns a summary of all system components.
-func (h *APIHandler) handleStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	
-	info, _ := CollectSystemInfo()
-	health := h.monitor.LastStatus()
-	tasks := h.scheduler.GetTaskInfo()
-	
-	summary := map[string]interface{}{
-		"system":      info,
-		"health":      health,
-		"tasks":       tasks,
-		"uptime":      h.monitor.Uptime().String(),
-		"status":      "operational",
-	}
-	
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(summary)
-}
-
-// WriteJSON writes a JSON response with proper headers.
-func WriteJSON(w http.ResponseWriter, data interface{}) {
+func writeJSON(w http.ResponseWriter, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(data); err != nil {
-		http.Error(w, fmt.Sprintf("encode response: %v", err), http.StatusInternalServerError)
+		fmt.Fprintf(os.Stderr, "API encode error: %v\n", err)
 	}
 }
 
-// ParseAPIPath extracts the resource name from an API path.
-func ParseAPIPath(path string) string {
-	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) >= 3 {
-		return parts[2]
+// StructuredLogger provides leveled logging with structured fields.
+type StructuredLogger struct {
+	mu       sync.Mutex
+	level    LogLevel
+	output   *os.File
+	fields   map[string]string
+}
+
+// LogLevel represents logging severity levels.
+type LogLevel int
+
+const (
+	LevelDebug LogLevel = iota
+	LevelInfo
+	LevelWarn
+	LevelError
+)
+
+// NewLogger creates a new structured logger.
+func NewLogger(level LogLevel) *StructuredLogger {
+	return &StructuredLogger{
+		level:  level,
+		output: os.Stderr,
+		fields: make(map[string]string),
 	}
-	return ""
+}
+
+// WithField adds a persistent field to the logger.
+func (l *StructuredLogger) WithField(key, value string) *StructuredLogger {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.fields[key] = value
+	return l
+}
+
+// Log writes a log entry at the given level.
+func (l *StructuredLogger) Log(level LogLevel, msg string, fields ...map[string]string) {
+	if level < l.level {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var buf strings.Builder
+	buf.WriteString(fmt.Sprintf("{\"time\":\"%s\",\"level\":\"%s\",\"msg\":%q", time.Now().Format(time.RFC3339), levelString(level), msg))
+	for k, v := range l.fields {
+		buf.WriteString(fmt.Sprintf(",\"%s\":%q", k, v))
+	}
+	for _, f := range fields {
+		for k, v := range f {
+			buf.WriteString(fmt.Sprintf(",\"%s\":%q", k, v))
+		}
+	}
+	buf.WriteString("}\n")
+	fmt.Fprint(l.output, buf.String())
+}
+
+func levelString(level LogLevel) string {
+	switch level {
+	case LevelDebug:
+		return "debug"
+	case LevelInfo:
+		return "info"
+	case LevelWarn:
+		return "warn"
+	case LevelError:
+		return "error"
+	default:
+		return "unknown"
+	}
+}
+
+// Info logs an info message.
+func (l *StructuredLogger) Info(msg string, fields ...map[string]string) {
+	l.Log(LevelInfo, msg, fields...)
+}
+
+// Warn logs a warning message.
+func (l *StructuredLogger) Warn(msg string, fields ...map[string]string) {
+	l.Log(LevelWarn, msg, fields...)
+}
+
+// Error logs an error message.
+func (l *StructuredLogger) Error(msg string, fields ...map[string]string) {
+	l.Log(LevelError, msg, fields...)
+}
+
+// Debug logs a debug message.
+func (l *StructuredLogger) Debug(msg string, fields ...map[string]string) {
+	l.Log(LevelDebug, msg, fields...)
 }

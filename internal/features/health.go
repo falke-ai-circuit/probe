@@ -2,110 +2,165 @@ package features
 
 import (
 	"fmt"
+	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 )
 
-type HealthStatus struct {
-	Status    string        `json:"status"`
-	Timestamp time.Time     `json:"timestamp"`
-	Checks    []HealthCheck `json:"checks"`
-	Uptime    time.Duration `json:"uptime"`
-}
-
-type HealthCheck struct {
-	Name      string        `json:"name"`
-	Status    string        `json:"status"`
-	Message   string        `json:"message"`
-	Duration  time.Duration `json:"duration"`
-	Threshold float64       `json:"threshold"`
-	Value     float64       `json:"value"`
-}
-
+// HealthMonitor tracks system health metrics and runs periodic checks.
 type HealthMonitor struct {
 	mu          sync.Mutex
-	checks       []CheckFunc
-	interval     time.Duration
-	lastStatus   *HealthStatus
-	startTime    time.Time
-	alertHandler func(check HealthCheck)
+	checks      []HealthCheck
+	alerts      []Alert
+	thresholds  map[string]float64
+	lastResults map[string]float64
+	startTime   time.Time
 }
 
-type CheckFunc func() HealthCheck
-
-func NewHealthMonitor(interval time.Duration) *HealthMonitor {
-	return &HealthMonitor{interval: interval, startTime: time.Now(), checks: make([]CheckFunc, 0)}
+// HealthCheck represents a single health check function.
+type HealthCheck struct {
+	Name     string
+	Function func() (float64, error)
+	Warning  float64
+	Critical float64
+	Unit     string
 }
 
-func (m *HealthMonitor) RegisterCheck(name string, check func() (float64, error), threshold float64) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.checks = append(m.checks, func() HealthCheck {
-		start := time.Now()
-		value, err := check()
-		duration := time.Since(start)
-		status := "pass"
-		msg := "OK"
-		if err != nil {
-			status = "fail"
-			msg = err.Error()
-		} else if value > threshold {
-			status = "warn"
-			msg = fmt.Sprintf("%.2f exceeds threshold %.2f", value, threshold)
-		}
-		return HealthCheck{Name: name, Status: status, Message: msg, Duration: duration, Threshold: threshold, Value: value}
+// Alert represents a health alert.
+type Alert struct {
+	Timestamp time.Time
+	Check     string
+	Level     string
+	Value     float64
+	Message   string
+}
+
+// NewHealthMonitor creates a new health monitor.
+func NewHealthMonitor() *HealthMonitor {
+	return &HealthMonitor{
+		thresholds:  make(map[string]float64),
+		lastResults: make(map[string]float64),
+		startTime:   time.Now(),
+	}
+}
+
+// RegisterCheck adds a health check to the monitor.
+func (h *HealthMonitor) RegisterCheck(name string, fn func() (float64, error), critical float64) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.checks = append(h.checks, HealthCheck{
+		Name:     name,
+		Function: fn,
+		Critical: critical,
+		Unit:     "",
 	})
+	h.thresholds[name] = critical
 }
 
-func (m *HealthMonitor) RunChecks() *HealthStatus {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	status := &HealthStatus{Timestamp: time.Now(), Uptime: time.Since(m.startTime), Checks: make([]HealthCheck, 0, len(m.checks))}
-	overall := "healthy"
-	for _, check := range m.checks {
-		result := check()
-		status.Checks = append(status.Checks, result)
-		if result.Status == "fail" { overall = "critical" } else if result.Status == "warn" && overall != "critical" { overall = "warning" }
-		if m.alertHandler != nil && (result.Status == "warn" || result.Status == "fail") { m.alertHandler(result) }
+// RunChecks executes all registered health checks.
+func (h *HealthMonitor) RunChecks() []Alert {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var newAlerts []Alert
+	for _, check := range h.checks {
+		value, err := check.Function()
+		if err != nil {
+			newAlerts = append(newAlerts, Alert{
+				Timestamp: time.Now(),
+				Check:     check.Name,
+				Level:     "error",
+				Value:     0,
+				Message:   err.Error(),
+			})
+			continue
+		}
+		h.lastResults[check.Name] = value
+		if value > check.Critical {
+			newAlerts = append(newAlerts, Alert{
+				Timestamp: time.Now(),
+				Check:     check.Name,
+				Level:     "critical",
+				Value:     value,
+				Message:   fmt.Sprintf("%s exceeded threshold: %.2f > %.2f", check.Name, value, check.Critical),
+			})
+		}
 	}
-	status.Status = overall
-	m.lastStatus = status
-	return status
+	h.alerts = append(h.alerts, newAlerts...)
+	return newAlerts
 }
 
-func (m *HealthMonitor) SetAlertHandler(handler func(check HealthCheck)) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.alertHandler = handler
+// GetStatus returns overall health status.
+func (h *HealthMonitor) GetStatus() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for name, value := range h.lastResults {
+		if threshold, ok := h.thresholds[name]; ok && value > threshold {
+			return "degraded"
+		}
+	}
+	return "healthy"
 }
 
-func (m *HealthMonitor) LastStatus() *HealthStatus {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.lastStatus
+// GetAlerts returns all alerts.
+func (h *HealthMonitor) GetAlerts() []Alert {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	alerts := make([]Alert, len(h.alerts))
+	copy(alerts, h.alerts)
+	return alerts
 }
 
-func (m *HealthMonitor) Uptime() time.Duration {
-	return time.Since(m.startTime)
+// FormatReport returns a health report as text.
+func (h *HealthMonitor) FormatReport() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var buf strings.Builder
+	buf.WriteString("=== Health Report ===\n")
+	buf.WriteString(fmt.Sprintf("Status: %s\n", h.GetStatus()))
+	buf.WriteString(fmt.Sprintf("Uptime: %s\n", time.Since(h.startTime).Round(time.Second)))
+	buf.WriteString(fmt.Sprintf("Checks: %d\n", len(h.checks)))
+	buf.WriteString(fmt.Sprintf("Alerts: %d\n", len(h.alerts)))
+	buf.WriteString("\nCheck Results:\n")
+	for name, value := range h.lastResults {
+		threshold := h.thresholds[name]
+		status := "OK"
+		if value > threshold {
+			status = "CRITICAL"
+		}
+		buf.WriteString(fmt.Sprintf("  %s: %.2f (threshold: %.2f) [%s]\n", name, value, threshold, status))
+	}
+	return buf.String()
 }
 
-func MemoryUsageCheck(thresholdMB float64) CheckFunc {
-	return func() HealthCheck {
-		var m runtime.MemStats
-		runtime.ReadMemStats(&m)
-		usageMB := float64(m.Alloc) / 1024 / 1024
-		status := "pass"
-		if usageMB > thresholdMB { status = "warn" }
-		return HealthCheck{Name: "memory_usage", Status: status, Message: fmt.Sprintf("%.2f MB allocated", usageMB), Value: usageMB, Threshold: thresholdMB}
+// SystemInfo collects system information.
+type SystemInfo struct {
+	Hostname  string
+	OS        string
+	Arch      string
+	CPUs      int
+	GoVersion string
+	Memory    uint64
+}
+
+// CollectSystemInfo gathers current system information.
+func CollectSystemInfo() SystemInfo {
+	hostname, _ := os.Hostname()
+	var memStats runtime.MemStats
+	runtime.ReadMemStats(&memStats)
+	return SystemInfo{
+		Hostname:  hostname,
+		OS:        runtime.GOOS,
+		Arch:      runtime.GOARCH,
+		CPUs:      runtime.NumCPU(),
+		GoVersion: runtime.Version(),
+		Memory:    memStats.Sys,
 	}
 }
 
-func GoroutineCountCheck(threshold int) CheckFunc {
-	return func() HealthCheck {
-		count := runtime.NumGoroutine()
-		status := "pass"
-		if count > threshold { status = "warn" }
-		return HealthCheck{Name: "goroutine_count", Status: status, Message: fmt.Sprintf("%d goroutines running", count), Value: float64(count), Threshold: float64(threshold)}
-	}
+// FormatSystemInfo returns system info as text.
+func (s SystemInfo) Format() string {
+	return fmt.Sprintf("Hostname: %s\nOS: %s\nArch: %s\nCPUs: %d\nGo: %s\nMemory: %d bytes",
+		s.Hostname, s.OS, s.Arch, s.CPUs, s.GoVersion, s.Memory)
 }
