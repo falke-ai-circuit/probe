@@ -14,7 +14,7 @@ import (
 	"github.com/falke-ai-circuit/probe/internal/relay"
 )
 
-const appVersion = "v1.8.4"
+const appVersion = "v1.8.5"
 
 func main() {
 	if len(os.Args) < 2 {

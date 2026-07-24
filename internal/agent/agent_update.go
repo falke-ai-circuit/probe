@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/falke-ai-circuit/probe/internal/protocol"
@@ -35,8 +37,12 @@ func (a *Agent) handleAgentUpdate(env protocol.Envelope) protocol.Envelope {
 	log.Printf("[update] received update command: version=%s, file=%s", params.Version, params.Filename)
 
 	// Step 1: Download the new binary
-	tmpPath := fmt.Sprintf("%s.tmp", params.Filename)
-	log.Printf("[update] downloading from %s", params.DownloadURL)
+	// Use a temp path in the same directory as the current exe to ensure
+	// the rename works (rename fails across volumes).
+	currentExe, _ := os.Executable()
+	downloadDir := filepath.Dir(currentExe)
+	tmpPath := filepath.Join(downloadDir, params.Filename+".tmp")
+	log.Printf("[update] downloading from %s to %s", params.DownloadURL, tmpPath)
 
 	resp, err := http.Get(params.DownloadURL)
 	if err != nil {
@@ -75,19 +81,19 @@ func (a *Agent) handleAgentUpdate(env protocol.Envelope) protocol.Envelope {
 		log.Printf("[update] SHA256 verified: %s", actualHash)
 	}
 
-	// Step 3: Determine current executable path
-	currentExe, err := os.Executable()
-	if err != nil {
-		os.Remove(tmpPath)
-		return protocol.NewError(env.ID, protocol.ErrInternal, fmt.Sprintf("get current exe path: %v", err))
-	}
+	// Step 3: Determine current executable path (already obtained above)
 	log.Printf("[update] current executable: %s", currentExe)
 
 	// Step 4: On Windows, we cannot rename a running .exe. Instead, we write
-	// the new binary to a path next to the current one and start it from there.
-	// The old binary will be cleaned up later (or left as .old after the process exits).
-	newExePath := currentExe + ".new"
-	// Remove any previous .new file
+	// the new binary to a clean .exe path next to the current one and start it from there.
+	// Use the filename from the update params to get a clean .exe name.
+	// This avoids the ".new" chain problem where each update appends ".new" again.
+	newExePath := filepath.Join(filepath.Dir(currentExe), params.Filename)
+	// If the filename doesn't end in .exe, append .exe (Windows requirement)
+	if !strings.HasSuffix(strings.ToLower(newExePath), ".exe") {
+		newExePath = newExePath + ".exe"
+	}
+	// Remove any previous file at this path
 	os.Remove(newExePath)
 	if err := os.Rename(tmpPath, newExePath); err != nil {
 		// If rename fails (cross-volume etc), try copy
