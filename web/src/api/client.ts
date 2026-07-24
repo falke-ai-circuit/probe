@@ -279,6 +279,16 @@ export const api = {
   getVTScan: (buildId: string) =>
     apiFetch<{ vt_status: string; detections: number; total: number; report_url: string }>(`/builds/${buildId}/vt-scan`),
 
+  // Phase 4: mode control + topology
+  agentModeControl: (id: string, action: string, mode: string, config?: Record<string, unknown>) =>
+    apiFetch<unknown>(`/agents/${id}/mode`, {
+      method: 'POST',
+      body: JSON.stringify({ action, mode, config }),
+    }),
+  getAgentMode: (id: string) =>
+    apiFetch<unknown>(`/agents/${id}/mode`),
+  getTopology: () => apiFetch<unknown>('/topology'),
+
   // File transfers (global)
   listTransfers: () => apiFetch<FileTransfer[]>('/transfers'),
   getTransfer: (id: string) =>

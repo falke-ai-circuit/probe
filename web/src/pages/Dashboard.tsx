@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { api } from '../api/client'
 import type { HealthInfo, AgentRecord, Task } from '../api/types'
 import { StatusBadge } from '../components/StatusBadge'
+import { TopologyGraph } from '../components/TopologyGraph'
 
 export default function Dashboard() {
   const [health, setHealth] = useState<HealthInfo | null>(null)
@@ -42,6 +43,8 @@ export default function Dashboard() {
       </div>
 
       {error && <div className="error-msg">{error}</div>}
+
+      <TopologyGraph />
 
       <div className="stat-grid">
         <div className="stat-card">
