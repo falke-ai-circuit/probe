@@ -115,6 +115,22 @@ func New(cfg Config) *Agent {
 	}
 }
 
+// Stop signals the agent to shut down gracefully.
+// This closes the stopped channel, causing the Run loop to exit.
+func (a *Agent) Stop() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	select {
+	case <-a.stopped:
+		// already closed
+	default:
+		close(a.stopped)
+	}
+	if a.conn != nil {
+		a.conn.Close()
+	}
+}
+
 // Run starts the agent in the configured mode.
 func (a *Agent) Run() error {
 	switch a.cfg.Mode {

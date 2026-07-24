@@ -69,6 +69,19 @@ func New(cfg Config) *Relay {
 // Magic returns the relay's framing magic byte.
 func (r *Relay) Magic() byte { return r.magic }
 
+// Stop gracefully shuts down the relay: stops the HTTP server and closes the upstream connection.
+func (r *Relay) Stop() {
+	r.upstreamMu.Lock()
+	if r.upstream != nil {
+		r.upstream.Close()
+		r.upstream = nil
+	}
+	r.upstreamMu.Unlock()
+	if r.httpSrv != nil {
+		r.httpSrv.Close()
+	}
+}
+
 // Run starts the relay: connects upstream, then listens for downstream agents.
 func (r *Relay) Run() error {
 	// 1. Connect to upstream server

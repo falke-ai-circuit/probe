@@ -3,6 +3,22 @@
 All notable changes to PROBE are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [Semantic Versioning](https://semver.org/).
 
+## [v1.7.0] — 2026-07-24
+
+### Added
+- **Dynamic mode switching** — new `supervisor` subcommand starts a mode manager with a local management API (`:9700` by default). All modes (serve, connect, relay) can be dynamically started/stopped at runtime via REST API without restarting the binary:
+  - `GET /api/mgmt/status` — list mode statuses
+  - `POST /api/mgmt/start` — start a mode with config: `{"mode":"serve","config":{"addr":":7700",...}}`
+  - `POST /api/mgmt/stop` — stop a mode: `{"mode":"serve"}`
+- **Mode factory pattern** — modes are created on demand from JSON config, allowing different configurations per start
+- **`internal/modes` package** — `Manager`, `ServerMode`, `ConnectMode`, `RelayMode` wrappers
+- **Agent.Stop()** — graceful shutdown for the agent (closes WebSocket connection)
+- **Relay.Stop()** — graceful shutdown for the relay (closes HTTP server + upstream connection)
+
+### Changed
+- CLI subcommands (`serve`, `connect`, `relay`) still work as before — backward compatible
+- Multiple modes can run simultaneously in supervisor mode (e.g., serve + relay on same binary)
+
 ## [v1.6.1] — 2026-07-24
 
 ### Fixed
