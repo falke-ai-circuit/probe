@@ -3,6 +3,41 @@
 All notable changes to PROBE are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [Semantic Versioning](https://semver.org/).
 
+## [v1.9.3] — 2026-07-24
+
+### Added — Phase 4 Steps 11-13 Complete
+
+#### Step 11: Server-as-Relay (Selective Forwarding)
+- **Forward policy registry** — server stores per-agent forwarding policies ("relay" or "local"). Default: relay all. When a node runs serve + relay simultaneously, local agents can be selectively forwarded upstream.
+- **Forward policy API** — `POST /api/v1/agents/{id}/forward-policy` sets policy, `GET /api/v1/agents/{id}/forward-policy` reads it, `GET /api/v1/forward-policies` lists all.
+- **Forward policy in topology** — topology API response includes `forward_policy` field for agents with non-default policy.
+- **Agent-side policy storage** — `handleForwardPolicy` in agent.go stores policies in a thread-safe map. Replaces the previous stub.
+
+#### Step 12: Relay Chaining (Multi-hop Relays)
+- **Nested relay detection** — relay's `handleDownstream` now reads the first message to detect if the connection is from an agent (text/JSON) or a nested relay (binary + `relay_register` on channel 0).
+- **Channel re-multiplexing** — nested relay channels are mapped to parent relay channels. Each nested relay channel gets its own channel ID on the parent's upstream. Data frames are re-framed with the parent's magic byte.
+- **Bidirectional forwarding** — `NestedWrite` callback on virtual channels allows server→agent traffic to flow back through the nested relay's connection.
+- **Virtual channels** — `AllocVirtual` on ChannelMap creates channels without a downstream WebSocket connection (used for relay chaining where traffic flows through the nested relay's connection).
+- **Path accumulation** — relay IDs accumulate: `relay/relay-B/relay/relay-A/agent-name` for multi-hop chains.
+
+#### Step 13: E2E Encryption (AES-GCM)
+- **`internal/crypto/e2e.go`** — new package providing AES-256-GCM encryption/decryption. Key derived from shared token via SHA-256. Each message gets a unique 12-byte nonce.
+- **E2E manager** — `Manager` struct wraps the encryptor with enable/disable flag. When disabled (default), messages pass through as plaintext (backward compatible).
+- **Agent-side encryption** — `writeMessage` encrypts outgoing JSON when E2E is active, sending as BinaryMessage.
+- **Server-side decryption** — `handleMessages` detects BinaryMessage and decrypts when E2E is active. Text messages pass through as plaintext (backward compat).
+- **Config flag** — `e2e_enabled` in both `ServerConfig` and `ClientConfig`. Set to `true` to enable.
+- **5 unit tests** — encrypt/decrypt round-trip, unique nonce per encrypt, wrong key rejection, manager disabled passthrough, manager enabled encryption.
+
+## [v1.9.2] — 2026-07-24
+
+### Added — Phase 4 Step 14: Relay Failover
+- **Multi-relay failover** — agents can now specify multiple relay endpoints in config. If the direct server connection fails, the agent automatically tries each relay in order until one succeeds.
+- **`Relays` field in agent Config** — new `[]RelayEndpoint` field (URL + Token per relay) in `internal/agent/agent.go`. Empty = no failover (backward compatible).
+- **`relays` field in unified config** — `ClientConfig` and legacy `ConfigFile` both accept a `relays` array: `[{"url":"wss://relay:7701/ws","token":"..."}]`.
+- **`--relay` CLI flag** — `probe connect --relay "wss://relay1:7701/ws,wss://relay2:7701/ws"` adds relay failover URLs at runtime. Relays from flag are appended to config-file relays.
+- **Failover logic in `internal/agent/failover.go`** — new `dialWithFailover()` method tries direct connection first, then each relay in order. Logs which relay succeeded. Returns combined error if all fail.
+- **Supervisor mode relay support** — connect factory and auto-start paths in `main.go` now pass relay config through to the agent.
+
 ## [v1.9.1] — 2026-07-24
 
 ### Added — Mass Reconfigure & Topology Active/Inactive

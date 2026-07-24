@@ -393,6 +393,9 @@ func (s *Server) registerV1Routes() {
 	s.mux.HandleFunc("GET /api/v1/topology", s.handleV1Topology)
 	s.mux.HandleFunc("POST /api/v1/reconfigure", s.handleV1ReconfigureAll)
 	s.mux.HandleFunc("POST /api/v1/agents/{id}/reconfigure", s.handleV1ReconfigureAgent)
+	s.mux.HandleFunc("POST /api/v1/agents/{id}/forward-policy", s.handleV1ForwardPolicy)
+	s.mux.HandleFunc("GET /api/v1/agents/{id}/forward-policy", s.handleV1ForwardPolicy)
+	s.mux.HandleFunc("GET /api/v1/forward-policies", s.handleV1ListForwardPolicies)
 }
 
 // ---------------------------------------------------------------------------

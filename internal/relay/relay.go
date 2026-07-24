@@ -205,10 +205,17 @@ func (r *Relay) dispatchFromServer() {
 			continue
 		}
 
-		// Forward to downstream agent
+		// Forward to downstream agent or nested relay
 		ch := r.channels.Get(chanID)
-		if ch != nil && ch.Conn != nil {
-			ch.Conn.WriteMessage(websocket.TextMessage, payload)
+		if ch != nil {
+			if ch.Conn != nil {
+				// Direct agent connection
+				ch.Conn.WriteMessage(websocket.TextMessage, payload)
+			} else if ch.NestedWrite != nil {
+				// Virtual channel from a nested relay — re-frame and send
+				// back through the nested relay's connection
+				ch.NestedWrite(chanID, payload)
+			}
 		}
 	}
 }
@@ -266,7 +273,10 @@ func (r *Relay) reregisterChannels() {
 	log.Printf("[relay] re-registered %d channels after reconnect", len(channels))
 }
 
-// handleDownstream accepts WebSocket connections from agents.
+// handleDownstream accepts WebSocket connections from agents OR nested relays.
+// Detection: read the first message. If it's BinaryMessage with a relay_register
+// control frame (channel 0, type "relay_register"), it's a nested relay —
+// multiplex its channels through our upstream. Otherwise, it's a regular agent.
 func (r *Relay) handleDownstream(w http.ResponseWriter, req *http.Request) {
 	// Check if upstream is available
 	if !r.upstreamOK.Load() {
@@ -302,23 +312,266 @@ func (r *Relay) handleDownstream(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// Allocate channel
-	ch := r.channels.Alloc(conn, func() {
-		r.ipMu.Lock()
-		r.ipCounts[ip]--
-		if r.ipCounts[ip] <= 0 {
-			delete(r.ipCounts, ip)
+	// Read the first message to detect: agent (text/JSON) vs nested relay (binary + relay_register)
+	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	msgType, firstData, err := conn.ReadMessage()
+	conn.SetReadDeadline(time.Time{}) // reset deadline
+	if err != nil {
+		log.Printf("[relay] first message read error from %s: %v", ip, err)
+		conn.Close()
+		r.releaseIP(ip)
+		return
+	}
+
+	// Check if this is a nested relay (binary message with relay_register on channel 0)
+	if msgType == websocket.BinaryMessage && len(firstData) >= 5 {
+		_, chanID, payload, parseErr := ParseFrame(firstData)
+		if parseErr == nil && chanID == 0 {
+			var ctrl ControlMessage
+			if json.Unmarshal(payload, &ctrl) == nil && ctrl.Type == "relay_register" {
+				// This is a nested relay — handle relay chaining (Step 12)
+				r.handleNestedRelay(conn, &ctrl, ip, firstData)
+				return
+			}
 		}
-		r.ipMu.Unlock()
+	}
+
+	// Regular agent connection — allocate channel
+	ch := r.channels.Alloc(conn, func() {
+		r.releaseIP(ip)
 	})
 
+	// If we already read the first message, we need to forward it
+	// to the upstream as the first data frame on this channel.
 	log.Printf("[relay] agent connected on channel %d from %s", ch.ID, ip)
 
 	// Send channel_open to server
 	r.sendChannelOpen(ch)
 
+	// Forward the already-read first message
+	firstFrame := MakeFrame(r.magic, ch.ID, firstData)
+	r.upstreamMu.Lock()
+	if r.upstream != nil && r.upstreamOK.Load() {
+		r.upstream.WriteMessage(websocket.BinaryMessage, firstFrame)
+	}
+	r.upstreamMu.Unlock()
+
 	// Pipe: agent → relay → server
 	go r.pipeAgentToServer(conn, ch, ip)
+}
+
+// handleNestedRelay handles a downstream connection from another relay (relay chaining).
+// The nested relay's channels are sub-multiplexed through this relay's upstream.
+// Each channel from the nested relay gets its own channel on our upstream.
+//
+// Topology: Client Z → Relay A → Relay B → Server Y
+// Relay A connects to Relay B as a downstream agent. Relay B sees Relay A's
+// relay_register and creates a nested relay session. Relay B forwards Relay A's
+// channels as its own channels to Server Y. Server Y sees: relay/B/relay/A/Z
+func (r *Relay) handleNestedRelay(conn *websocket.Conn, ctrl *ControlMessage, ip string, firstData []byte) {
+	nestedRelayID := ctrl.RelayID
+	if nestedRelayID == "" {
+		nestedRelayID = fmt.Sprintf("nested-%d", time.Now().UnixMilli())
+	}
+
+	log.Printf("[relay] nested relay connected: id=%s from %s", nestedRelayID, ip)
+
+	// We treat the nested relay as a sub-multiplexer. Messages from the nested
+	// relay are framed with the nested relay's magic + channel IDs. We need to
+	// re-frame them with OUR magic and allocate OUR channel IDs for each of
+	// the nested relay's channels.
+	//
+	// Map: nestedRelayChannelID → ourChannelID
+	nestedChanMap := make(map[uint32]uint32)
+	// Reverse map: ourChannelID → nestedRelayChannelID (for downstream writes)
+	reverseChanMap := make(map[uint32]uint32)
+	var nestedMu sync.Mutex
+
+	// Extract nested relay's magic from the first frame
+	nestedMagic := byte(0x02)
+	if _, _, _, parseErr := ParseFrame(firstData); parseErr == nil {
+		nestedMagic = firstData[0]
+	}
+
+	// nestedWrite writes a payload back to the nested relay's connection,
+	// re-framed with the nested relay's magic and original channel ID.
+	nestedWrite := func(ourChanID uint32, payload []byte) error {
+		nestedMu.Lock()
+		nestedChID, ok := reverseChanMap[ourChanID]
+		nestedMu.Unlock()
+		if !ok {
+			return fmt.Errorf("no nested channel for our channel %d", ourChanID)
+		}
+		frame := MakeFrame(nestedMagic, nestedChID, payload)
+		return conn.WriteMessage(websocket.BinaryMessage, frame)
+	}
+
+	// Register the nested relay's own registration with our upstream
+	// so the server knows about the relay chain.
+	// Forward the relay_register with path prefix: relay/{ourID}/{nestedID}
+	r.upstreamMu.Lock()
+	if r.upstream != nil && r.upstreamOK.Load() {
+		// Build a relay_register for the nested relay, prefixed with our relay ID
+		nestedReg := ControlMessage{
+			Type:    "relay_register",
+			RelayID: fmt.Sprintf("%s/relay/%s", r.cfg.RelayID, nestedRelayID),
+			Token:   ctrl.Token,
+			Metadata: ctrl.Metadata,
+		}
+		frame, _ := MakeControlFrame(r.magic, nestedReg)
+		r.upstream.WriteMessage(websocket.BinaryMessage, frame)
+	}
+	r.upstreamMu.Unlock()
+
+	// Main loop: read framed messages from nested relay, re-frame and forward upstream
+	for {
+		msgType, data, err := conn.ReadMessage()
+		if err != nil {
+			log.Printf("[relay] nested relay %s disconnected: %v", nestedRelayID, err)
+			break
+		}
+		_ = msgType
+
+		// Parse the nested relay's frame
+		nestedMagic, nestedChanID, payload, err := ParseFrame(data)
+		if err != nil {
+			log.Printf("[relay] nested relay %s frame parse error: %v", nestedRelayID, err)
+			continue
+		}
+		_ = nestedMagic
+
+		if nestedChanID == 0 {
+			// Control message from nested relay
+			var nestedCtrl ControlMessage
+			if json.Unmarshal(payload, &nestedCtrl) != nil {
+				continue
+			}
+
+			switch nestedCtrl.Type {
+			case "channel_open":
+				// Allocate a channel on our upstream for this nested channel
+				ourCh := r.channels.AllocVirtual(func() {})
+				ourChanID := ourCh.ID
+				nestedMu.Lock()
+				nestedChanMap[nestedCtrl.ChannelID] = ourChanID
+				reverseChanMap[ourChanID] = nestedCtrl.ChannelID
+				nestedMu.Unlock()
+
+				// Set the NestedWrite callback so dispatchFromServer can
+				// forward server→agent traffic back through the nested relay
+				ourCh.NestedWrite = nestedWrite
+
+				// Forward channel_open to our upstream with our channel ID
+				fwdCtrl := ControlMessage{
+					Type:      "channel_open",
+					ChannelID: ourChanID,
+					RelayID:   r.cfg.RelayID,
+				}
+				frame, _ := MakeControlFrame(r.magic, fwdCtrl)
+				r.upstreamMu.Lock()
+				if r.upstream != nil {
+					r.upstream.WriteMessage(websocket.BinaryMessage, frame)
+				}
+				r.upstreamMu.Unlock()
+
+				log.Printf("[relay] nested %s: channel %d → our channel %d", nestedRelayID, nestedCtrl.ChannelID, ourChanID)
+
+			case "channel_close":
+				// Close our channel for this nested channel
+				nestedMu.Lock()
+				ourChanID, ok := nestedChanMap[nestedCtrl.ChannelID]
+				if ok {
+					delete(nestedChanMap, nestedCtrl.ChannelID)
+				}
+				nestedMu.Unlock()
+				if ok {
+					r.channels.Close(ourChanID)
+					// Forward channel_close
+					fwdCtrl := ControlMessage{
+						Type:      "channel_close",
+						ChannelID: ourChanID,
+						RelayID:   r.cfg.RelayID,
+					}
+					frame, _ := MakeControlFrame(r.magic, fwdCtrl)
+					r.upstreamMu.Lock()
+					if r.upstream != nil {
+						r.upstream.WriteMessage(websocket.BinaryMessage, frame)
+					}
+					r.upstreamMu.Unlock()
+				}
+			}
+			continue
+		}
+
+		// Data frame from nested relay — re-frame with our magic + our channel ID
+		nestedMu.Lock()
+		ourChanID, ok := nestedChanMap[nestedChanID]
+		nestedMu.Unlock()
+		if !ok {
+			// Unknown nested channel — allocate on the fly
+			ourCh := r.channels.AllocVirtual(func() {})
+			ourChanID = ourCh.ID
+			nestedMu.Lock()
+			nestedChanMap[nestedChanID] = ourChanID
+			reverseChanMap[ourChanID] = nestedChanID
+			nestedMu.Unlock()
+			ourCh.NestedWrite = nestedWrite
+
+				// Send channel_open
+				fwdCtrl := ControlMessage{
+					Type:      "channel_open",
+					ChannelID: ourChanID,
+					RelayID:   r.cfg.RelayID,
+				}
+			frame, _ := MakeControlFrame(r.magic, fwdCtrl)
+			r.upstreamMu.Lock()
+			if r.upstream != nil {
+				r.upstream.WriteMessage(websocket.BinaryMessage, frame)
+			}
+			r.upstreamMu.Unlock()
+		}
+
+		// Forward the data with our framing
+		fwdFrame := MakeFrame(r.magic, ourChanID, payload)
+		r.upstreamMu.Lock()
+		if r.upstream != nil && r.upstreamOK.Load() {
+			r.upstream.WriteMessage(websocket.BinaryMessage, fwdFrame)
+		}
+		r.upstreamMu.Unlock()
+	}
+
+	// Cleanup: close all nested channels
+	nestedMu.Lock()
+	for nestedChID, ourChID := range nestedChanMap {
+		r.channels.Close(ourChID)
+		fwdCtrl := ControlMessage{
+			Type:      "channel_close",
+			ChannelID: ourChID,
+			RelayID:   r.cfg.RelayID,
+		}
+		frame, _ := MakeControlFrame(r.magic, fwdCtrl)
+		r.upstreamMu.Lock()
+		if r.upstream != nil {
+			r.upstream.WriteMessage(websocket.BinaryMessage, frame)
+		}
+		r.upstreamMu.Unlock()
+		delete(nestedChanMap, nestedChID)
+	}
+	nestedMu.Unlock()
+
+	r.releaseIP(ip)
+	conn.Close()
+	log.Printf("[relay] nested relay %s cleaned up", nestedRelayID)
+}
+
+// releaseIP decrements the IP connection count.
+func (r *Relay) releaseIP(ip string) {
+	r.ipMu.Lock()
+	r.ipCounts[ip]--
+	if r.ipCounts[ip] <= 0 {
+		delete(r.ipCounts, ip)
+	}
+	r.ipMu.Unlock()
 }
 
 // pipeAgentToServer reads messages from the downstream agent and forwards

@@ -14,7 +14,7 @@ import (
 	"github.com/falke-ai-circuit/probe/internal/relay"
 )
 
-const appVersion = "v1.9.1"
+const appVersion = "v1.9.3"
 
 func main() {
 	// No arguments → default supervisor mode with auto-detection from config
@@ -104,12 +104,13 @@ func runSupervisor(args []string) {
 
 		if startConnect && uc.Client != nil {
 			cfgJSON, _ := json.Marshal(struct {
-				Server      string `json:"server"`
-				Token       string `json:"token"`
-				Name        string `json:"name"`
-				Mode        string `json:"mode"`
-				Permissions string `json:"permissions"`
-				ConfigPath  string `json:"config_path"`
+				Server      string             `json:"server"`
+				Token       string             `json:"token"`
+				Name        string             `json:"name"`
+				Mode        string             `json:"mode"`
+				Permissions string             `json:"permissions"`
+				ConfigPath  string             `json:"config_path"`
+				Relays      []RelayEntryConfig `json:"relays,omitempty"`
 			}{
 				Server:      uc.Client.Server,
 				Token:       uc.Client.Token,
@@ -117,6 +118,7 @@ func runSupervisor(args []string) {
 				Mode:        uc.Client.Mode,
 				Permissions: uc.Client.Permissions,
 				ConfigPath:  *configPath,
+				Relays:      uc.Client.Relays,
 			})
 			if err := mgr.StartMode("connect", cfgJSON); err != nil {
 				fmt.Fprintf(os.Stderr, "Failed to start connect: %v\n", err)
@@ -254,12 +256,13 @@ func runSupervisorWithAutoStart(uc *UnifiedConfig, configPath string) {
 		agentCfg := uc.ToAgentConfig()
 		// Wrap agent.Config in JSON for the factory
 		cfgJSON, _ := json.Marshal(struct {
-			Server      string `json:"server"`
-			Token       string `json:"token"`
-			Name        string `json:"name"`
-			Mode        string `json:"mode"`
-			Permissions string `json:"permissions"`
-			ConfigPath  string `json:"config_path"`
+			Server      string             `json:"server"`
+			Token       string             `json:"token"`
+			Name        string             `json:"name"`
+			Mode        string             `json:"mode"`
+			Permissions string             `json:"permissions"`
+			ConfigPath  string             `json:"config_path"`
+			Relays      []RelayEntryConfig `json:"relays,omitempty"`
 		}{
 			Server:      uc.Client.Server,
 			Token:       uc.Client.Token,
@@ -267,6 +270,7 @@ func runSupervisorWithAutoStart(uc *UnifiedConfig, configPath string) {
 			Mode:        uc.Client.Mode,
 			Permissions: uc.Client.Permissions,
 			ConfigPath:  configPath,
+			Relays:      uc.Client.Relays,
 		})
 		if err := mgr.StartMode("connect", cfgJSON); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to start connect: %v\n", err)
@@ -354,12 +358,13 @@ func registerFactories(mgr *modes.Manager) {
 
 	mgr.RegisterFactory("connect", func(cfg json.RawMessage) (modes.Mode, error) {
 		var c struct {
-			Server      string `json:"server"`
-			Token       string `json:"token"`
-			Name        string `json:"name"`
-			Mode        string `json:"mode"`
-			Permissions string `json:"permissions"`
-			ConfigPath  string `json:"config_path"`
+			Server      string             `json:"server"`
+			Token       string             `json:"token"`
+			Name        string             `json:"name"`
+			Mode        string             `json:"mode"`
+			Permissions string             `json:"permissions"`
+			ConfigPath  string             `json:"config_path"`
+			Relays      []RelayEntryConfig `json:"relays,omitempty"`
 		}
 		if len(cfg) > 0 {
 			if err := json.Unmarshal(cfg, &c); err != nil {
@@ -389,6 +394,17 @@ func registerFactories(mgr *modes.Manager) {
 			Name:        name,
 			Permissions: perms,
 			ConfigPath:  c.ConfigPath,
+		}
+		// Convert relay endpoints
+		for _, r := range c.Relays {
+			relayURL := r.URL
+			if relayURL != "" && !strings.Contains(relayURL, "/ws") {
+				relayURL = strings.TrimRight(relayURL, "/") + "/ws"
+			}
+			ac.Relays = append(ac.Relays, agent.RelayEndpoint{
+				URL:   relayURL,
+				Token: strings.Trim(r.Token, "\"'"),
+			})
 		}
 		return modes.NewConnectMode(ac), nil
 	})

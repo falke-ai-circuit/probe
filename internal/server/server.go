@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	cryptomanager "github.com/falke-ai-circuit/probe/internal/crypto"
 	"github.com/falke-ai-circuit/probe/internal/protocol"
 )
 
@@ -119,6 +120,17 @@ type Server struct {
 	// Phase 4: relay registry — tracks connected relays for topology view
 	relayMu sync.RWMutex
 	relays  map[string]*relaySession // relayID → session
+
+	// Phase 4 Step 11: forward policy — server-as-relay selective forwarding.
+	// When this server is also running relay mode, agents with policy "relay"
+	// have their traffic forwarded upstream. "local" = keep local only.
+	forwardMu       sync.RWMutex
+	forwardPolicies map[string]string // agentID → "relay" or "local"
+
+	// Phase 4 Step 13: E2E encryption manager (optional).
+	// When active, incoming binary messages are decrypted and outgoing
+	// messages are encrypted. Relays see only encrypted bytes.
+	e2eMgr *cryptomanager.Manager
 }
 
 // startTime records when the server process began, used by /health for uptime.
@@ -138,7 +150,8 @@ func NewServer(addr string, token string, registryPath string) *Server {
 		connWriteMu:   make(map[string]*sync.Mutex),
 		pendingReqs:   make(map[string]chan protocol.Envelope),
 		pendingUpdates: make(map[string]*pendingUpdate),
-		relays:        make(map[string]*relaySession),
+		relays:          make(map[string]*relaySession),
+		forwardPolicies: make(map[string]string),
 		tunnels:       make(map[string]*Tunnel),
 		tokenExpiry:   make(map[string]time.Time),
 		rotatedTokens: make(map[string]string),
@@ -193,6 +206,49 @@ func NewServerWithTLSRateLimit(addr string, token string, registryPath string, c
 // SetVersion sets the server build version string (shown in health/topology API).
 func (s *Server) SetVersion(v string) {
 	s.version = v
+}
+
+// SetForwardPolicy sets the forwarding policy for an agent (Step 11: server-as-relay).
+// "relay" = forward this agent's traffic upstream through the relay.
+// "local" = keep this agent local only (do not forward upstream).
+func (s *Server) SetForwardPolicy(agentID string, action string) {
+	s.forwardMu.Lock()
+	defer s.forwardMu.Unlock()
+	s.forwardPolicies[agentID] = action
+	log.Printf("[server] forward policy set: agent=%s action=%s", agentID, action)
+}
+
+// GetForwardPolicy returns the forwarding policy for an agent.
+// Returns "relay" by default (if no policy set and the server has a relay).
+// Returns "local" if explicitly set to local.
+func (s *Server) GetForwardPolicy(agentID string) string {
+	s.forwardMu.RLock()
+	defer s.forwardMu.RUnlock()
+	if policy, ok := s.forwardPolicies[agentID]; ok {
+		return policy
+	}
+	return "relay" // default: relay all
+}
+
+// GetForwardPolicies returns a snapshot of all forward policies.
+func (s *Server) GetForwardPolicies() map[string]string {
+	s.forwardMu.RLock()
+	defer s.forwardMu.RUnlock()
+	result := make(map[string]string, len(s.forwardPolicies))
+	for k, v := range s.forwardPolicies {
+		result[k] = v
+	}
+	return result
+}
+
+// SetE2E enables or disables end-to-end encryption (Step 13).
+// When enabled with a non-empty token, all agent↔server traffic is
+// encrypted with AES-GCM using a key derived from the token.
+func (s *Server) SetE2E(token string, enabled bool) {
+	s.e2eMgr = cryptomanager.NewManager(token, enabled)
+	if s.e2eMgr.IsActive() {
+		log.Printf("[server] E2E encryption enabled (AES-256-GCM)")
+	}
 }
 
 // SetTokenTTL configures the server-side token rotation interval. When ttl > 0

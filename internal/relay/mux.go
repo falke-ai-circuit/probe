@@ -74,11 +74,15 @@ type ChannelMap struct {
 // Channel represents a single downstream agent connection through the relay.
 type Channel struct {
 	ID       uint32
-	Conn     *websocket.Conn // downstream agent WebSocket connection
+	Conn     *websocket.Conn // downstream agent WebSocket connection (nil for virtual channels)
 	OnClose  func()
 	sendBuf  chan []byte // buffered messages waiting for upstream
 	closed   bool
 	closeMu  sync.Mutex
+	// NestedWrite is set for virtual channels (relay chaining) to forward
+	// server→agent traffic back through the nested relay's connection.
+	// It takes (ourChanID, payload) and returns an error.
+	NestedWrite func(ourChanID uint32, payload []byte) error
 }
 
 const (
@@ -104,6 +108,26 @@ func (cm *ChannelMap) Alloc(conn *websocket.Conn, onClose func()) *Channel {
 	ch := &Channel{
 		ID:      id,
 		Conn:    conn,
+		OnClose: onClose,
+		sendBuf: make(chan []byte, defaultBufferSize),
+	}
+	cm.mu.Lock()
+	cm.channels[id] = ch
+	cm.mu.Unlock()
+	return ch
+}
+
+// AllocVirtual allocates a channel ID without a downstream WebSocket connection.
+// Used for relay chaining where the downstream is a nested relay and traffic
+// flows through the nested relay's connection rather than a direct WebSocket.
+func (cm *ChannelMap) AllocVirtual(onClose func()) *Channel {
+	id := cm.nextID.Add(1)
+	if id == 0 {
+		id = cm.nextID.Add(1)
+	}
+	ch := &Channel{
+		ID:      id,
+		Conn:    nil, // no direct connection — virtual channel
 		OnClose: onClose,
 		sendBuf: make(chan []byte, defaultBufferSize),
 	}

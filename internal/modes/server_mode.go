@@ -43,6 +43,7 @@ type ServerOptions struct {
 	OperatorPath    string
 	VTAPIKey        string
 	Version         string
+	E2EEnabled      bool // Step 13: end-to-end encryption
 }
 
 // NewServerMode creates a new server mode with the given options.
@@ -78,6 +79,12 @@ func (s *ServerMode) Start() error {
 
 	s.srv.SetTokenTTL(s.opts.TokenTTL)
 	s.srv.SetVersion(s.opts.Version)
+
+	// Step 13: E2E encryption
+	if s.opts.E2EEnabled && s.opts.Token != "" {
+		s.srv.SetE2E(s.opts.Token, true)
+	}
+
 	s.srv.SetRequireAPIAuth(s.opts.RequireAPIAuth)
 	s.srv.SetEnrollmentPath(s.opts.EnrollmentPath)
 	s.srv.SetCADir(s.opts.CADir)

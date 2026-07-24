@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	cryptomanager "github.com/falke-ai-circuit/probe/internal/crypto"
 	"github.com/falke-ai-circuit/probe/internal/platform"
 	"github.com/falke-ai-circuit/probe/internal/protocol"
 	"github.com/gorilla/websocket"
@@ -25,6 +26,14 @@ const (
 	defaultTimeout  = 60
 	maxTimeout      = 300
 )
+
+// RelayEndpoint defines a single relay server for failover.
+// When the direct server connection fails, the agent tries each
+// relay in order until one succeeds.
+type RelayEndpoint struct {
+	URL   string // wss://relay-host:port/ws
+	Token string // auth token for the relay
+}
 
 // Config holds agent configuration.
 type Config struct {
@@ -60,6 +69,16 @@ type Config struct {
 	// ConfigPath is the path to the config file used to start this agent.
 	// Used by reconfigure to save updated config back to disk.
 	ConfigPath string
+	// Relays is an ordered list of relay endpoints for failover.
+	// When the direct server connection (URL) fails, the agent tries
+	// each relay in order. Empty = no relay failover (backward compat).
+	Relays []RelayEndpoint
+
+	// E2EEnabled enables AES-GCM end-to-end encryption of protocol payloads.
+	// When true, all messages between agent and server are encrypted with
+	// a key derived from the token (SHA-256). Relays see only encrypted bytes.
+	// Default: false (backward compat).
+	E2EEnabled bool
 }
 
 // Agent is the remote agent instance.
@@ -94,13 +113,37 @@ type Agent struct {
 	// issued a rotating token with an expiry. A zero value means "no expiry".
 	// Guarded by mu alongside cfg.Token.
 	tokenExpiry time.Time
+
+	// Phase 4 Step 11: forward policies for server-as-relay.
+	// Maps local agent ID → "relay" or "local" forwarding policy.
+	forwardMu       sync.RWMutex
+	forwardPolicies map[string]string
+
+	// Phase 4 Step 13: E2E encryption manager (optional).
+	// When active, all outgoing messages are encrypted and incoming
+	// messages are decrypted. Relays see only encrypted bytes.
+	e2eMgr *cryptomanager.Manager
 }
 
 // writeMessage sends a WebSocket message with write mutex protection.
 // gorilla/websocket panics on concurrent writes — this must be used for ALL writes.
+// When E2E encryption is active, the JSON payload is encrypted before sending.
 func (a *Agent) writeMessage(conn *websocket.Conn, env protocol.Envelope) error {
 	a.writeMu.Lock()
 	defer a.writeMu.Unlock()
+
+	if a.e2eMgr != nil && a.e2eMgr.IsActive() {
+		// Encrypt the JSON payload
+		plaintext, err := json.Marshal(env)
+		if err != nil {
+			return fmt.Errorf("marshal for e2e: %w", err)
+		}
+		ciphertext, err := a.e2eMgr.Encrypt(plaintext)
+		if err != nil {
+			return fmt.Errorf("e2e encrypt: %w", err)
+		}
+		return conn.WriteMessage(websocket.BinaryMessage, ciphertext)
+	}
 	return protocol.WriteMessage(conn, env)
 }
 
@@ -121,6 +164,7 @@ func New(cfg Config) *Agent {
 		mitmMgr:      newMitmManager(),
 		debugMgr:     newDebugManager(),
 		spawnedPIDs:  make(map[int]bool),
+		e2eMgr:       cryptomanager.NewManager(cfg.Token, cfg.E2EEnabled),
 	}
 }
 
@@ -157,8 +201,11 @@ func (a *Agent) Run() error {
 
 func (a *Agent) runOutbound() error {
 	log.Printf("Connecting to %s (mode: outbound)", a.cfg.URL)
+	if len(a.cfg.Relays) > 0 {
+		log.Printf("Relay failover enabled: %d relay(s) configured", len(a.cfg.Relays))
+	}
 	for {
-		conn, err := protocol.Dial(a.cfg.URL, a.cfg.CertPath, a.cfg.ClientCertFile, a.cfg.ClientKeyFile, a.cfg.Token)
+		conn, err := a.dialWithFailover()
 		if err != nil {
 			a.backoffAttempt++
 			if a.cfg.MaxRetries > 0 && a.backoffAttempt > a.cfg.MaxRetries {
@@ -940,7 +987,7 @@ func (a *Agent) SendPrompt(prompt string) {
 }
 
 // Version is the agent version.
-const Version = "1.9.1"
+const Version = "1.9.3"
 
 func getOS() string   { return runtime.GOOS }
 func getArch() string { return runtime.GOARCH }
@@ -1017,7 +1064,8 @@ func (a *Agent) handleModeControl(env protocol.Envelope) protocol.Envelope {
 
 // handleForwardPolicy processes forward_policy messages from the server.
 // This is used for server-as-relay selective forwarding (Step 11).
-// Currently a stub — full implementation in Step 11.
+// The policy determines whether a local agent's traffic is forwarded
+// upstream through the relay ("relay") or kept local only ("local").
 func (a *Agent) handleForwardPolicy(env protocol.Envelope) protocol.Envelope {
 	var params struct {
 		Agent  string `json:"agent"`
@@ -1026,13 +1074,28 @@ func (a *Agent) handleForwardPolicy(env protocol.Envelope) protocol.Envelope {
 	if err := json.Unmarshal(env.Params, &params); err != nil {
 		return protocol.NewError(env.ID, protocol.ErrInvalidParams, err.Error())
 	}
-	// Stub: log the policy, return success
-	log.Printf("[agent] forward_policy: agent=%s action=%s (not yet implemented)", params.Agent, params.Action)
+
+	if params.Action != "relay" && params.Action != "local" {
+		return protocol.NewError(env.ID, protocol.ErrInvalidParams,
+			fmt.Sprintf("action must be 'relay' or 'local', got: %s", params.Action))
+	}
+
+	// Store the policy. The serve mode's server checks this when deciding
+	// whether to forward agent traffic through the relay.
+	a.forwardMu.Lock()
+	if a.forwardPolicies == nil {
+		a.forwardPolicies = make(map[string]string)
+	}
+	a.forwardPolicies[params.Agent] = params.Action
+	a.forwardMu.Unlock()
+
+	log.Printf("[agent] forward_policy applied: agent=%s action=%s", params.Agent, params.Action)
+
 	return protocol.NewResult(env.ID, protocol.TypeModeControlResult, struct {
 		Agent  string `json:"agent"`
 		Action string `json:"action"`
 		Status string `json:"status"`
-	}{params.Agent, params.Action, "accepted"})
+	}{params.Agent, params.Action, "applied"})
 }
 
 // SendModeStatus sends the current mode status to the server.

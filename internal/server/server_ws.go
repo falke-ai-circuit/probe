@@ -164,10 +164,30 @@ func (s *Server) handleMessages(agentID string, conn *websocket.Conn) {
 	}()
 
 	for {
-		var env protocol.Envelope
-		if err := conn.ReadJSON(&env); err != nil {
+		msgType, data, err := conn.ReadMessage()
+		if err != nil {
 			log.Printf("[server] read error from %s: %v", agentID, err)
 			return
+		}
+
+		var env protocol.Envelope
+		if msgType == websocket.BinaryMessage && s.e2eMgr != nil && s.e2eMgr.IsActive() {
+			// E2E encrypted message — decrypt first
+			plaintext, err := s.e2eMgr.Decrypt(data)
+			if err != nil {
+				log.Printf("[server] e2e decrypt error from %s: %v", agentID, err)
+				continue
+			}
+			if err := json.Unmarshal(plaintext, &env); err != nil {
+				log.Printf("[server] json decode error from %s: %v", agentID, err)
+				continue
+			}
+		} else {
+			// Plaintext JSON message (backward compat)
+			if err := json.Unmarshal(data, &env); err != nil {
+				log.Printf("[server] json decode error from %s: %v", agentID, err)
+				continue
+			}
 		}
 
 		switch env.Type {

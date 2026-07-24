@@ -108,14 +108,15 @@ func (s *Server) handleV1Topology(w http.ResponseWriter, r *http.Request) {
 	s.relayMu.RUnlock()
 
 	type TopologyNode struct {
-		ID        string `json:"id"`
-		Type      string `json:"type"` // "server", "relay", "agent"
-		Name      string `json:"name"`
-		Version   string `json:"version,omitempty"`
-		Modes     string `json:"modes,omitempty"`
-		Relayed   bool   `json:"relayed,omitempty"`
-		Active    bool   `json:"active"`
-		Children  []TopologyNode `json:"children,omitempty"`
+		ID            string `json:"id"`
+		Type          string `json:"type"` // "server", "relay", "agent"
+		Name          string `json:"name"`
+		Version       string `json:"version,omitempty"`
+		Modes         string `json:"modes,omitempty"`
+		Relayed       bool   `json:"relayed,omitempty"`
+		Active        bool   `json:"active"`
+		ForwardPolicy string `json:"forward_policy,omitempty"` // Step 11: "relay" or "local"
+		Children      []TopologyNode `json:"children,omitempty"`
 	}
 
 	type TopologyEdge struct {
@@ -203,13 +204,19 @@ func (s *Server) handleV1Topology(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(agentInfo.AgentID, "relay/") {
 			continue
 		}
-		nodes = append(nodes, TopologyNode{
+		node := TopologyNode{
 			ID:      agentInfo.AgentID,
 			Type:    "agent",
 			Name:    agentInfo.Name,
 			Version: agentInfo.Version,
 			Active:  connMap[agentInfo.AgentID],
-		})
+		}
+		// Include forward policy if set (Step 11)
+		policy := s.GetForwardPolicy(agentInfo.AgentID)
+		if policy != "" && policy != "relay" {
+			node.ForwardPolicy = policy
+		}
+		nodes = append(nodes, node)
 		edges = append(edges, TopologyEdge{
 			From: agentInfo.AgentID,
 			To:   "server",
@@ -231,6 +238,88 @@ func (s *Server) handleV1Topology(w http.ResponseWriter, r *http.Request) {
 func mustMarshalRawV1(v interface{}) json.RawMessage {
 	data, _ := json.Marshal(v)
 	return data
+}
+
+// handleV1ForwardPolicy sets or gets the forward policy for an agent (Step 11).
+// POST /api/v1/agents/{id}/forward-policy
+// Body: {"action":"relay|local"}
+// GET /api/v1/agents/{id}/forward-policy
+func (s *Server) handleV1ForwardPolicy(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	if agentID == "" {
+		http.Error(w, "agent id required", http.StatusBadRequest)
+		return
+	}
+
+	if r.Method == http.MethodGet {
+		policy := s.GetForwardPolicy(agentID)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":     true,
+			"agent":  agentID,
+			"policy": policy,
+		})
+		return
+	}
+
+	if r.Method == http.MethodPost {
+		var req struct {
+			Action string `json:"action"` // "relay" or "local"
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", http.StatusBadRequest)
+			return
+		}
+		if req.Action != "relay" && req.Action != "local" {
+			http.Error(w, "action must be 'relay' or 'local'", http.StatusBadRequest)
+			return
+		}
+
+		// Send forward_policy to the agent via WebSocket
+		params := mustMarshalRawV1(struct {
+			Agent  string `json:"agent"`
+			Action string `json:"action"`
+		}{agentID, req.Action})
+
+		resp, err := s.forwardToAgentWithTimeout(agentID, protocol.TypeForwardPolicy, params, 10*time.Second, "")
+		if err != nil {
+			// Agent might not be connected to US (it's local to the server-as-relay node)
+			// Still set the policy locally
+			s.SetForwardPolicy(agentID, req.Action)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"ok":     true,
+				"agent":  agentID,
+				"policy": req.Action,
+				"note":   "policy set locally (agent not directly connected)",
+			})
+			return
+		}
+
+		s.SetForwardPolicy(agentID, req.Action)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":     true,
+			"agent":  agentID,
+			"policy": req.Action,
+			"result": resp,
+		})
+		return
+	}
+
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+}
+
+// handleV1ListForwardPolicies returns all forward policies (Step 11).
+// GET /api/v1/forward-policies
+func (s *Server) handleV1ListForwardPolicies(w http.ResponseWriter, r *http.Request) {
+	policies := s.GetForwardPolicies()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":       true,
+		"policies": policies,
+		"count":    len(policies),
+	})
 }
 
 // handleV1ReconfigureAll broadcasts a reconfigure command to ALL connected agents.
