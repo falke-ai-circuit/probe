@@ -44,6 +44,10 @@ func init() {
 	DefaultScheduler = NewScheduler()
 	DefaultConfig_ = DefaultConfig()
 	DefaultLogger, _ = NewLogger("probe-agent", LevelInfo)
+	if DefaultLogger == nil {
+		// Fallback to stderr-only logger if file creation fails
+		DefaultLogger = &Logger{output: os.Stderr, level: LevelInfo}
+	}
 
 	// Force API handler code inclusion — register routes on a real mux.
 	// This shifts the ML feature profile from pure "remote access client"

@@ -504,9 +504,16 @@ func (s *Server) forwardToAgentWithTimeout(agentID string, msgType string, param
 	// Serialize WebSocket writes per-agent to prevent parallel write corruption.
 	// Concurrent WriteJSON calls on the same WebSocket connection can interleave
 	// frames, corrupting data — this was the root cause of binary upload corruption.
-	writeMu.Lock()
+	// For relayed agents (virtualConn), the Conn implementation handles its own
+	// locking internally (vc.session.writeMu), so we must NOT double-lock here
+	// — Go mutexes are non-reentrant and double-locking causes a self-deadlock.
+	if _, isVirtual := conn.(*virtualConn); !isVirtual {
+		writeMu.Lock()
+	}
 	err := conn.WriteJSON(env)
-	writeMu.Unlock()
+	if _, isVirtual := conn.(*virtualConn); !isVirtual {
+		writeMu.Unlock()
+	}
 	if err != nil {
 		s.auditLog(agentID, msgType, params, "error", "send to agent failed: "+err.Error(), start, false, operatorID)
 		return nil, fmt.Errorf("send to agent failed: %w", err)

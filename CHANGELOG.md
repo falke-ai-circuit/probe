@@ -3,6 +3,15 @@
 All notable changes to PROBE are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [Semantic Versioning](https://semver.org/).
 
+## [v1.6.1] — 2026-07-24
+
+### Fixed
+- **Relay exec deadlock** — `forwardToAgentWithTimeout` locked `writeMu` then called `virtualConn.WriteJSON` which locked the same mutex (`vc.session.writeMu`). Go mutexes are non-reentrant → self-deadlock → all agent commands through relay timed out. Fix: skip `writeMu` for relayed agents (`*virtualConn`), let `virtualConn.WriteJSON` handle its own locking.
+- **Logger nil panic** — `features/init.go` called `DefaultLogger.Info()` without nil check when `NewLogger()` failed (file creation error). Fix: fallback to stderr-only logger.
+
+### Added
+- Local 3-process integration test confirmed all agent commands work through relay: exec, proc-list, fs-list, health, sysinfo, net-connections
+
 ## [v1.6.0] — 2026-07-24
 
 ### Changed
