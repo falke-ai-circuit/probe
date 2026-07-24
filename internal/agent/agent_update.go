@@ -83,28 +83,27 @@ func (a *Agent) handleAgentUpdate(env protocol.Envelope) protocol.Envelope {
 	}
 	log.Printf("[update] current executable: %s", currentExe)
 
-	// Step 4: Rename current binary as backup, move new binary to current path
-	backupPath := currentExe + ".old"
-	os.Remove(backupPath) // remove any previous backup
-
-	if err := os.Rename(currentExe, backupPath); err != nil {
-		os.Remove(tmpPath)
-		return protocol.NewError(env.ID, protocol.ErrInternal, fmt.Sprintf("backup current exe failed: %v", err))
+	// Step 4: On Windows, we cannot rename a running .exe. Instead, we write
+	// the new binary to a path next to the current one and start it from there.
+	// The old binary will be cleaned up later (or left as .old after the process exits).
+	newExePath := currentExe + ".new"
+	// Remove any previous .new file
+	os.Remove(newExePath)
+	if err := os.Rename(tmpPath, newExePath); err != nil {
+		// If rename fails (cross-volume etc), try copy
+		if copyErr := copyFileAgent(tmpPath, newExePath); copyErr != nil {
+			os.Remove(tmpPath)
+			return protocol.NewError(env.ID, protocol.ErrInternal, fmt.Sprintf("move new exe failed: rename=%v, copy=%v", err, copyErr))
+		}
 	}
-
-	if err := os.Rename(tmpPath, currentExe); err != nil {
-		// Try to restore backup
-		os.Rename(backupPath, currentExe)
-		os.Remove(tmpPath)
-		return protocol.NewError(env.ID, protocol.ErrInternal, fmt.Sprintf("replace exe failed: %v", err))
-	}
+	os.Remove(tmpPath) // clean up temp file if rename left it
 
 	// Step 5: Start new binary with same config + same args
 	// Pass the config path that was used to start this process
 	configPath := getConfigPath()
 	args := []string{"-config", configPath}
 
-	newCmd := exec.Command(currentExe, args...)
+	newCmd := exec.Command(newExePath, args...)
 	// Detach from this process so it survives our exit
 	newCmd.Stdin = nil
 	newCmd.Stdout = nil
@@ -112,8 +111,7 @@ func (a *Agent) handleAgentUpdate(env protocol.Envelope) protocol.Envelope {
 	newCmd.SysProcAttr = getSysProcAttr()
 
 	if err := newCmd.Start(); err != nil {
-		// Try to restore backup
-		os.Rename(backupPath, currentExe)
+		os.Remove(newExePath)
 		return protocol.NewError(env.ID, protocol.ErrInternal, fmt.Sprintf("start new process failed: %v", err))
 	}
 
@@ -199,4 +197,20 @@ func downloadWithRetry(url, destPath string, maxRetries int) error {
 		time.Sleep(2 * time.Second)
 	}
 	return fmt.Errorf("download failed after %d attempts", maxRetries)
+}
+
+// copyFileAgent copies a file from src to dst (used as fallback when rename fails).
+func copyFileAgent(src, dst string) error {
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+	dstFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+	_, err = io.Copy(dstFile, srcFile)
+	return err
 }
