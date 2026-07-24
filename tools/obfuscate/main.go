@@ -234,8 +234,9 @@ func main() {
 		fmt.Fprintln(os.Stderr, "  -antidebug   Generate anti-debug + VM/sandbox evasion package (drops 1 VT detection)")
 		fmt.Fprintln(os.Stderr, "  -apihash     Hash Windows API names (drops 1 VT detection, hides intent from RE)")
 		fmt.Fprintln(os.Stderr, "  -runtime     Generate runtime evasion package (AMSI bypass, ETW patch)")
-		fmt.Fprintln(os.Stderr, "  -all         Apply all evasion techniques (jitter + antidebug + apihash)")
-		fmt.Fprintln(os.Stderr, "  -stealth     Apply all + runtime (stealth profile: jitter + antidebug + apihash + runtime)")
+		fmt.Fprintln(os.Stderr, "  -all         Apply jitter + antidebug + apihash (WARNING: apihash+jitter may trigger MS trojan)")
+		fmt.Fprintln(os.Stderr, "  -stealth     Apply antidebug only + XOR (best VT result: 1/69 PUA)")
+		fmt.Fprintln(os.Stderr, "  -paranoid    Apply all + runtime (full suite — may trigger Kaspersky HackTool)")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "Default (no flags): XOR string encryption only (same as before)")
 		os.Exit(1)
@@ -263,6 +264,12 @@ func main() {
 			enableAntiDebug = true
 			enableAPIHash = true
 		case "-stealth":
+			// Best VT result: antidebug + XOR only (1/69 PUA)
+			// Jitter and apihash both shift Microsoft ML to trojan
+			enableAntiDebug = true
+		case "-paranoid":
+			// Full suite: all techniques + runtime
+			// WARNING: May trigger Kaspersky HackTool detection
 			enableJitter = true
 			enableAntiDebug = true
 			enableAPIHash = true
