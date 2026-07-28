@@ -85,6 +85,8 @@ func (s *Server) handleAgentRoute(w http.ResponseWriter, r *http.Request) {
 		s.handleAgentProcStart(w, r, agentID)
 	case action == "tunnel" && r.Method == http.MethodPost:
 		s.handleAgentTunnel(w, r, agentID)
+	case action == "tunnels" && r.Method == http.MethodGet:
+		s.handleAgentTunnelList(w, r, agentID)
 	case action == "tunnel-close" && r.Method == http.MethodPost:
 		s.handleAgentTunnelClose(w, r, agentID)
 	case action == "sniff" && r.Method == http.MethodPost:

@@ -84,6 +84,10 @@ func (t *Tunnel) acceptLoop() {
 // handleConn relays data between a local TCP connection and the agent's
 // connection to the target via WebSocket frames.
 func (t *Tunnel) handleConn(connID string, localConn net.Conn) {
+	// Disable Nagle's algorithm for lower latency
+	if tcpConn, ok := localConn.(*net.TCPConn); ok {
+		tcpConn.SetNoDelay(true)
+	}
 	defer func() {
 		localConn.Close()
 		t.connMu.Lock()
@@ -121,7 +125,7 @@ func (t *Tunnel) handleConn(connID string, localConn net.Conn) {
 	log.Printf("[tunnel] agent confirmed tunnel opened for %s", connID)
 
 	// Read from local connection, send to agent as tunnel_data
-	buf := make([]byte, 32*1024)
+	buf := make([]byte, 64*1024)
 	for {
 		n, err := localConn.Read(buf)
 		if n > 0 {
@@ -274,6 +278,50 @@ func (s *Server) handleAgentTunnelClose(w http.ResponseWriter, r *http.Request, 
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"closed": true, "tunnel_id": params.TunnelID})
+}
+
+// handleAgentTunnelList returns all active tunnels for an agent.
+// GET /api/agent/{id}/tunnels
+func (s *Server) handleAgentTunnelList(w http.ResponseWriter, r *http.Request, agentID string) {
+	type tunnelInfo struct {
+		ID         string `json:"tunnel_id"`
+		ListenPort int    `json:"listen_port"`
+		TargetHost string `json:"target_host"`
+		TargetPort int    `json:"target_port"`
+		AgentID    string `json:"agent_id"`
+		Conns      int    `json:"connections"`
+	}
+
+	s.tunnelMu.RLock()
+	defer s.tunnelMu.RUnlock()
+
+	var list []tunnelInfo
+	for _, t := range s.tunnels {
+		if t.AgentID != agentID {
+			continue
+		}
+		port := 0
+		if addr, ok := t.Listener.Addr().(*net.TCPAddr); ok {
+			port = addr.Port
+		}
+		t.connMu.Lock()
+		connCount := len(t.conns)
+		t.connMu.Unlock()
+		list = append(list, tunnelInfo{
+			ID:         t.ID,
+			ListenPort: port,
+			TargetHost: t.TargetHost,
+			TargetPort: t.TargetPort,
+			AgentID:    t.AgentID,
+			Conns:      connCount,
+		})
+	}
+	if list == nil {
+		list = []tunnelInfo{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "data": map[string]interface{}{"tunnels": list}})
 }
 
 // handleAgentSniff starts a traffic sniffer: connects to target through

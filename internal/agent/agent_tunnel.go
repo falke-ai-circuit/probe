@@ -70,6 +70,11 @@ func (a *Agent) handleTunnelOpen(env protocol.Envelope) protocol.Envelope {
 		return protocol.NewError(env.ID, protocol.ErrInternal, fmt.Sprintf("connect to %s failed: %v", targetAddr, err))
 	}
 
+	// Disable Nagle's algorithm for lower latency on tunnel connections
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		tcpConn.SetNoDelay(true)
+	}
+
 	tun := &agentTunnel{
 		connID: openParams.TunnelID,
 		target: conn,
@@ -92,7 +97,7 @@ func (a *Agent) handleTunnelOpen(env protocol.Envelope) protocol.Envelope {
 // relayTargetToServer reads data from the target connection and sends it
 // to the server as tunnel_data frames (direction: target→client).
 func (a *Agent) relayTargetToServer(connID string, target net.Conn) {
-	buf := make([]byte, 32*1024)
+	buf := make([]byte, 64*1024)
 	for {
 		n, err := target.Read(buf)
 		if n > 0 {

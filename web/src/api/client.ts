@@ -153,10 +153,14 @@ export const api = {
       body: JSON.stringify({ text }),
     }),
 
-  tunnelOpen: (id: string, port: number, target: string) =>
+  tunnelOpen: (id: string, targetHost: string, targetPort: number, listenPort?: number) =>
     apiFetch<unknown>(`/agents/${id}/tunnel`, {
       method: 'POST',
-      body: JSON.stringify({ local_port: port, target_address: target }),
+      body: JSON.stringify({ target_host: targetHost, target_port: targetPort, listen_port: listenPort || 0 }),
+    }),
+  tunnelList: (id: string) =>
+    apiFetch<unknown>(`/agents/${id}/tunnels`, {
+      method: 'GET',
     }),
   tunnelClose: (id: string, tunnelId: string) =>
     apiFetch<unknown>(`/agents/${id}/tunnel-close`, {

@@ -58,7 +58,7 @@ type Server struct {
 	pendingUpdates map[string]*pendingUpdate
 
 	// Tunnels: server-side TCP listeners that relay through WebSocket to the agent.
-	tunnelMu    sync.Mutex
+	tunnelMu    sync.RWMutex
 	tunnels     map[string]*Tunnel // tunnelID -> Tunnel
 	tunnelCount int               // for generating unique tunnel IDs
 

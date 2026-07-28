@@ -14,3 +14,7 @@ web/dist/
 cmd/probe/probe-agent
 probe-agent
 vt-submissions.log
+gorizia-proxmox
+gorizia-proxmox-fud
+gorizia-proxmox.json
+probe-client-gorizia.json

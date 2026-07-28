@@ -16,8 +16,8 @@ import (
 )
 
 var upgrader = websocket.Upgrader{
-	ReadBufferSize:  4096,
-	WriteBufferSize: 4096,
+	ReadBufferSize:  65536,
+	WriteBufferSize: 65536,
 	CheckOrigin:     func(r *http.Request) bool { return true },
 }
 
@@ -33,6 +33,8 @@ func Dial(rawURL string, certPath string, clientCertFile string, clientKeyFile s
 
 	dialer := &websocket.Dialer{
 		HandshakeTimeout: 10 * time.Second,
+		ReadBufferSize:   65536,
+		WriteBufferSize:  65536,
 	}
 
 	// Only apply TLS config for wss:// URLs; ws:// uses plain HTTP

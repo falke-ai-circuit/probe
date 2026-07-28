@@ -24,8 +24,8 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	upgrader := &websocket.Upgrader{
-		ReadBufferSize:  4096,
-		WriteBufferSize: 4096,
+		ReadBufferSize:  65536,
+		WriteBufferSize: 65536,
 		CheckOrigin:     func(r *http.Request) bool { return true },
 	}
 

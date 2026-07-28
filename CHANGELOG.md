@@ -3,6 +3,21 @@
 All notable changes to PROBE are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [Semantic Versioning](https://semver.org/).
 
+## [v1.9.4] — 2026-07-28
+
+### Fixed — Tunnel WebUI + Buffer Performance
+
+#### Tunnel Tab Fixes
+- **API parameter mismatch fixed** — frontend now sends `target_host` + `target_port` (matching server API) instead of incorrect `local_port` + `target_address` fields.
+- **Tunnel list endpoint added** — `GET /api/v1/agents/{id}/tunnels` returns all active tunnels for an agent, with listen port, target, and connection count.
+- **Tunnels auto-fetched on tab open** — TunnelsTab now fetches existing tunnels via `useEffect` on mount instead of showing "No tunnels configured" when tunnels exist.
+- **Listen port field added** — users can specify a preferred listen port (0 = auto-assign).
+
+#### Tunnel Performance
+- **WebSocket buffer increased** — server upgrader and client dialer buffers increased from 4KB → 64KB. Reduces system calls for large transfers.
+- **Tunnel read buffer increased** — 32KB → 64KB on both server and agent sides. Halves the number of round-trips for 415KB+ page transfers.
+- **TCP_NODELAY enabled** — disables Nagle's algorithm on tunnel TCP connections for lower latency.
+
 ## [v1.9.3] — 2026-07-24
 
 ### Added — Phase 4 Steps 11-13 Complete

@@ -987,7 +987,7 @@ func (a *Agent) SendPrompt(prompt string) {
 }
 
 // Version is the agent version.
-const Version = "1.9.3"
+const Version = "1.9.4"
 
 func getOS() string   { return runtime.GOOS }
 func getArch() string { return runtime.GOARCH }
