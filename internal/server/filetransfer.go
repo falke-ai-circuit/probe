@@ -169,6 +169,25 @@ func (tm *TransferManager) Resume(id string) error {
 	return nil
 }
 
+// Cancel marks a transfer as cancelled. The transfer is not deleted — its
+// status is set to "cancelled" so the UI can show it was stopped. The
+// background goroutine checks the status and will stop sending chunks.
+func (tm *TransferManager) Cancel(id string) error {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	t, ok := tm.transfers[id]
+	if !ok {
+		return fmt.Errorf("transfer %s not found", id)
+	}
+	if t.Status == "completed" || t.Status == "failed" || t.Status == "cancelled" {
+		return fmt.Errorf("cannot cancel transfer in status %s", t.Status)
+	}
+	t.Status = "cancelled"
+	t.UpdatedAt = time.Now().UTC()
+	tm.saveLocked()
+	return nil
+}
+
 // UpdateOffset updates the current offset of a transfer.
 func (tm *TransferManager) UpdateOffset(id string, offset int64) {
 	tm.mu.Lock()
@@ -291,7 +310,7 @@ func (tm *TransferManager) ExecuteUpload(transfer *FileTransfer, localPath strin
 			log.Printf("[transfer] %s paused at offset %d", transfer.ID, offset)
 			return nil
 		}
-		if t.Status == "failed" || t.Status == "completed" {
+		if t.Status == "failed" || t.Status == "completed" || t.Status == "cancelled" {
 			return nil
 		}
 
@@ -416,7 +435,7 @@ func (tm *TransferManager) ExecuteDownload(transfer *FileTransfer, localPath str
 			log.Printf("[transfer] %s paused at offset %d", transfer.ID, offset)
 			return nil
 		}
-		if t.Status == "failed" || t.Status == "completed" {
+		if t.Status == "failed" || t.Status == "completed" || t.Status == "cancelled" {
 			return nil
 		}
 

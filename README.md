@@ -2,6 +2,11 @@
 
 Remote agent for the Hermes ecosystem. Run Hermes natively on any remote machine using the main server's LLM infrastructure.
 
+**Version:** v1.9.4
+**Repo:** `github.com/falke-ai-circuit/probe`
+**Go:** 1.22 (Go 1.23/1.25 crash on Valmet VM — pinned to 1.22)
+**Dependencies:** `gorilla/websocket` only (zero other external deps)
+
 ## Quick Start
 
 ```bash
@@ -34,7 +39,7 @@ EOF
 ## Usage
 
 ```
-PROBE Client v1.6.0
+PROBE Client v1.9.4
 A remote assistant tool for the Hermes AI ecosystem
 
 Usage:
@@ -97,10 +102,31 @@ Once the plugin is installed, the operative profile gets 5 new tools:
 ## Architecture
 
 ```
-Server (LLM proxy + session manager) ← WebSocket → Agent (runs full Hermes loop on remote)
+Server (LLM proxy + session manager + relay + builder) ← WebSocket → Agent (runs on remote)
 ```
 
-Remote machines never get API keys. LLM inference happens on the server. Tools (terminal, file, screen, input) execute locally on the remote machine.
+Remote machines never get API keys. LLM inference happens on the server. Tools (terminal, file, screen, input, tunnel, MITM, debug) execute locally on the remote machine.
+
+### Packages
+
+- `cmd/probe` — Unified binary (serve + connect + relay, always available, no build tags)
+- `cmd/probe-client` — Legacy standalone client binary
+- `cmd/probe-server` — Legacy standalone server binary
+- `internal/agent` — Agent loop, 68-case command dispatch, MITM, tunnel, process control, debugger, failover, self-update, platform-specific disk/sysproc (19 files)
+- `internal/crypto` — E2E encryption (ChaCha20-Poly1305)
+- `internal/modes` — Connection mode manager (connect, relay, server, dual)
+- `internal/platform` — 18-method platform interface, 3 OS implementations (Linux, Windows, macOS)
+- `internal/protocol` — 108 message type constants, binary framing, WebSocket transport
+- `internal/relay` — Relay multiplexer and relay handler (723+211 LOC)
+- `internal/server` — REST API server (42 files, 87 routes), agent registry, LLM proxy, session manager, tunnel, MITM, builder, VirusTotal, enrollment, audit, tasks, file transfers, operator auth, profiles, capabilities
+- `internal/testutil` — Test utilities (mock server, mock platform, mock agent)
+
+### API Surface
+
+- **v1 API:** 79 routes under `/api/v1/` — agents, operators, builds, tasks, transfers, profiles, topology, enrollment, health, audit
+- **Legacy API:** 8 routes — `/ws`, `/health`, `/api/agents`, `/api/agent/`, `/download/`, `/logreport/`, `/openapi.json`
+- **Agent commands:** 68 dispatch cases — shell exec, filesystem ops, screen capture, input simulation, tunnel, MITM, process control, debug, clipboard, health, tasks, streaming, auth refresh, port forwarding, port scan, SOCKS5, key press/combo, notifications
+- **Protocol:** 108 message type constants, ProtocolVersion field (v1/v2 backward compatible)
 
 ## Build
 
@@ -126,7 +152,7 @@ GOOS=windows GOARCH=amd64 go build -trimpath -o probe.exe ./cmd/probe/
 
 All subcommands are always available: `probe serve`, `probe connect`, `probe relay`.
 
-**Trade-off**: The unified binary includes server and relay code in every build, increasing the reverse-engineering surface compared to the v1.5.0 build-tag approach. This trade-off is accepted for operational simplicity — a single binary for all deployments. The obfuscation tool covers all `cmd/probe/` files. VT scan: 1/69 Microsoft Wacapew.C!ml (PUA, not trojan) — same as the build-tag variant.
+**Trade-off**: The unified binary includes server and relay code in every build, increasing the reverse-engineering surface compared to the v1.5.0 build-tag approach. This trade-off is accepted for operational simplicity — a single binary for all deployments. Obfuscation/evasion code was removed (commit 87fecdf) — MANTLE handles deployment-time obfuscation now.
 
 ## License
 

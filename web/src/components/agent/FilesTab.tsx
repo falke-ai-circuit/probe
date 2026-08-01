@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../../api/client'
-import { Folder, File, ArrowUp, RefreshCw, ChevronLeft, Download } from 'lucide-react'
+import { Folder, File, ArrowUp, RefreshCw, ChevronLeft, Download, Upload, Loader } from 'lucide-react'
 
 interface FileEntry { name: string; size: number; is_dir: boolean; mod_time?: string }
 
@@ -16,6 +16,7 @@ export function FilesTab({ agentId }: { agentId: string }) {
   const [fileContent, setFileContent] = useState('')
   const [viewingPath, setViewingPath] = useState('')
   const [showViewer, setShowViewer] = useState(false)
+  const [transferMsg, setTransferMsg] = useState('')
 
   const listDir = useCallback(async (dir: string, setPath: (p: string) => void, setEntries: (e: FileEntry[]) => void) => {
     setLoading(true); setError(''); setSelected(null)
@@ -47,7 +48,6 @@ export function FilesTab({ agentId }: { agentId: string }) {
     return p
   }
 
-  // Click a folder: navigate in the ACTIVE pane
   const onFolderClick = (entry: FileEntry, currentPath: string) => {
     if (!entry.is_dir) return
     const newPath = joinPath(currentPath, entry.name)
@@ -55,18 +55,15 @@ export function FilesTab({ agentId }: { agentId: string }) {
     else listDir(newPath, setRightPath, setRightEntries)
   }
 
-  // Single click: select + show in opposite pane if folder
   const onEntryClick = (entry: FileEntry, currentPath: string) => {
     setSelected(entry)
     if (entry.is_dir) {
-      // Preview folder contents in opposite pane
       const newPath = joinPath(currentPath, entry.name)
       if (activePane === 'left') listDir(newPath, setRightPath, setRightEntries)
       else listDir(newPath, setLeftPath, setLeftEntries)
     }
   }
 
-  // Double click: navigate into folder or open file
   const onEntryDoubleClick = (entry: FileEntry, currentPath: string) => {
     if (entry.is_dir) onFolderClick(entry, currentPath)
     else readFile(entry, currentPath)
@@ -80,6 +77,31 @@ export function FilesTab({ agentId }: { agentId: string }) {
       const c = typeof res === 'string' ? res : (res as { content?: string })?.content || JSON.stringify(res, null, 2)
       setFileContent(c); setViewingPath(fp); setShowViewer(true)
     } catch (e) { setError((e as Error).message) } finally { setLoading(false) }
+  }
+
+  // Download: pull file from agent to server
+  const downloadFile = async (entry: FileEntry, currentPath: string) => {
+    if (entry.is_dir) return
+    setError(''); setTransferMsg('')
+    try {
+      const remotePath = joinPath(currentPath, entry.name)
+      const localPath = `/tmp/probe-files/${entry.name}`
+      const res = await api.createTransfer(agentId, 'download', remotePath, localPath) as { id?: string }
+      setTransferMsg(`Download started: ${entry.name} → ${localPath} (ID: ${res?.id?.slice(0, 12) || '?'}) — check Transfers page for progress`)
+    } catch (e) { setError((e as Error).message) }
+  }
+
+  // Upload: push file from server to agent
+  const uploadFile = async (entry: FileEntry, currentPath: string) => {
+    if (entry.is_dir) return
+    setError(''); setTransferMsg('')
+    try {
+      // For upload, the local_path is on the server, remote_path is on the agent
+      const localPath = `/tmp/probe-files/${entry.name}`
+      const remotePath = joinPath(currentPath, entry.name)
+      const res = await api.createTransfer(agentId, 'upload', remotePath, localPath) as { id?: string }
+      setTransferMsg(`Upload started: ${localPath} → ${remotePath} (ID: ${res?.id?.slice(0, 12) || '?'}) — check Transfers page for progress`)
+    } catch (e) { setError((e as Error).message) }
   }
 
   if (showViewer) {
@@ -115,6 +137,7 @@ export function FilesTab({ agentId }: { agentId: string }) {
                <span className="file-icon" />
                <span className="file-name">Name</span>
                <span className="file-size">Size</span>
+               <span className="file-icon" style={{ width: 60 }} />
              </div>
              {entries.map((e, i) => (
               <div
@@ -126,6 +149,14 @@ export function FilesTab({ agentId }: { agentId: string }) {
                 <span className="file-icon">{e.is_dir ? <Folder size={14} /> : <File size={14} />}</span>
                 <span className="file-name">{e.name}</span>
                 <span className="file-size">{e.is_dir ? '—' : formatSize(e.size)}</span>
+                <span className="file-icon" style={{ width: 60, display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
+                  {!e.is_dir && (
+                    <>
+                      <button className="btn btn-sm" style={{ padding: '2px 4px', fontSize: 10 }} onClick={(ev) => { ev.stopPropagation(); downloadFile(e, path) }} title="Download from agent"><Download size={12} /></button>
+                      <button className="btn btn-sm" style={{ padding: '2px 4px', fontSize: 10 }} onClick={(ev) => { ev.stopPropagation(); uploadFile(e, path) }} title="Upload to agent"><Upload size={12} /></button>
+                    </>
+                  )}
+                </span>
               </div>
             ))}
            </div>}
@@ -142,6 +173,7 @@ export function FilesTab({ agentId }: { agentId: string }) {
         <input type="text" value={activePane === 'left' ? leftPath : rightPath} onChange={e => { if (activePane === 'left') setLeftPath(e.target.value); else setRightPath(e.target.value) }} onKeyDown={e => { if (e.key === 'Enter') { const p = activePane === 'left' ? leftPath : rightPath; listDir(p, activePane === 'left' ? setLeftPath : setRightPath, activePane === 'left' ? setLeftEntries : setRightEntries) } }} className="mono" style={{ flex: 1, padding: '5px 10px', border: '1px solid var(--border-glow)', borderRadius: 'var(--radius)', background: 'var(--bg-input)', color: 'var(--green)', fontFamily: 'var(--font-mono)' }} />
       </div>
       {error && <div className="error-msg">{error}</div>}
+      {transferMsg && <div className="success-msg">{transferMsg}</div>}
       <div className="file-browser" style={{ flex: 1, minHeight: 0 }}>
         {renderPane('left', leftPath, leftEntries)}
         {renderPane('right', rightPath, rightEntries)}

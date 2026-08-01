@@ -290,6 +290,12 @@ func (s *Server) registerV1Routes() {
 		s.v1WrapAgentHandler("tunnel", s.handleAgentTunnel))
 	s.mux.HandleFunc("POST /api/v1/agents/{id}/tunnel-close",
 		s.v1WrapAgentHandler("tunnel-close", s.handleAgentTunnelClose))
+	s.mux.HandleFunc("GET /api/v1/agents/{id}/tunnels",
+		s.v1WrapAgentHandler("tunnel", s.handleAgentTunnelList))
+	s.mux.HandleFunc("POST /api/v1/agents/{id}/sniff",
+		s.v1WrapAgentHandler("sniff", s.handleAgentSniff))
+	s.mux.HandleFunc("POST /api/v1/agents/{id}/sniff-stop",
+		s.v1WrapAgentHandler("sniff", s.handleAgentSniffStop))
 	s.mux.HandleFunc("POST /api/v1/agents/{id}/mitm-start",
 		s.v1WrapAgentHandler("mitm-start", s.handleAgentMitmStart))
 	s.mux.HandleFunc("POST /api/v1/agents/{id}/mitm-stop",
@@ -367,6 +373,7 @@ func (s *Server) registerV1Routes() {
 	s.mux.HandleFunc("GET /api/v1/transfers/{id}", s.handleV1GetTransfer)
 	s.mux.HandleFunc("POST /api/v1/transfers/{id}/pause", s.handleV1PauseTransfer)
 	s.mux.HandleFunc("POST /api/v1/transfers/{id}/resume", s.handleV1ResumeTransfer)
+	s.mux.HandleFunc("POST /api/v1/transfers/{id}/cancel", s.handleV1CancelTransfer)
 	s.mux.HandleFunc("POST /api/v1/transfers/{id}/verify", s.handleV1VerifyTransfer)
 
 	// File download (v1)

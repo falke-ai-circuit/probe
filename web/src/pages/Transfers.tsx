@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../api/client'
 import type { FileTransfer } from '../api/types'
-import { Upload, Download, Pause, Play, CheckCircle, XCircle, Loader, RefreshCw, FileText } from 'lucide-react'
+import { Upload, Download, Pause, Play, CheckCircle, XCircle, Loader, RefreshCw, FileText, Ban } from 'lucide-react'
 
 export default function Transfers() {
   const [transfers, setTransfers] = useState<FileTransfer[]>([])
@@ -31,6 +31,11 @@ export default function Transfers() {
 
   const handleResume = async (id: string) => {
     try { await api.resumeTransfer(id); loadTransfers() }
+    catch (e) { setError((e as Error).message) }
+  }
+
+  const handleCancel = async (id: string) => {
+    try { await api.cancelTransfer(id); loadTransfers() }
     catch (e) { setError((e as Error).message) }
   }
 
@@ -84,6 +89,7 @@ export default function Transfers() {
             <option value="failed">Failed</option>
             <option value="paused">Paused</option>
             <option value="pending">Pending</option>
+            <option value="cancelled">Cancelled</option>
           </select>
           <button className="btn btn-sm" onClick={loadTransfers}><RefreshCw size={14} /> Refresh</button>
         </div>
@@ -129,10 +135,16 @@ export default function Transfers() {
                       <td>
                         <div className="flex gap-8">
                           {(t.status === 'transferring' || t.status === 'pending') && (
-                            <button className="btn btn-sm" onClick={() => handlePause(t.id)} title="Pause"><Pause size={14} /></button>
+                            <>
+                              <button className="btn btn-sm" onClick={() => handlePause(t.id)} title="Pause"><Pause size={14} /></button>
+                              <button className="btn btn-danger btn-sm" onClick={() => handleCancel(t.id)} title="Cancel"><Ban size={14} /></button>
+                            </>
                           )}
                           {t.status === 'paused' && (
-                            <button className="btn btn-sm" onClick={() => handleResume(t.id)} title="Resume"><Play size={14} /></button>
+                            <>
+                              <button className="btn btn-sm" onClick={() => handleResume(t.id)} title="Resume"><Play size={14} /></button>
+                              <button className="btn btn-danger btn-sm" onClick={() => handleCancel(t.id)} title="Cancel"><Ban size={14} /></button>
+                            </>
                           )}
                         </div>
                       </td>
@@ -154,6 +166,7 @@ function TransferStatusBadge({ status }: { status: string }) {
     case 'transferring': return <span className="badge badge-yellow"><Loader size={12} /> transferring</span>
     case 'failed': return <span className="badge badge-red"><XCircle size={12} /> failed</span>
     case 'paused': return <span className="badge badge-gray"><Pause size={12} /> paused</span>
+    case 'cancelled': return <span className="badge badge-red"><Ban size={12} /> cancelled</span>
     case 'pending': return <span className="badge badge-yellow">pending</span>
     default: return <span className="badge badge-gray">{status}</span>
   }

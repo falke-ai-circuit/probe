@@ -167,29 +167,52 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ tunnel_id: tunnelId }),
     }),
-  mitmStart: (id: string, target: string, port: number) =>
+  mitmStart: (id: string, listenAddr: string, targetAddr: string, logPath?: string, reuseAddr?: boolean) =>
     apiFetch<unknown>(`/agents/${id}/mitm-start`, {
       method: 'POST',
-      body: JSON.stringify({ target_address: target, target_port: port }),
+      body: JSON.stringify({ listen_addr: listenAddr, target_addr: targetAddr, log_path: logPath || '', reuse_addr: reuseAddr || false }),
     }),
-  mitmStop: (id: string) =>
-    apiFetch<unknown>(`/agents/${id}/mitm-stop`, { method: 'POST', body: '{}' }),
-  mitmTraffic: (id: string) =>
-    apiFetch<unknown>(`/agents/${id}/mitm-traffic`, { method: 'POST', body: '{}' }),
+  mitmStop: (id: string, mitmId: string) =>
+    apiFetch<unknown>(`/agents/${id}/mitm-stop`, { method: 'POST', body: JSON.stringify({ mitm_id: mitmId }) }),
+  mitmTraffic: (id: string, mitmId: string) =>
+    apiFetch<unknown>(`/agents/${id}/mitm-traffic`, { method: 'POST', body: JSON.stringify({ mitm_id: mitmId }) }),
+  sniffStart: (id: string, targetHost: string, targetPort: number, duration?: number) =>
+    apiFetch<unknown>(`/agents/${id}/sniff`, {
+      method: 'POST',
+      body: JSON.stringify({ target_host: targetHost, target_port: targetPort, duration: duration || 0 }),
+    }),
+  sniffStop: (id: string, sniffId: string) =>
+    apiFetch<unknown>(`/agents/${id}/sniff-stop`, { method: 'POST', body: JSON.stringify({ sniff_id: sniffId }) }),
   debugAttach: (id: string, pid: number) =>
     apiFetch<unknown>(`/agents/${id}/debug-attach`, {
       method: 'POST',
       body: JSON.stringify({ pid }),
     }),
-  debugDetach: (id: string) =>
-    apiFetch<unknown>(`/agents/${id}/debug-detach`, { method: 'POST', body: '{}' }),
-  debugReadMem: (id: string, addr: string, size: number) =>
+  debugAttachByName: (id: string, processName: string) =>
+    apiFetch<unknown>(`/agents/${id}/debug-attach`, {
+      method: 'POST',
+      body: JSON.stringify({ pid: 0, process_name: processName }),
+    }),
+  debugDetach: (id: string, debugId: string) =>
+    apiFetch<unknown>(`/agents/${id}/debug-detach`, { method: 'POST', body: JSON.stringify({ debug_id: debugId }) }),
+  debugReadMem: (id: string, debugId: string, addr: number, size: number) =>
     apiFetch<unknown>(`/agents/${id}/debug-read-mem`, {
       method: 'POST',
-      body: JSON.stringify({ address: addr, size }),
+      body: JSON.stringify({ debug_id: debugId, address: addr, size }),
     }),
-  debugModules: (id: string) =>
-    apiFetch<unknown>(`/agents/${id}/debug-modules`, { method: 'POST', body: '{}' }),
+  debugModules: (id: string, debugId: string) =>
+    apiFetch<unknown>(`/agents/${id}/debug-modules`, { method: 'POST', body: JSON.stringify({ debug_id: debugId }) }),
+  debugMemQuery: (id: string, debugId: string, addr: number) =>
+    apiFetch<unknown>(`/agents/${id}/debug-mem-query`, {
+      method: 'POST',
+      body: JSON.stringify({ debug_id: debugId, address: addr }),
+    }),
+  // File transfer create (from FilesTab)
+  createTransfer: (id: string, direction: string, remotePath: string, localPath: string, chunkSize?: number) =>
+    apiFetch<unknown>(`/agents/${id}/transfer`, {
+      method: 'POST',
+      body: JSON.stringify({ direction, remote_path: remotePath, local_path: localPath, chunk_size: chunkSize || 65536 }),
+    }),
 
   // Builds
   listBuilds: () => apiFetch<BuildConfig[]>('/builds'),
@@ -314,6 +337,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ local_path: localPath || '' }),
     }),
+  cancelTransfer: (id: string) =>
+    apiFetch<{ cancelled: string }>(`/transfers/${id}/cancel`, { method: 'POST', body: '{}' }),
   verifyTransfer: (id: string, verifyPath: string) =>
     apiFetch<{ verified: boolean; expected: string; actual: string }>(`/transfers/${id}/verify`, {
       method: 'POST',

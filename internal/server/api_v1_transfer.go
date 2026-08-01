@@ -148,6 +148,20 @@ func (s *Server) handleV1ResumeTransfer(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]interface{}{"resumed": transferID})
 }
 
+// handleV1CancelTransfer cancels a transfer.
+// POST /api/v1/transfers/{id}/cancel
+func (s *Server) handleV1CancelTransfer(w http.ResponseWriter, r *http.Request) {
+	transferID := r.PathValue("id")
+	if _, ok := s.v1CheckAuth(w, r, "fs-write"); !ok {
+		return
+	}
+	if err := s.transferMgr.Cancel(transferID); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_PARAMS", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"cancelled": transferID})
+}
+
 // handleV1VerifyTransfer verifies the SHA256 of a transferred file.
 // POST /api/v1/transfers/{id}/verify
 // Body: {"verify_path": "/path/to/file"} — path to the file to verify

@@ -1,5 +1,7 @@
 # BLUEPRINT — PROBE v0.1.0-a0
 
+> **⚠ SUPERSEDED (2026-07-28):** This blueprint is a design-time artifact from v0.1.0-a0. The codebase is now at v1.9.4. File structure, command count, protocol types, and server architecture have all diverged significantly. See **README.md** and **KNOWLEDGE.md** (in project workspace at `/opt/data/projects/probe/`) for the current source of truth. This file is retained for historical reference only.
+
 **Author:** Architect (via Orchestrator)
 **Date:** 2026-06-13
 **Last Updated:** 2026-06-16
