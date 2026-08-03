@@ -164,3 +164,25 @@ export interface CredentialMatch {
   value: string           // the matched credential
   timestamp: string
 }
+
+export interface SecurityStatus {
+  ip_filter_active: boolean
+  allowed_cidr?: string
+  blacklist_active: boolean
+  blacklist_count: number
+  require_api_auth: boolean
+  operators_count: number
+  audit_log_active: boolean
+  tls: boolean
+  mtls: boolean
+  token_ttl?: string
+  login_rate_limit: LoginAttemptsStatus
+}
+
+export interface LoginAttemptsStatus {
+  tracked_ips: number
+  locked_ips: number
+  max_failures: number
+  window_seconds: number
+  lock_seconds: number
+}

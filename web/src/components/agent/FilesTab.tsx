@@ -4,8 +4,11 @@ import { Folder, File, ArrowUp, RefreshCw, ChevronLeft, Download, Upload, Loader
 
 interface FileEntry { name: string; size: number; is_dir: boolean; mod_time?: string }
 
-export function FilesTab({ agentId }: { agentId: string }) {
-  const isWindows = navigator.userAgent.includes('Windows')
+export function FilesTab({ agentId, agentOS }: { agentId: string; agentOS?: string }) {
+  // Detect the REMOTE agent's OS, not the browser's OS.
+  // agentOS comes from the agent record (runtime.GOOS reported by the agent).
+  // Falls back to browser detection if agentOS is not provided.
+  const isWindows = agentOS ? agentOS === 'windows' : navigator.userAgent.includes('Windows')
   const defaultPath = isWindows ? 'C:\\' : '/'
   const [leftPath, setLeftPath] = useState(defaultPath)
   const [leftEntries, setLeftEntries] = useState<FileEntry[]>([])
@@ -31,10 +34,31 @@ export function FilesTab({ agentId }: { agentId: string }) {
     finally { setLoading(false) }
   }, [agentId])
 
+  // Auto-detect the agent's current working directory on mount.
+  // Runs a quick `pwd` (Linux/macOS) or `cd` (Windows) command to find
+  // where the agent process is running, and uses that as the initial path.
   useEffect(() => {
-    listDir(defaultPath, setLeftPath, setLeftEntries)
-    listDir(defaultPath, setRightPath, setRightEntries)
-  }, [listDir])
+    const detectPath = async () => {
+      try {
+        const cmd = isWindows ? 'cd' : 'pwd'
+        const res = await api.execCmd(agentId, cmd) as { stdout?: string }
+        let detected = (res?.stdout || '').trim()
+        if (detected) {
+          // Windows `cd` returns the path with backslashes; keep as-is.
+          // Linux/macOS `pwd` returns the path with forward slashes.
+          listDir(detected, setLeftPath, setLeftEntries)
+          listDir(detected, setRightPath, setRightEntries)
+          return
+        }
+      } catch {
+        // Agent may not support exec or command may fail — fall through to default
+      }
+      // Fallback: use default path
+      listDir(defaultPath, setLeftPath, setLeftEntries)
+      listDir(defaultPath, setRightPath, setRightEntries)
+    }
+    detectPath()
+  }, [agentId, isWindows, listDir])
 
   const joinPath = (base: string, name: string) => {
     const sep = base.includes('/') && !base.includes('\\') ? '/' : (base.endsWith('\\') || base.endsWith('/') ? '' : '\\')

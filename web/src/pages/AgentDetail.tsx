@@ -77,7 +77,7 @@ export default function AgentDetail() {
 
       <div className="agent-content">
         {activeTab === 'Terminal' && id && <TerminalTab agentId={id} />}
-        {activeTab === 'Files' && id && <FilesTab agentId={id} />}
+        {activeTab === 'Files' && id && <FilesTab agentId={id} agentOS={agent.os} />}
         {activeTab === 'Processes' && id && <ProcessesTab agentId={id} />}
         {activeTab === 'Tunnels' && id && <TunnelsTab agentId={id} />}
         {activeTab === 'MITM' && id && <MITMTab agentId={id} />}

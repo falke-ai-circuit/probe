@@ -1,6 +1,7 @@
 import type {
   APIResponse, AgentRecord, HealthInfo, BuildConfig, Profile, Task,
   Operator, EnrollmentToken, AuditEntry, RevokedAgent, FileTransfer,
+  SecurityStatus, LoginAttemptsStatus,
 } from './types'
 
 const BASE = '/api/v1'
@@ -344,4 +345,15 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ verify_path: verifyPath }),
     }),
+
+  // Security management
+  getSecurityStatus: () =>
+    apiFetch<SecurityStatus>('/security/status'),
+  manageBlacklist: (action: string, cidrs?: string[]) =>
+    apiFetch<{ blacklist?: string[]; blacklist_count?: number }>('/security/blacklist', {
+      method: 'POST',
+      body: JSON.stringify({ action, cidrs: cidrs || [] }),
+    }),
+  getLoginAttempts: () =>
+    apiFetch<LoginAttemptsStatus>('/security/login-attempts'),
 }

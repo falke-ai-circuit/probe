@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { api } from '../api/client'
-import type { Operator, EnrollmentToken, RevokedAgent, AuditEntry } from '../api/types'
+import type { Operator, EnrollmentToken, RevokedAgent, AuditEntry, SecurityStatus } from '../api/types'
+import { Shield, ShieldAlert, ShieldCheck, Ban, Activity, Lock } from 'lucide-react'
 
 const ROLES = ['admin', 'operator', 'viewer']
 
@@ -9,6 +10,8 @@ export default function Settings() {
   const [tokens, setTokens] = useState<EnrollmentToken[]>([])
   const [revoked, setRevoked] = useState<RevokedAgent[]>([])
   const [audit, setAudit] = useState<AuditEntry[]>([])
+  const [security, setSecurity] = useState<SecurityStatus | null>(null)
+  const [blacklistInput, setBlacklistInput] = useState('')
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
 
@@ -23,16 +26,18 @@ export default function Settings() {
 
   const loadAll = async () => {
     try {
-      const [ops, toks, rev, aud] = await Promise.all([
+      const [ops, toks, rev, aud, sec] = await Promise.all([
         api.listOperators().catch(() => []),
         api.listEnrollmentTokens().catch(() => []),
         api.listRevokedAgents().catch(() => []),
         api.queryAudit({ limit: 50 }).catch(() => []),
+        api.getSecurityStatus().catch(() => null),
       ])
       setOperators(ops || [])
       setTokens(toks || [])
       setRevoked(rev || [])
       setAudit(aud || [])
+      setSecurity(sec)
     } catch (e) {
       setError((e as Error).message)
     }
@@ -62,8 +67,7 @@ export default function Settings() {
   }
 
   const createToken = async () => {
-    setError('')
-    setSuccess('')
+    setError(''); setSuccess('')
     try {
       await api.createEnrollmentToken(tokenName, parseInt(tokenTTL))
       setTokenName('')
@@ -72,6 +76,40 @@ export default function Settings() {
     } catch (e) {
       setError((e as Error).message)
     }
+  }
+
+  const addBlacklist = async () => {
+    setError(''); setSuccess('')
+    if (!blacklistInput.trim()) return
+    try {
+      const cidrs = blacklistInput.split(',').map(c => c.trim()).filter(Boolean)
+      await api.manageBlacklist('add', cidrs)
+      setBlacklistInput('')
+      setSuccess(`Added ${cidrs.length} CIDR(s) to blacklist`)
+      loadAll()
+    } catch (e) { setError((e as Error).message) }
+  }
+
+  const clearBlacklist = async () => {
+    setError(''); setSuccess('')
+    try {
+      await api.manageBlacklist('clear')
+      setSuccess('Blacklist cleared')
+      loadAll()
+    } catch (e) { setError((e as Error).message) }
+  }
+
+  const listBlacklist = async () => {
+    setError('')
+    try {
+      const res = await api.manageBlacklist('list')
+      const list = (res as { blacklist?: string[] })?.blacklist || []
+      if (list.length === 0) {
+        setSuccess('Blacklist is empty')
+      } else {
+        setSuccess(`Blacklist: ${list.join(', ')}`)
+      }
+    } catch (e) { setError((e as Error).message) }
   }
 
   return (
@@ -170,6 +208,88 @@ export default function Settings() {
           </div>
         )}
       </div>
+
+      {/* Security */}
+      {security && (
+        <div className="card">
+          <div className="card-title"><Shield size={16} style={{ verticalAlign: 'middle', marginRight: 6 }} />Security</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginBottom: 16 }}>
+            <div style={{ padding: '12px', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 4 }}>IP Filter</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                {security.ip_filter_active ? <ShieldCheck size={14} className="green" /> : <ShieldAlert size={14} className="red" />}
+                <span className={security.ip_filter_active ? 'green' : 'red'}>{security.ip_filter_active ? 'Active' : 'Disabled'}</span>
+              </div>
+              {security.allowed_cidr && <div className="mono dim" style={{ fontSize: 11, marginTop: 4 }}>{security.allowed_cidr}</div>}
+            </div>
+            <div style={{ padding: '12px', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 4 }}>API Auth</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                {security.require_api_auth ? <Lock size={14} className="green" /> : <ShieldAlert size={14} className="red" />}
+                <span className={security.require_api_auth ? 'green' : 'red'}>{security.require_api_auth ? 'Required' : 'Optional'}</span>
+              </div>
+            </div>
+            <div style={{ padding: '12px', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 4 }}>TLS</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                {security.tls ? <ShieldCheck size={14} className="green" /> : <ShieldAlert size={14} className="red" />}
+                <span className={security.tls ? 'green' : 'red'}>{security.tls ? (security.mtls ? 'TLS + mTLS' : 'TLS') : 'Plain HTTP'}</span>
+              </div>
+            </div>
+            <div style={{ padding: '12px', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 4 }}>Audit Log</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                {security.audit_log_active ? <Activity size={14} className="green" /> : <Activity size={14} className="red" />}
+                <span className={security.audit_log_active ? 'green' : 'red'}>{security.audit_log_active ? 'Recording' : 'Inactive'}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Blacklist management */}
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Ban size={14} /> IP Blacklist ({security.blacklist_count} range{security.blacklist_count !== 1 ? 's' : ''})
+            </div>
+            <div className="form-row mb-16">
+              <div className="form-group" style={{ flex: 1 }}>
+                <label>CIDR ranges (comma-separated, e.g. 1.2.3.0/24,5.6.7.8)</label>
+                <input type="text" value={blacklistInput} onChange={e => setBlacklistInput(e.target.value)} placeholder="10.0.0.0/8, 192.168.1.1" onKeyDown={e => { if (e.key === 'Enter') addBlacklist() }} />
+              </div>
+              <div className="form-group">
+                <label>&nbsp;</label>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button className="btn btn-primary btn-sm" onClick={addBlacklist}>Add</button>
+                  <button className="btn btn-sm" onClick={listBlacklist}>List</button>
+                  <button className="btn btn-danger btn-sm" onClick={clearBlacklist}>Clear All</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Login rate limiter */}
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Lock size={14} /> Login Rate Limiter
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 8 }}>
+            <div style={{ padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>
+              <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Tracked IPs</div>
+              <div className="mono">{security.login_rate_limit.tracked_ips}</div>
+            </div>
+            <div style={{ padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>
+              <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Locked IPs</div>
+              <div className={`mono ${security.login_rate_limit.locked_ips > 0 ? 'red' : ''}`}>{security.login_rate_limit.locked_ips}</div>
+            </div>
+            <div style={{ padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>
+              <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Max Failures</div>
+              <div className="mono">{security.login_rate_limit.max_failures}</div>
+            </div>
+            <div style={{ padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>
+              <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Lock Duration</div>
+              <div className="mono">{Math.floor(security.login_rate_limit.lock_seconds / 60)}m</div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Revoked Agents */}
       {revoked.length > 0 && (
