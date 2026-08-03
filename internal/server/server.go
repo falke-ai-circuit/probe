@@ -117,6 +117,13 @@ type Server struct {
 	allowedCIDRs   []*net.IPNet // additional always-allowed ranges (localhost, docker)
 	ipFilterActive bool
 
+	// IP blacklist: blocks specific IPs/CIDRs from ALL routes (including /ws).
+	blacklistMu       sync.RWMutex
+	blacklistedCIDRs  []*net.IPNet
+
+	// Login rate limiting: per-IP brute-force protection for /api/v1/login.
+	loginLimiter *loginRateLimiter
+
 	// Phase 4: relay registry — tracks connected relays for topology view
 	relayMu sync.RWMutex
 	relays  map[string]*relaySession // relayID → session
@@ -141,31 +148,32 @@ func NewServer(addr string, token string, registryPath string) *Server {
 	reg := NewRegistry(registryPath)
 	reg.StartStaleDetector()
 	return &Server{
-		addr:          addr,
-		token:         token,
-		registry:      reg,
-		sessions:      NewSessionManager(),
-		proxy:         NewLLMProxy(),
-		conns:         make(map[string]Conn),
-		connWriteMu:   make(map[string]*sync.Mutex),
-		pendingReqs:   make(map[string]chan protocol.Envelope),
-		pendingUpdates: make(map[string]*pendingUpdate),
+		addr:            addr,
+		token:           token,
+		registry:        reg,
+		sessions:        NewSessionManager(),
+		proxy:           NewLLMProxy(),
+		conns:           make(map[string]Conn),
+		connWriteMu:     make(map[string]*sync.Mutex),
+		pendingReqs:     make(map[string]chan protocol.Envelope),
+		pendingUpdates:  make(map[string]*pendingUpdate),
 		relays:          make(map[string]*relaySession),
 		forwardPolicies: make(map[string]string),
-		tunnels:       make(map[string]*Tunnel),
-		tokenExpiry:   make(map[string]time.Time),
-		rotatedTokens: make(map[string]string),
-		tokenStop:     make(chan struct{}),
-		proxies:       make(map[string]*ProxyEntry),
-		operators:     NewOperatorManager(""),
-		audit:         NewAuditLogger(""),
-		enrollment:    NewEnrollmentManager(""),
-		caManager:     NewCAManager(""),
-		revokedAgents: NewRevokedAgents(),
-		builder:       NewBuilderManager("", ""),
-		profiles:      NewProfileManager(""),
-		tasks:         NewTaskManager("", nil),
-		transferMgr:   NewTransferManager(""),
+		tunnels:         make(map[string]*Tunnel),
+		tokenExpiry:     make(map[string]time.Time),
+		rotatedTokens:   make(map[string]string),
+		tokenStop:       make(chan struct{}),
+		proxies:         make(map[string]*ProxyEntry),
+		operators:       NewOperatorManager(""),
+		audit:           NewAuditLogger(""),
+		enrollment:      NewEnrollmentManager(""),
+		caManager:       NewCAManager(""),
+		revokedAgents:   NewRevokedAgents(),
+		builder:         NewBuilderManager("", ""),
+		profiles:        NewProfileManager(""),
+		tasks:           NewTaskManager("", nil),
+		transferMgr:     NewTransferManager(""),
+		loginLimiter:    newLoginRateLimiter(),
 	}
 }
 
@@ -388,12 +396,14 @@ func (s *Server) Start() error {
 	s.registerRoutes()
 
 	// Wrap mux with UI handler if the frontend was embedded, then apply
-	// IP filtering middleware on top.
+	// middleware layers: security headers → blacklist → IP filter → handler.
 	handler := http.Handler(s.mux)
 	if s.uiWrapper != nil {
 		handler = s.uiWrapper
 	}
 	handler = s.ipFilterMiddleware(handler)
+	handler = s.blacklistMiddleware(handler)
+	handler = s.securityHeadersMiddleware(handler)
 
 	s.srv = &http.Server{
 		Addr:    s.addr,
@@ -444,12 +454,14 @@ func (s *Server) StartTLS(certFile, keyFile string) error {
 	s.registerRoutes()
 
 	// Wrap mux with UI handler if the frontend was embedded, then apply
-	// IP filtering middleware on top.
+	// middleware layers: security headers → blacklist → IP filter → handler.
 	handler := http.Handler(s.mux)
 	if s.uiWrapper != nil {
 		handler = s.uiWrapper
 	}
 	handler = s.ipFilterMiddleware(handler)
+	handler = s.blacklistMiddleware(handler)
+	handler = s.securityHeadersMiddleware(handler)
 
 	s.srv = &http.Server{
 		Addr:      s.addr,

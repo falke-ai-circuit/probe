@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -403,6 +404,9 @@ func (s *Server) registerV1Routes() {
 	s.mux.HandleFunc("POST /api/v1/agents/{id}/forward-policy", s.handleV1ForwardPolicy)
 	s.mux.HandleFunc("GET /api/v1/agents/{id}/forward-policy", s.handleV1ForwardPolicy)
 	s.mux.HandleFunc("GET /api/v1/forward-policies", s.handleV1ListForwardPolicies)
+
+	// Security management endpoints
+	s.registerSecurityRoutes()
 }
 
 // ---------------------------------------------------------------------------
@@ -571,7 +575,22 @@ func (s *Server) handleV1DeleteOperator(w http.ResponseWriter, r *http.Request) 
 // their API token. The request body must contain "username" and "password"
 // fields. On success, returns {"ok":true,"data":{"token":"...","operator":{...}}}.
 // Returns 401 on invalid credentials.
+//
+// Security: login attempts are rate-limited per IP (5 failures in 5 min →
+// 15-min lockout). Every attempt is recorded in the audit log.
 func (s *Server) handleV1Login(w http.ResponseWriter, r *http.Request) {
+	sourceIP := clientIP(r)
+	userAgent := r.Header.Get("User-Agent")
+
+	// Check IP lockout from previous failures.
+	if s.loginLimiter.isLocked(sourceIP) {
+		s.logLoginAttempt("login_failed", "", sourceIP, userAgent, true)
+		log.Printf("[security] login blocked from locked IP %s", sourceIP)
+		writeError(w, http.StatusTooManyRequests, "RATE_LIMITED",
+			"too many failed login attempts — try again later")
+		return
+	}
+
 	var params struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -587,13 +606,24 @@ func (s *Server) handleV1Login(w http.ResponseWriter, r *http.Request) {
 
 	op := s.operators.GetByName(params.Username)
 	if op == nil {
+		locked := s.loginLimiter.recordFailure(sourceIP)
+		s.logLoginAttempt("login_failed", params.Username, sourceIP, userAgent, locked)
+		log.Printf("[security] login failed for %q from %s (unknown user)", params.Username, sourceIP)
 		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid credentials")
 		return
 	}
 	if !op.CheckPassword(params.Password) {
+		locked := s.loginLimiter.recordFailure(sourceIP)
+		s.logLoginAttempt("login_failed", params.Username, sourceIP, userAgent, locked)
+		log.Printf("[security] login failed for %q from %s (bad password)", params.Username, sourceIP)
 		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid credentials")
 		return
 	}
+
+	// Success — reset failure counter.
+	s.loginLimiter.recordSuccess(sourceIP)
+	s.logLoginAttempt("login_success", params.Username, sourceIP, userAgent, false)
+	log.Printf("[security] login success for %q from %s", params.Username, sourceIP)
 
 	// Update last-seen.
 	s.operators.UpdateLastSeen(op.ID, time.Now().UTC())

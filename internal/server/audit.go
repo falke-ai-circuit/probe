@@ -59,6 +59,12 @@ func NewAuditLogger(filePath string) *AuditLogger {
 	return &AuditLogger{filePath: filePath}
 }
 
+// IsActive returns true when the audit logger has a file path configured
+// and will persist entries to disk.
+func (al *AuditLogger) IsActive() bool {
+	return al.filePath != ""
+}
+
 // Log writes a single audit entry to the JSONL file. If the file path is
 // empty the entry is silently dropped (test mode without persistence).
 func (al *AuditLogger) Log(entry AuditEntry) {

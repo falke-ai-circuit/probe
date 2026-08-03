@@ -34,6 +34,8 @@ func runServe(args []string) {
 	builderOutputDir := fs.String("builder-output-dir", "", "directory for built agent binaries (default: PROBE_BUILDER_OUTPUT_DIR env or /tmp/probe-builds)")
 	profilesPath := fs.String("profiles-db", "", "build profiles file path (default: PROBE_PROFILES_DB env or /tmp/probe-profiles.json)")
 	allowedCIDR := fs.String("allowed-cidr", "100.64.0.0/10", "CIDR range allowed for WebUI/API HTTP routes (default: Tailscale 100.64.0.0/10). /ws is always open from any IP. Set to 0.0.0.0/0 to disable.")
+	blacklistCIDR := fs.String("blacklist-cidr", "", "Comma-separated CIDR ranges to block from ALL routes including /ws (e.g., \"1.2.3.0/24,5.6.7.8/32\"). Blocks known-bad IPs from connecting.")
+	auditLogPath := fs.String("audit-log", "", "Path to audit log file (JSONL format). Logs every command, login, and access decision. Default: /tmp/probe-audit.jsonl")
 	adminPassword := fs.String("admin-password", "", "password for the default admin operator created on startup if no operators exist")
 	operatorPath := fs.String("operator-db", "", "operator database file path (default: PROBE_OPERATOR_DB env or /tmp/probe-operators.json)")
 	vtAPIKey := fs.String("vt-api-key", "", "VirusTotal API key for auto-scan after build and manual scan API (default: PROBE_VT_API_KEY env)")
@@ -100,6 +102,15 @@ func runServe(args []string) {
 	if *operatorPath == "" {
 		*operatorPath = "/tmp/probe-operators.json"
 	}
+	if *auditLogPath == "" {
+		*auditLogPath = os.Getenv("PROBE_AUDIT_LOG")
+	}
+	if *auditLogPath == "" {
+		*auditLogPath = "/tmp/probe-audit.jsonl"
+	}
+	if *blacklistCIDR == "" {
+		*blacklistCIDR = os.Getenv("PROBE_BLACKLIST_CIDR")
+	}
 	if *vtAPIKey == "" {
 		*vtAPIKey = os.Getenv("PROBE_VT_API_KEY")
 	}
@@ -129,13 +140,34 @@ func runServe(args []string) {
 	}
 	srv.SetTokenTTL(*tokenTTL)
 	srv.SetVersion(appVersion)
-	srv.SetRequireAPIAuth(*requireAPIAuth)
 	srv.SetEnrollmentPath(*enrollmentPath)
 	srv.SetCADir(*caDir)
 	srv.SetBuilderPath(*builderPath, *builderOutputDir)
 	srv.SetProfilesPath(*profilesPath)
 	srv.SetOperatorPath(*operatorPath)
 	srv.SetAllowedCIDR(*allowedCIDR)
+
+	// Configure audit logging (every command, login, and access decision).
+	srv.SetAuditPath(*auditLogPath)
+	log.Printf("Audit log: %s", *auditLogPath)
+
+	// Configure IP blacklist (blocks specific IPs from ALL routes).
+	if *blacklistCIDR != "" {
+		cidrs := strings.Split(*blacklistCIDR, ",")
+		for i, c := range cidrs {
+			cidrs[i] = strings.TrimSpace(c)
+		}
+		srv.SetBlacklist(cidrs)
+	}
+
+	// When operators are configured, auto-enable requireAPIAuth for security.
+	// This prevents unauthenticated API access when the server is internet-exposed.
+	// The admin can still explicitly disable it with --require-api-auth=false if needed.
+	if *adminPassword != "" || !srv.Operators().IsEmpty() {
+		*requireAPIAuth = true
+		log.Printf("[security] requireAPIAuth auto-enabled (operators configured)")
+	}
+	srv.SetRequireAPIAuth(*requireAPIAuth)
 
 	// Configure VirusTotal scanner if API key is provided.
 	if *vtAPIKey != "" {
