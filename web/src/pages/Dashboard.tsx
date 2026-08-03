@@ -20,7 +20,7 @@ export default function Dashboard() {
           api.listTasks(),
         ])
         setHealth(h)
-        setAgents(a || [])
+        setAgents((a || []).sort((x, y) => (x.name || x.agent_id).localeCompare(y.name || y.agent_id)))
         setTasks(t || [])
       } catch (e) {
         setError((e as Error).message)

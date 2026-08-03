@@ -38,9 +38,9 @@ function computeLayout(data: TopologyData, width: number): { nodes: PositionedNo
   // Server at top center
   nodes.push({ ...data.server, type: 'server', connected: true, x: cx, y: 50 })
 
-  const directAgents = data.agents.filter(a => !a.relayed)
-  const relayedAgents = data.agents.filter(a => a.relayed)
-  const relays = data.relays || []
+  const directAgents = data.agents.filter(a => !a.relayed).sort((a, b) => a.id.localeCompare(b.id))
+  const relayedAgents = data.agents.filter(a => a.relayed).sort((a, b) => a.id.localeCompare(b.id))
+  const relays = (data.relays || []).sort((a, b) => a.id.localeCompare(b.id))
 
   // Direct agents in row 2
   const directSpacing = Math.min(140, width / Math.max(directAgents.length, 1))

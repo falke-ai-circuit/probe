@@ -19,7 +19,7 @@ export default function Agents() {
   const [statusFilter, setStatusFilter] = useState('all')
 
   useEffect(() => {
-    const load = async () => { try { const a = await api.listAgents(); setAgents(a || []); setError('') } catch (e) { setError((e as Error).message) } finally { setLoading(false) } }
+    const load = async () => { try { const a = await api.listAgents(); setAgents((a || []).sort((x, y) => (x.name || x.agent_id).localeCompare(y.name || y.agent_id))); setError('')} catch (e) { setError((e as Error).message) } finally { setLoading(false) } }
     load(); const interval = setInterval(load, 5000); return () => clearInterval(interval)
   }, [])
 
