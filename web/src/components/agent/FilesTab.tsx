@@ -5,9 +5,11 @@ import { Folder, File, ArrowUp, RefreshCw, ChevronLeft, Download, Upload, Loader
 interface FileEntry { name: string; size: number; is_dir: boolean; mod_time?: string }
 
 export function FilesTab({ agentId }: { agentId: string }) {
-  const [leftPath, setLeftPath] = useState('C:\\')
+  const isWindows = navigator.userAgent.includes('Windows')
+  const defaultPath = isWindows ? 'C:\\' : '/'
+  const [leftPath, setLeftPath] = useState(defaultPath)
   const [leftEntries, setLeftEntries] = useState<FileEntry[]>([])
-  const [rightPath, setRightPath] = useState('C:\\')
+  const [rightPath, setRightPath] = useState(defaultPath)
   const [rightEntries, setRightEntries] = useState<FileEntry[]>([])
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -30,21 +32,22 @@ export function FilesTab({ agentId }: { agentId: string }) {
   }, [agentId])
 
   useEffect(() => {
-    listDir('C:\\', setLeftPath, setLeftEntries)
-    listDir('C:\\', setRightPath, setRightEntries)
+    listDir(defaultPath, setLeftPath, setLeftEntries)
+    listDir(defaultPath, setRightPath, setRightEntries)
   }, [listDir])
 
   const joinPath = (base: string, name: string) => {
-    const sep = base.endsWith('\\') || base.endsWith('/') ? '' : '\\'
+    const sep = base.includes('/') && !base.includes('\\') ? '/' : (base.endsWith('\\') || base.endsWith('/') ? '' : '\\')
     return base + sep + name
   }
 
   const goUp = (path: string): string => {
     if (path === 'C:\\' || path === '/' || path === '.') return path
+    const sep = path.includes('/') && !path.includes('\\') ? '/' : '\\'
     const parts = path.split(/[\\/]/); parts.pop()
-    let p = parts.join('\\')
-    if (p && !p.includes(':')) p += '\\'
-    if (!p) p = 'C:\\'
+    let p = parts.join(sep)
+    if (p && !p.includes(':') && sep === '\\') p += '\\'
+    if (!p) p = (path.includes('/') && !path.includes('\\')) ? '/' : 'C:\\'
     return p
   }
 

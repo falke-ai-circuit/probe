@@ -76,7 +76,7 @@ func (s *Server) handleAgentMitmTraffic(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	resp, err := s.forwardToAgent(agentID, "mitm_traffic", params)
+	resp, err := s.forwardToAgent(agentID, protocol.TypeMitmData, params)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
