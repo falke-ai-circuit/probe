@@ -30,6 +30,8 @@ services:
       - serve
       - --addr
       - 0.0.0.0:7701
+      - --token
+      - falke-admin-2026
       - --admin-password
       - f4lk3.PROBE
       - --allowed-cidr
