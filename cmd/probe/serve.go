@@ -33,7 +33,7 @@ func runServe(args []string) {
 	builderPath := fs.String("builder-db", "", "agent builder records file path (default: PROBE_BUILDER_DB env or /tmp/probe-builds.json)")
 	builderOutputDir := fs.String("builder-output-dir", "", "directory for built agent binaries (default: PROBE_BUILDER_OUTPUT_DIR env or /tmp/probe-builds)")
 	profilesPath := fs.String("profiles-db", "", "build profiles file path (default: PROBE_PROFILES_DB env or /tmp/probe-profiles.json)")
-	allowedCIDR := fs.String("allowed-cidr", "100.64.0.0/10", "CIDR range allowed for WebUI/API HTTP routes (default: Tailscale 100.64.0.0/10). /ws is always open from any IP. Set to 0.0.0.0/0 to disable.")
+	allowedCIDR := fs.String("allowed-cidr", "100.64.0.0/10,10.10.10.0/24", "CIDR ranges allowed for WebUI/API HTTP routes (default: Tailscale 100.64.0.0/10 + subnet-routed 10.10.10.0/24). Comma-separated for multiple. /ws is always open from any IP. Set to 0.0.0.0/0 to disable.")
 	blacklistCIDR := fs.String("blacklist-cidr", "", "Comma-separated CIDR ranges to block from ALL routes including /ws (e.g., \"1.2.3.0/24,5.6.7.8/32\"). Blocks known-bad IPs from connecting.")
 	auditLogPath := fs.String("audit-log", "", "Path to audit log file (JSONL format). Logs every command, login, and access decision. Default: /tmp/probe-audit.jsonl")
 	adminPassword := fs.String("admin-password", "", "password for the default admin operator created on startup if no operators exist")

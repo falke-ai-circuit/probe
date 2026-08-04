@@ -111,10 +111,9 @@ type Server struct {
 	// the mux directly.
 	uiWrapper http.Handler
 
-	// IP filtering: allowed CIDR for WebUI/API routes. /ws is always open.
-	// When nil or "0.0.0.0/0", filtering is disabled (allow all).
-	allowedCIDR    *net.IPNet
-	allowedCIDRs   []*net.IPNet // additional always-allowed ranges (localhost, docker)
+	// IP filtering: allowed CIDRs for WebUI/API routes. /ws is always open.
+	// When empty or "0.0.0.0/0", filtering is disabled (allow all).
+	allowedCIDRs   []*net.IPNet // user CIDRs + localhost
 	ipFilterActive bool
 
 	// IP blacklist: blocks specific IPs/CIDRs from ALL routes (including /ws).
@@ -268,22 +267,34 @@ func (s *Server) SetTokenTTL(ttl time.Duration) {
 }
 
 // SetAllowedCIDR configures IP filtering for WebUI/API HTTP routes. Only
-// requests from the given CIDR (plus localhost and Docker ranges) are
-// allowed. The /ws WebSocket endpoint is always open from any IP. When cidr
-// is empty or "0.0.0.0/0", filtering is disabled (allow all). Must be called
-// before Start/StartTLS.
+// requests from the given CIDR(s) (plus localhost) are allowed. The /ws
+// WebSocket endpoint is always open from any IP. When cidr is empty or
+// "0.0.0.0/0", filtering is disabled (allow all). Supports comma-separated
+// CIDRs (e.g., "100.64.0.0/10,10.10.10.0/24"). Must be called before
+// Start/StartTLS.
 func (s *Server) SetAllowedCIDR(cidr string) {
 	if cidr == "" || cidr == "0.0.0.0/0" {
 		s.ipFilterActive = false
 		return
 	}
-	_, ipNet, err := net.ParseCIDR(cidr)
-	if err != nil {
-		log.Printf("[server] WARNING: invalid --allowed-cidr %q: %v — IP filtering disabled", cidr, err)
+	s.allowedCIDRs = nil
+	for _, c := range strings.Split(cidr, ",") {
+		c = strings.TrimSpace(c)
+		if c == "" {
+			continue
+		}
+		_, ipNet, err := net.ParseCIDR(c)
+		if err != nil {
+			log.Printf("[server] WARNING: invalid --allowed-cidr %q: %v — skipping", c, err)
+			continue
+		}
+		s.allowedCIDRs = append(s.allowedCIDRs, ipNet)
+	}
+	if len(s.allowedCIDRs) == 0 {
+		log.Printf("[server] WARNING: no valid CIDRs in --allowed-cidr %q — IP filtering disabled", cidr)
 		s.ipFilterActive = false
 		return
 	}
-	s.allowedCIDR = ipNet
 	s.ipFilterActive = true
 
 	// Always allow localhost. Do NOT allow 172.16.0.0/12 because Docker NAT
@@ -294,7 +305,7 @@ func (s *Server) SetAllowedCIDR(cidr string) {
 			s.allowedCIDRs = append(s.allowedCIDRs, ln)
 		}
 	}
-	log.Printf("[server] IP filtering enabled: allowed CIDR %s (+ localhost, Docker)", cidr)
+	log.Printf("[server] IP filtering enabled: allowed CIDRs %s (+ localhost)", cidr)
 }
 
 // clientIP extracts the client IP from a request, preferring X-Forwarded-For
@@ -317,8 +328,8 @@ func clientIP(r *http.Request) string {
 	return host
 }
 
-// isIPAllowed checks whether the given IP is within the allowed CIDR or any
-// of the always-allowed ranges (localhost, Docker).
+// isIPAllowed checks whether the given IP is within any allowed CIDR
+// (primary CIDRs + localhost).
 func (s *Server) isIPAllowed(ipStr string) bool {
 	if !s.ipFilterActive {
 		return true
@@ -327,11 +338,7 @@ func (s *Server) isIPAllowed(ipStr string) bool {
 	if ip == nil {
 		return false
 	}
-	// Check primary CIDR.
-	if s.allowedCIDR != nil && s.allowedCIDR.Contains(ip) {
-		return true
-	}
-	// Check always-allowed ranges.
+	// Check all allowed ranges (user CIDRs + localhost).
 	for _, cidr := range s.allowedCIDRs {
 		if cidr.Contains(ip) {
 			return true

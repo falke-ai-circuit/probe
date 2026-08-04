@@ -1,0 +1,65 @@
+# PROBE — Platform for Remote Operations & Bridge Environment
+# Directly deployable: docker compose up -d --build
+#
+# Security defaults:
+#   - Admin password: f4lk3.PROBE (change via PROBE_ADMIN_PASSWORD env)
+#   - WebUI/API restricted to Tailscale range (100.64.0.0/10)
+#   - API auth required (--require-api-auth)
+#   - Login rate limiting: 5 failed attempts / 5 min → 15-min lockout
+#   - Login audit logging to /data/logs/audit.jsonl
+#   - IP blacklist configurable via PROBE_BLACKLIST_CIDR env
+#   - /ws WebSocket endpoint open from any IP (agents connect from anywhere)
+
+services:
+  probe:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: falke-probe:latest
+    container_name: falke-probe
+    restart: unless-stopped
+    ports:
+      - "7701:7701"
+    volumes:
+      - probe-data:/data
+    environment:
+      - PROBE_ADMIN_PASSWORD=f4lk3.PROBE
+      - PROBE_BLACKLIST_CIDR=${PROBE_BLACKLIST_CIDR:-}
+      - PROBE_VT_API_KEY=${PROBE_VT_API_KEY:-}
+    command:
+      - serve
+      - --addr
+      - 0.0.0.0:7701
+      - --admin-password
+      - f4lk3.PROBE
+      - --allowed-cidr
+      - 100.64.0.0/10,10.10.10.0/24
+      - --require-api-auth
+      - --token-ttl
+      - "0"
+      - --registry
+      - /data/runtime/registry.json
+      - --operator-db
+      - /data/runtime/operators.json
+      - --enrollment-db
+      - /data/runtime/enrollment.json
+      - --builder-db
+      - /data/runtime/builds.json
+      - --builder-output-dir
+      - /data/runtime/builds
+      - --profiles-db
+      - /data/runtime/profiles.json
+      - --ca-dir
+      - /data/runtime/ca
+      - --audit-log
+      - /data/logs/audit.jsonl
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -sf http://localhost:7701/api/v1/agents || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  probe-data:
+    driver: local

@@ -324,8 +324,12 @@ func (s *Server) handleV1SecurityStatus(w http.ResponseWriter, r *http.Request) 
 		OperatorsCount:  len(s.operators.List()),
 		LoginRateLimit:  s.loginLimiter.status(),
 	}
-	if s.allowedCIDR != nil {
-		status.AllowedCIDR = s.allowedCIDR.String()
+	if len(s.allowedCIDRs) > 0 {
+		var cidrs []string
+		for _, c := range s.allowedCIDRs {
+			cidrs = append(cidrs, c.String())
+		}
+		status.AllowedCIDR = strings.Join(cidrs, ", ")
 	}
 	if s.tokenTTL > 0 {
 		status.TokenTTL = s.tokenTTL.String()
