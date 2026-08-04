@@ -39,7 +39,7 @@ ENTRYPOINT ["/app/probe"]
 CMD ["serve", \
      "--addr", "0.0.0.0:7701", \
      "--admin-password", "f4lk3.PROBE", \
-     "--allowed-cidr", "100.64.0.0/10,10.10.10.0/24", \
+     "--allowed-cidr", "100.64.0.0/10,10.10.10.0/24,172.16.0.0/12", \
      "--require-api-auth", \
      "--token-ttl", "0", \
      "--registry", "/data/runtime/registry.json", \

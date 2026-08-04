@@ -33,7 +33,7 @@ services:
       - --admin-password
       - f4lk3.PROBE
       - --allowed-cidr
-      - 100.64.0.0/10,10.10.10.0/24
+      - 100.64.0.0/10,10.10.10.0/24,172.16.0.0/12
       - --require-api-auth
       - --token-ttl
       - "0"

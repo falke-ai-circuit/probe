@@ -219,7 +219,7 @@ func (uc *UnifiedConfig) applyDefaults() {
 			uc.Server.RegistryPath = "/tmp/probe-registry.json"
 		}
 		if uc.Server.AllowedCIDR == "" {
-			uc.Server.AllowedCIDR = "100.64.0.0/10,10.10.10.0/24"
+			uc.Server.AllowedCIDR = "100.64.0.0/10,10.10.10.0/24,172.16.0.0/12"
 		}
 		if uc.Server.EnrollmentPath == "" {
 			uc.Server.EnrollmentPath = "/tmp/probe-enrollment.json"
