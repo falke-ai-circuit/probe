@@ -1,0 +1,31 @@
+{
+  "name": "file_watch_summary",
+  "description": "Inventory of user-accessible files: count, size totals, and last-modified timestamps. Useful for detecting unusual file activity. Polls hourly.",
+  "trigger": {
+    "type": "recurring",
+    "interval_seconds": 3600
+  },
+  "steps": [
+    {
+      "id": "list",
+      "type": "command",
+      "command_type": "fs_list",
+      "params": {
+        "path": "/root"
+      },
+      "store_as": "entries"
+    },
+    {
+      "id": "stat",
+      "type": "command",
+      "command_type": "sysinfo",
+      "store_as": "system"
+    },
+    {
+      "id": "emit",
+      "type": "emit",
+      "signal": "file_watch_summary",
+      "payload": "{{state.entries}}"
+    }
+  ]
+}

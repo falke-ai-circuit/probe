@@ -113,6 +113,9 @@ type Server struct {
 	// Flow event store: NDJSON append-only log of survey events. Stubbed in A.2, full impl in A.5.
 	flowEvents FlowEventStore
 
+	// Flow templates: predefined flow definitions that can be instantiated.
+	flowTemplates *TemplateManager
+
 	// File transfer manager: resumable chunked file transfers.
 	transferMgr *TransferManager
 
@@ -593,7 +596,8 @@ func (s *Server) SetTasksPath(path string) {
 }
 
 // SetFlowsPath initializes the FlowManager, FlowDispatcher, and FlowEventStore
-// bound to this server. Called before Start/StartTLS.
+// bound to this server. Called before Start/StartTLS. Template directory is
+// derived from the flows path (e.g. flows.json → ../flowtemplates/).
 func (s *Server) SetFlowsPath(path string) {
 	s.flows = NewFlowManager(path, s)
 	s.flowDispatcher = NewFlowDispatcher(s)
@@ -608,6 +612,12 @@ func (s *Server) SetFlowsPath(path string) {
 		}
 	}
 	s.flowEvents = NewNDEventStore(eventsPath)
+	// Templates live in a sibling directory.
+	templatesDir := path
+	if dir := filepath.Dir(path); dir != "" {
+		templatesDir = filepath.Join(dir, "flowtemplates")
+	}
+	s.flowTemplates = NewTemplateManager(templatesDir)
 }
 
 // SetTransferPath configures persistent file transfer state. When set,

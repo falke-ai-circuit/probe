@@ -1,0 +1,29 @@
+{
+  "name": "network_summary",
+  "description": "Periodic snapshot of network connections on the host. Polls NetConnections every interval and emits an event with the count and a sample of new connections since baseline.",
+  "trigger": {
+    "type": "recurring",
+    "interval_seconds": 300
+  },
+  "steps": [
+    {
+      "id": "snapshot",
+      "type": "command",
+      "command_type": "net_connections",
+      "store_as": "snapshot"
+    },
+    {
+      "id": "count",
+      "type": "compute_diff",
+      "left": "baseline",
+      "right": "snapshot",
+      "diff_as": "delta"
+    },
+    {
+      "id": "emit",
+      "type": "emit",
+      "signal": "network_summary",
+      "payload": "{{state.snapshot}}"
+    }
+  ]
+}

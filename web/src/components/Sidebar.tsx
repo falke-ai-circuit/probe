@@ -1,10 +1,11 @@
 import { NavLink } from 'react-router-dom'
 import { clearToken } from '../api/client'
-import { LayoutDashboard, Monitor, Wrench, Layers, Clock, Settings, LogOut, Radar, ArrowDownUp, KeyRound } from 'lucide-react'
+import { LayoutDashboard, Monitor, Wrench, Layers, Clock, Settings, LogOut, Radar, ArrowDownUp, KeyRound, GitBranch } from 'lucide-react'
 
 const navItems = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/agents', label: 'Agents', icon: Monitor },
+  { to: '/flows', label: 'Flows', icon: GitBranch },
   { to: '/tasks', label: 'Tasks', icon: Clock },
   { to: '/transfers', label: 'Transfers', icon: ArrowDownUp },
   { to: '/credentials', label: 'Credentials', icon: KeyRound },

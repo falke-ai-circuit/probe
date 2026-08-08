@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 )
@@ -78,11 +79,12 @@ func (s *Server) handleV1CreateFlow(w http.ResponseWriter, r *http.Request) {
 
 	if s.audit != nil {
 		s.audit.Log(AuditEntry{
-			AgentID:    "",
-			OperatorID: operatorID,
+			FlowID:     flow.ID,
+			EventType:  "create",
 			Action:     "flow.create",
 			Params:     map[string]string{"flow_id": flow.ID, "name": flow.Name},
 			Result:     "success",
+			OperatorID: operatorID,
 		})
 	}
 
@@ -439,4 +441,95 @@ func (s *Server) v1WrapFlowHandler(action string, h func(http.ResponseWriter, *h
 		}
 		h(w, r, flowID)
 	}
+}
+
+// handleV1ListFlowTemplates returns all loaded flow templates.
+func (s *Server) handleV1ListFlowTemplates(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.v1CheckAuth(w, r, "list"); !ok {
+		return
+	}
+	if s.flowTemplates == nil {
+		writeJSON(w, http.StatusOK, []any{})
+		return
+	}
+	templates := s.flowTemplates.List()
+	writeJSON(w, http.StatusOK, templates)
+}
+
+// handleV1InstantiateFromTemplate creates a new flow from a named template.
+func (s *Server) handleV1InstantiateFromTemplate(w http.ResponseWriter, r *http.Request) {
+	op, ok := s.v1CheckAuth(w, r, "exec")
+	if !ok {
+		return
+	}
+	if s.flowTemplates == nil || s.flows == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "flow templates not available"})
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "failed to read body"})
+		return
+	}
+	defer r.Body.Close()
+	var req struct {
+		TemplateName string `json:"template_name"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+	if req.TemplateName == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "template_name is required"})
+		return
+	}
+	operatorID := ""
+	if op != nil {
+		operatorID = op.ID
+	}
+	flow, err := s.flowTemplates.Instantiate(req.TemplateName, s.flows, operatorID)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	if s.audit != nil {
+		s.audit.Log(AuditEntry{
+			OperatorID: operatorID,
+			Action:     "flow.from_template",
+			Params:     map[string]string{"template": req.TemplateName, "flow_id": flow.ID},
+			Result:     "success",
+		})
+	}
+	writeJSON(w, http.StatusOK, flow)
+}
+
+// handleV1ListAgentSurveyEvents returns survey events for a specific agent.
+func (s *Server) handleV1ListAgentSurveyEvents(w http.ResponseWriter, r *http.Request, agentID string) {
+	if _, ok := s.v1CheckAuth(w, r, "list"); !ok {
+		return
+	}
+	if s.flowEvents == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "flow events not available"})
+		return
+	}
+	limit := 100
+	if l := r.URL.Query().Get("limit"); l != "" {
+		fmt.Sscanf(l, "%d", &limit)
+	}
+	filter := FlowEventFilter{
+		AgentID: agentID,
+		Limit:   limit,
+	}
+	if f := r.URL.Query().Get("flow_id"); f != "" {
+		filter.FlowID = f
+	}
+	if s := r.URL.Query().Get("signal"); s != "" {
+		filter.Signal = s
+	}
+	events, err := s.flowEvents.Query(filter)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, events)
 }

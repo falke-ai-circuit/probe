@@ -366,6 +366,9 @@ func (s *Server) registerV1Routes() {
 	s.mux.HandleFunc("GET /api/v1/flow-runs", s.handleV1ListFlowRuns)
 	s.mux.HandleFunc("GET /api/v1/flow-runs/{id}", s.v1WrapFlowHandler("list", s.handleV1GetFlowRun))
 	s.mux.HandleFunc("GET /api/v1/agents/{id}/flows", s.v1WrapAgentHandler("list", s.handleV1ListAgentFlows))
+	s.mux.HandleFunc("GET /api/v1/flow-templates", s.handleV1ListFlowTemplates)
+	s.mux.HandleFunc("POST /api/v1/flows/from-template", s.handleV1InstantiateFromTemplate)
+	s.mux.HandleFunc("GET /api/v1/agents/{id}/survey", s.v1WrapAgentHandler("list", s.handleV1ListAgentSurveyEvents))
 
 	// VirusTotal scan (build-level)
 	s.mux.HandleFunc("POST /api/v1/builds/{id}/vt-scan", s.handleV1VTScan)

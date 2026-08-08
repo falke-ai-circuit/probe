@@ -11,7 +11,8 @@ import { MITMTab } from '../components/agent/MITMTab'
 import { DebugTab } from '../components/agent/DebugTab'
 import { ScreenTab } from '../components/agent/ScreenTab'
 import { ModesTab } from '../components/agent/ModesTab'
-import { ChevronRight, Terminal, FolderTree, Cpu, ArrowLeftRight, Network, Bug, Monitor, ScrollText, Layers } from 'lucide-react'
+import { SurveyTab } from '../components/agent/SurveyTab'
+import { ChevronRight, Terminal, FolderTree, Cpu, ArrowLeftRight, Network, Bug, Monitor, ScrollText, Layers, Activity } from 'lucide-react'
 
 const tabs = [
   { name: 'Terminal', icon: Terminal },
@@ -22,6 +23,7 @@ const tabs = [
   { name: 'MITM', icon: Network },
   { name: 'Debug', icon: Bug },
   { name: 'Modes', icon: Layers },
+  { name: 'Survey', icon: Activity },
   { name: 'Audit', icon: ScrollText },
 ] as const
 type TabName = typeof tabs[number]['name']
@@ -84,6 +86,7 @@ export default function AgentDetail() {
         {activeTab === 'Debug' && id && <DebugTab agentId={id} />}
         {activeTab === 'Screen' && id && <ScreenTab agentId={id} />}
         {activeTab === 'Modes' && id && <ModesTab agentId={id} />}
+        {activeTab === 'Survey' && id && <SurveyTab agentId={id} />}
         {activeTab === 'Audit' && (
           <div className="card">
             {audit.length === 0 ? <div className="empty-state">No audit entries</div> : (

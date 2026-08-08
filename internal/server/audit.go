@@ -21,6 +21,11 @@ type AuditEntry struct {
 	ErrorMsg   string    `json:"error_msg,omitempty"`
 	DurationMs int64     `json:"duration_ms,omitempty"`
 	Bypass     bool      `json:"bypass"`
+	// Flow-specific fields. Present on flow.* actions so they can be
+	// filtered/queried without unpacking Params.
+	FlowID    string `json:"flow_id,omitempty"`
+	StepID    string `json:"step_id,omitempty"`
+	EventType string `json:"event_type,omitempty"`
 }
 
 // AuditFilter is used by Query to narrow the audit log.
@@ -63,6 +68,26 @@ func NewAuditLogger(filePath string) *AuditLogger {
 // and will persist entries to disk.
 func (al *AuditLogger) IsActive() bool {
 	return al.filePath != ""
+}
+
+// LogFlow writes a flow-related audit entry. The flowID, stepID, and
+// eventType are first-class fields on the audit entry so they can be
+// queried/filtered without parsing the params map.
+func (a *AuditLogger) LogFlow(flowID, stepID, eventType, action, agentID, operatorID string, extra map[string]string) {
+	entry := AuditEntry{
+		Timestamp:  time.Now().UTC(),
+		FlowID:     flowID,
+		StepID:     stepID,
+		EventType:  eventType,
+		Action:     action,
+		AgentID:    agentID,
+		OperatorID: operatorID,
+		Result:     "success",
+	}
+	if extra != nil {
+		entry.Params = extra
+	}
+	a.Log(entry)
 }
 
 // Log writes a single audit entry to the JSONL file. If the file path is

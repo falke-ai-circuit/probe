@@ -186,3 +186,75 @@ export interface LoginAttemptsStatus {
   window_seconds: number
   lock_seconds: number
 }
+
+// Flow runtime (v1.13.0) — types mirror the Go Flow/Step/Run structs.
+
+export interface FlowStep {
+  id: string
+  type: string
+  next?: string
+  on_error?: string
+  command_type?: string
+  params?: Record<string, unknown>
+  as?: string
+  store_as?: string
+  seconds?: number
+  condition?: string
+  if_true?: string
+  if_false?: string
+  left?: string
+  right?: string
+  diff_as?: string
+  input?: string
+  rules?: Array<{ if: string; label: string }>
+  classify_as?: string
+  signal?: string
+  payload?: unknown
+}
+
+export interface FlowTrigger {
+  type: string
+  delay_seconds?: number
+  interval_seconds?: number
+}
+
+export interface FlowRecord {
+  id: string
+  name: string
+  description?: string
+  enabled: boolean
+  trigger: FlowTrigger
+  steps: FlowStep[]
+  agent_ids?: string[]
+  created_at: string
+  updated_at: string
+  created_by?: string
+}
+
+export interface FlowRun {
+  id: string
+  flow_id: string
+  agent_id?: string
+  status: string
+  started_at: string
+  completed_at?: string
+  error?: string
+  state?: Record<string, unknown>
+}
+
+export interface FlowTemplate {
+  name: string
+  description?: string
+  trigger: FlowTrigger
+  steps: FlowStep[]
+}
+
+export interface SurveyEvent {
+  id: string
+  flow_id: string
+  run_id: string
+  agent_id?: string
+  signal: string
+  payload: unknown
+  timestamp: string
+}

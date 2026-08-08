@@ -1,0 +1,26 @@
+{
+  "name": "sensitive_file_access",
+  "description": "Scan user profile directories for files matching sensitive patterns (SSH keys, AWS credentials, wallet files, certificates). Emits a survey event listing any matches. Polls every 5 minutes.",
+  "trigger": {
+    "type": "recurring",
+    "interval_seconds": 300
+  },
+  "steps": [
+    {
+      "id": "scan",
+      "type": "command",
+      "command_type": "file_search",
+      "params": {
+        "root_path": "/root",
+        "pattern": "id_rsa|id_dsa|id_ecdsa|id_ed25519|.aws/credentials|.env|*.pem|*.key|wallet.dat|*.p12"
+      },
+      "store_as": "matches"
+    },
+    {
+      "id": "emit",
+      "type": "emit",
+      "signal": "sensitive_file_access",
+      "payload": "{{state.matches}}"
+    }
+  ]
+}

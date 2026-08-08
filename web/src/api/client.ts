@@ -1,7 +1,7 @@
 import type {
   APIResponse, AgentRecord, HealthInfo, BuildConfig, Profile, Task,
   Operator, EnrollmentToken, AuditEntry, RevokedAgent, FileTransfer,
-  SecurityStatus, LoginAttemptsStatus,
+  SecurityStatus, LoginAttemptsStatus, FlowRecord, FlowRun, FlowTemplate, SurveyEvent,
 } from './types'
 
 const BASE = '/api/v1'
@@ -356,4 +356,68 @@ export const api = {
     }),
   getLoginAttempts: () =>
     apiFetch<LoginAttemptsStatus>('/security/login-attempts'),
+
+  // Flow runtime (v1.13.0)
+  listFlows: () => apiFetch<FlowRecord[]>('/flows'),
+  getFlow: (id: string) => apiFetch<FlowRecord>(`/flows/${id}`),
+  createFlow: (flow: Partial<FlowRecord>) =>
+    apiFetch<FlowRecord>('/flows', {
+      method: 'POST',
+      body: JSON.stringify(flow),
+    }),
+  updateFlow: (id: string, flow: Partial<FlowRecord>) =>
+    apiFetch<FlowRecord>(`/flows/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(flow),
+    }),
+  deleteFlow: (id: string) =>
+    apiFetch<{ deleted: string }>(`/flows/${id}`, { method: 'DELETE' }),
+  enableFlow: (id: string) =>
+    apiFetch<{ flow_id: string; enabled: string }>(`/flows/${id}/enable`, {
+      method: 'POST',
+      body: '{}',
+    }),
+  disableFlow: (id: string) =>
+    apiFetch<{ flow_id: string; enabled: string }>(`/flows/${id}/disable`, {
+      method: 'POST',
+      body: '{}',
+    }),
+  runFlowNow: (id: string, agentID: string) =>
+    apiFetch<FlowRun>(`/flows/${id}/run-now`, {
+      method: 'POST',
+      body: JSON.stringify({ agent_id: agentID }),
+    }),
+  assignFlow: (id: string, agentID: string) =>
+    apiFetch<{ flow_id: string; agent_id: string }>(`/flows/${id}/assign`, {
+      method: 'POST',
+      body: JSON.stringify({ agent_id: agentID }),
+    }),
+  unassignFlow: (id: string, agentID: string) =>
+    apiFetch<{ flow_id: string; agent_id: string; removed: string }>(
+      `/flows/${id}/unassign`,
+      { method: 'POST', body: JSON.stringify({ agent_id: agentID }) }
+    ),
+  listAgentFlows: (agentID: string) =>
+    apiFetch<FlowRecord[]>(`/agents/${agentID}/flows`),
+  listFlowRuns: (flowID?: string) =>
+    apiFetch<FlowRun[]>(`/flow-runs${flowID ? `?flow_id=${flowID}` : ''}`),
+  listFlowTemplates: () => apiFetch<FlowTemplate[]>('/flow-templates'),
+  instantiateFromTemplate: (templateName: string) =>
+    apiFetch<FlowRecord>('/flows/from-template', {
+      method: 'POST',
+      body: JSON.stringify({ template_name: templateName }),
+    }),
+  listAgentSurveyEvents: (
+    agentID: string,
+    opts?: { flow_id?: string; signal?: string; limit?: number }
+  ) => {
+    const params = new URLSearchParams()
+    if (opts?.flow_id) params.set('flow_id', opts.flow_id)
+    if (opts?.signal) params.set('signal', opts.signal)
+    if (opts?.limit) params.set('limit', String(opts.limit))
+    const qs = params.toString()
+    return apiFetch<SurveyEvent[]>(
+      `/agents/${agentID}/survey${qs ? `?${qs}` : ''}`
+    )
+  },
 }
