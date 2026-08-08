@@ -2,10 +2,73 @@
 
 Remote agent for the Hermes ecosystem. Run Hermes natively on any remote machine using the main server's LLM infrastructure.
 
-**Version:** v1.9.4
+**Version:** v1.13.0
 **Repo:** `github.com/falke-ai-circuit/probe`
 **Go:** 1.22 (Go 1.23/1.25 crash on Valmet VM — pinned to 1.22)
 **Dependencies:** `gorilla/websocket` only (zero other external deps)
+
+## Flow Runtime (v1.13.0+)
+
+PROBE includes a server-side **flow runtime** for orchestrating scheduled or triggered surveys. A flow is a DAG of steps that call existing agent commands, branch, transform data, and emit survey events.
+
+### What flows are for
+
+- **Surveys** — periodic snapshots of host state (processes, network connections, file inventory)
+- **Sensors** — continuous monitoring of specific conditions (sensitive file access, logins, config changes)
+- **Audit enrichment** — pre-process command output before the existing audit log records it
+- **Cross-host correlation** — same flow definition can run on multiple agents; events are centralized
+
+### Quick example
+
+```bash
+# List built-in templates
+curl -H "Authorization: Bearer $TOKEN" http://server:7701/api/v1/flow-templates
+
+# Instantiate one
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"template_name":"network_summary"}' \
+  http://server:7701/api/v1/flows/from-template
+
+# Assign to an agent
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"agent_id":"vegas-c2022"}' \
+  http://server:7701/api/v1/flows/{flow_id}/assign
+```
+
+### Built-in flow templates
+
+| Template | Trigger | What it does |
+|---|---|---|
+| `network_summary` | recurring 5min | Snapshots `NetConnections`, emits event with connection list |
+| `sensitive_file_access` | recurring 5min | Scans user profile dirs for SSH keys, AWS creds, wallet files |
+| `file_watch_summary` | recurring 1h | File inventory of user profile dirs with size totals |
+
+Templates are JSON files in `internal/server/flowtemplates/`. Add a new template by dropping a `.json` file in that directory; the server picks it up on restart.
+
+### Flow step types
+
+- `command` — forward an existing agent command (NetConnections, FileSearch, Sysinfo, …) and store the result in flow state
+- `wait` — pause for N seconds (cancellable via flow context)
+- `branch` — conditional next-step routing on a state value
+- `compute_diff` — diff two prior step results (added/removed/changed)
+- `classify` — apply glob rules to label a state value
+- `emit` — write a survey event to the NDJSON event log
+
+### Storage layout
+
+```
+/data/runtime/flows.json           # flow definitions (persisted)
+/data/runtime/flowtemplates/      # template .json files
+/data/logs/flows.json.events.ndjson  # survey events (append-only)
+```
+
+All three paths are configurable via `--flows-path` (single arg; the other two are derived).
+
+### WebUI
+
+The `Flows` sidebar entry shows a CRUD page with templates, runs, and enable/disable. The per-agent `Survey` tab shows a timeline of survey events for that host with filtering and auto-refresh.
+
+See [CHANGELOG.md](CHANGELOG.md) for the full v1.13.0 release notes.
 
 ## Quick Start
 

@@ -1,7 +1,7 @@
 {
   "project": "probe",
-  "version": "v0.1.0-a0",
-  "last_updated": "2026-06-16T23:50:00Z",
+  "version": "v1.13.0",
+  "last_updated": "2026-08-08T18:30:00Z",
   "hot_cache": [
     {
       "key": "module_path",
@@ -11,12 +11,12 @@
     {
       "key": "go_version",
       "value": "1.22.5",
-      "note": "Installed at /opt/data/go/bin/go. Not a system package — downloaded from go.dev. Use export PATH=/opt/data/go/bin:$PATH before building."
+      "note": "Installed at /opt/data/go/bin/go. Not a system package \u2014 downloaded from go.dev. Use export PATH=/opt/data/go/bin:$PATH before building."
     },
     {
       "key": "dependency",
       "value": "gorilla/websocket v1.5.3",
-      "note": "Only external dependency. Binary should stay minimal — add new deps only with justification."
+      "note": "Only external dependency. Binary should stay minimal \u2014 add new deps only with justification."
     },
     {
       "key": "build_command",
@@ -91,7 +91,7 @@
     {
       "key": "tls_mutual_auth",
       "value": "client cert in Dial + client CA in Listen",
-      "note": "Phase E Commit 7: TLS mutual authentication (mTLS). protocol.Dial signature is now Dial(rawURL, certPath, clientCertFile, clientKeyFile, token) — when clientCertFile+clientKeyFile non-empty, loads via tls.LoadX509KeyPair into TLSClientConfig.Certificates. protocol.Listen signature is now Listen(addr, certFile, keyFile, clientCAFile) — when clientCAFile non-empty, loads CA into x509.CertPool, sets ClientAuth=tls.RequireAndVerifyClientCert + ClientCAs. protocol.NewServer signature is now NewServer(addr, certFile, keyFile, clientCAFile). internal/server: Server gains certFile/keyFile/clientCAFile fields; NEW NewServerWithTLS(addr,token,registry,certFile,keyFile,clientCAFile) + NewServerWithTLSRateLimit(...+RateLimitConfig); StartTLS builds tls.Config with RequireAndVerifyClientCert+ClientCAs when clientCAFile set (logs 'TLS+mTLS' vs 'TLS'). agent.Config gains ClientCertFile/ClientKeyFile; runOutbound passes them to Dial. CLI: server --cert-file/--key-file/--client-ca; agent --client-cert/--client-key/--cert/--cert-file/--key-file. Removed dead GenerateSelfSignedCert (hardcoded PEM, never called). Zero new deps (crypto/tls, crypto/x509 stdlib). Build+vet+tests pass; cross-compile clean for all 6 targets."
+      "note": "Phase E Commit 7: TLS mutual authentication (mTLS). protocol.Dial signature is now Dial(rawURL, certPath, clientCertFile, clientKeyFile, token) \u2014 when clientCertFile+clientKeyFile non-empty, loads via tls.LoadX509KeyPair into TLSClientConfig.Certificates. protocol.Listen signature is now Listen(addr, certFile, keyFile, clientCAFile) \u2014 when clientCAFile non-empty, loads CA into x509.CertPool, sets ClientAuth=tls.RequireAndVerifyClientCert + ClientCAs. protocol.NewServer signature is now NewServer(addr, certFile, keyFile, clientCAFile). internal/server: Server gains certFile/keyFile/clientCAFile fields; NEW NewServerWithTLS(addr,token,registry,certFile,keyFile,clientCAFile) + NewServerWithTLSRateLimit(...+RateLimitConfig); StartTLS builds tls.Config with RequireAndVerifyClientCert+ClientCAs when clientCAFile set (logs 'TLS+mTLS' vs 'TLS'). agent.Config gains ClientCertFile/ClientKeyFile; runOutbound passes them to Dial. CLI: server --cert-file/--key-file/--client-ca; agent --client-cert/--client-key/--cert/--cert-file/--key-file. Removed dead GenerateSelfSignedCert (hardcoded PEM, never called). Zero new deps (crypto/tls, crypto/x509 stdlib). Build+vet+tests pass; cross-compile clean for all 6 targets."
     },
     {
       "key": "rate_limiting",
@@ -101,59 +101,165 @@
     {
       "key": "health_monitoring",
       "value": "AgentRecord extensions + stale detector",
-      "note": "Phase E Commit 5: Extended AgentRecord with UptimeSeconds, LastError, ErrorCount, HealthScore (0.0-1.0 composite), ResourceUsage *ResourceInfo. NEW ResourceInfo struct (CPUPercent/MemoryMB/DiskFreeMB). Health score formula: heartbeat recency (0.0-0.4) + error count (0.0-0.3) + uptime stability (0.0-0.3). NEW Registry methods: RecordError, UpdateHealth, GetHealth, StartStaleDetector (idempotent), Stop (idempotent via stopCh+sync.Once). Stale detector goroutine scans every 30s, marks agents with heartbeat > 90s as 'stale'. Started in NewServer, stopped in Close (no leak). NEW GET /api/agent/{id}/health endpoint (404 for unknown). Enhanced /health returns {status,total_agents,active_agents,stale_agents,uptime_seconds}. Error recording wired into handleMessages (TypeError→RecordError, TypeHealthResult→UpdateHealth). Internal connectedAt/lastHeartbeat time.Time fields excluded from JSON, reconstructed from string fields on load. Zero new deps. Build+vet+tests pass."
+      "note": "Phase E Commit 5: Extended AgentRecord with UptimeSeconds, LastError, ErrorCount, HealthScore (0.0-1.0 composite), ResourceUsage *ResourceInfo. NEW ResourceInfo struct (CPUPercent/MemoryMB/DiskFreeMB). Health score formula: heartbeat recency (0.0-0.4) + error count (0.0-0.3) + uptime stability (0.0-0.3). NEW Registry methods: RecordError, UpdateHealth, GetHealth, StartStaleDetector (idempotent), Stop (idempotent via stopCh+sync.Once). Stale detector goroutine scans every 30s, marks agents with heartbeat > 90s as 'stale'. Started in NewServer, stopped in Close (no leak). NEW GET /api/agent/{id}/health endpoint (404 for unknown). Enhanced /health returns {status,total_agents,active_agents,stale_agents,uptime_seconds}. Error recording wired into handleMessages (TypeError\u2192RecordError, TypeHealthResult\u2192UpdateHealth). Internal connectedAt/lastHeartbeat time.Time fields excluded from JSON, reconstructed from string fields on load. Zero new deps. Build+vet+tests pass."
     },
     {
       "key": "windows_platform_status",
       "value": "real",
-      "note": "Phase E Commit 2: 6 stubs replaced with PowerShell-based real implementations. Screenshot (System.Drawing→PNG), ScreenInfo (AllScreens), Click (Cursor+user32.dll), TypeText/KeyPress/Hotkey (SendKeys), Notify (msg.exe+ToastNotificationManager). ScreenStreamStart/Stop remain stubs. Zero new deps. Cross-compile passes."
+      "note": "Phase E Commit 2: 6 stubs replaced with PowerShell-based real implementations. Screenshot (System.Drawing\u2192PNG), ScreenInfo (AllScreens), Click (Cursor+user32.dll), TypeText/KeyPress/Hotkey (SendKeys), Notify (msg.exe+ToastNotificationManager). ScreenStreamStart/Stop remain stubs. Zero new deps. Cross-compile passes."
     },
     {
       "key": "darwin_platform_status",
       "value": "real",
       "note": "Phase E Commit 3: NEW platform_darwin.go implements all 25 Platform interface methods via macOS-native CLI tools (zero new deps). Screenshot (screencapture -x -t png -), ScreenInfo (system_profiler SPDisplaysDataType), Click/TypeText/KeyPress/Hotkey (osascript AppleScript + key-code map), Clipboard (pbpaste/pbcopy), OpenURL (open), Notify (osascript display notification), ProcessList (ps -axo pid,comm,pcpu,rss), ProcessKill (syscall.Kill), Exec (bash -c with cmd.Process.Kill timeout). ScreenStreamStart/Stop remain stubs (Phase F). Added explicit //go:build linux tag to platform_linux.go. Cross-compile passes for darwin/linux/windows; go vet passes for all three."
+    },
+    {
+      "key": "flow_runtime_path",
+      "value": "internal/server/flows.go (FlowManager) + flows_dispatcher.go (executor) + flows_events.go (NDJSON) + flow_templates.go (loader)",
+      "note": "Server-side flow runtime. Agent binary unchanged."
+    },
+    {
+      "key": "flow_data_dir",
+      "value": "/data/runtime/flows.json + /data/runtime/flowtemplates/ + /data/logs/flows.json.events.ndjson",
+      "note": "All three paths derived from --flows-path flag."
+    },
+    {
+      "key": "flow_serve_flag",
+      "value": "--flows-path <path>",
+      "note": "Add to docker compose CMD. Single arg; templates and events paths derived automatically."
+    },
+    {
+      "key": "flow_step_types",
+      "value": "command, wait, branch, compute_diff, classify, emit",
+      "note": "command reuses TaskManager. emit writes to NDEventStore. compute_diff is server-side via JSON unmarshal."
+    },
+    {
+      "key": "flow_template_dir",
+      "value": "internal/server/flowtemplates/*.json",
+      "note": "Ship 3 built-in: network_summary, sensitive_file_access, file_watch_summary. Drop a .json in to add."
     }
   ],
   "architecture": {
     "cmd/probe-client": {
-      "purpose": "Agent binary — CLI entry point",
-      "depends_on": ["internal/agent", "internal/protocol", "internal/platform"],
-      "key_files": ["main.go"],
-      "flags": ["--connect", "--listen", "--mode", "--token", "--name", "--max-retries", "--backoff-min", "--backoff-max", "--token-file", "--cert", "--client-cert", "--client-key", "--cert-file", "--key-file"]
+      "purpose": "Agent binary \u2014 CLI entry point",
+      "depends_on": [
+        "internal/agent",
+        "internal/protocol",
+        "internal/platform"
+      ],
+      "key_files": [
+        "main.go"
+      ],
+      "flags": [
+        "--connect",
+        "--listen",
+        "--mode",
+        "--token",
+        "--name",
+        "--max-retries",
+        "--backoff-min",
+        "--backoff-max",
+        "--token-file",
+        "--cert",
+        "--client-cert",
+        "--client-key",
+        "--cert-file",
+        "--key-file"
+      ]
     },
     "cmd/server": {
-      "purpose": "Server binary — WebSocket server + LLM proxy",
-      "depends_on": ["internal/server", "internal/protocol"],
-      "key_files": ["main.go"],
-      "flags": ["--addr", "--token", "--registry", "--rate-limit", "--rate-burst", "--max-concurrent", "--token-ttl", "--cert-file", "--key-file", "--client-ca"]
+      "purpose": "Server binary \u2014 WebSocket server + LLM proxy",
+      "depends_on": [
+        "internal/server",
+        "internal/protocol"
+      ],
+      "key_files": [
+        "main.go"
+      ],
+      "flags": [
+        "--addr",
+        "--token",
+        "--registry",
+        "--rate-limit",
+        "--rate-burst",
+        "--max-concurrent",
+        "--token-ttl",
+        "--cert-file",
+        "--key-file",
+        "--client-ca"
+      ]
     },
     "internal/protocol": {
       "purpose": "WebSocket protocol, message types, TLS",
-      "depends_on": ["gorilla/websocket"],
-      "key_files": ["messages.go", "websocket.go", "server.go", "binary.go"],
-      "types": ["Envelope", "25 command types", "9 error codes"]
+      "depends_on": [
+        "gorilla/websocket"
+      ],
+      "key_files": [
+        "messages.go",
+        "websocket.go",
+        "server.go",
+        "binary.go"
+      ],
+      "types": [
+        "Envelope",
+        "25 command types",
+        "9 error codes"
+      ]
     },
     "internal/server": {
       "purpose": "Multi-session WebSocket server, agent registry, LLM proxy",
-      "depends_on": ["internal/protocol"],
-      "key_files": ["server.go", "registry.go", "proxy.go", "session.go"]
+      "depends_on": [
+        "internal/protocol"
+      ],
+      "key_files": [
+        "server.go",
+        "registry.go",
+        "proxy.go",
+        "session.go"
+      ]
     },
     "internal/agent": {
       "purpose": "Agent loop, connection management, command dispatch",
-      "depends_on": ["internal/protocol", "internal/platform"],
-      "key_files": ["agent.go"]
+      "depends_on": [
+        "internal/protocol",
+        "internal/platform"
+      ],
+      "key_files": [
+        "agent.go"
+      ]
     },
     "internal/platform": {
       "purpose": "Platform interface + Linux/Windows/macOS implementations",
       "depends_on": [],
-      "key_files": ["platform.go", "platform_linux.go", "platform_windows.go", "platform_darwin.go"],
-      "tools": ["bash", "xdotool", "import/scrot", "xclip (Linux)", "PowerShell System.Drawing/Forms/user32.dll (Windows)", "screencapture/osascript/pbpaste/pbcopy/open/ps (macOS)"]
+      "key_files": [
+        "platform.go",
+        "platform_linux.go",
+        "platform_windows.go",
+        "platform_darwin.go"
+      ],
+      "tools": [
+        "bash",
+        "xdotool",
+        "import/scrot",
+        "xclip (Linux)",
+        "PowerShell System.Drawing/Forms/user32.dll (Windows)",
+        "screencapture/osascript/pbpaste/pbcopy/open/ps (macOS)"
+      ]
     },
     "tool": {
       "purpose": "Hermes plugin registering 5 remote tools for operative profile",
       "depends_on": [],
-      "key_files": ["plugin.py", "plugin.yaml"],
-      "tools": ["remote_agent_list", "remote_exec", "remote_fs_read", "remote_fs_write", "remote_capture"]
+      "key_files": [
+        "plugin.py",
+        "plugin.yaml"
+      ],
+      "tools": [
+        "remote_agent_list",
+        "remote_exec",
+        "remote_fs_read",
+        "remote_fs_write",
+        "remote_capture"
+      ]
     }
   },
   "gotchas": [
@@ -161,104 +267,150 @@
       "id": "HR-001",
       "rule": "Module path is github.com/falke-ai-circuit/probe",
       "detail": "The initial scaffold used 'falke-remote'. All imports must use the full GitHub path. go.mod was fixed in commit 3ab97c9.",
-      "affected": ["go.mod", "ALL *.go files"]
+      "affected": [
+        "go.mod",
+        "ALL *.go files"
+      ]
     },
     {
       "id": "HR-002",
       "rule": "Go 1.22.5 is not a system package",
       "detail": "Installed at /opt/data/go/bin/go from go.dev. Must export PATH=/opt/data/go/bin:$PATH before building. System Go (if installed) may be older.",
-      "affected": ["Makefile", "build process"]
+      "affected": [
+        "Makefile",
+        "build process"
+      ]
     },
     {
       "id": "HR-003",
       "rule": "gorilla/websocket is the only external dependency",
       "detail": "Zero other dependencies. The binary should stay minimal. Add new deps only with explicit justification in PR description.",
-      "affected": ["go.mod", "go.sum"]
+      "affected": [
+        "go.mod",
+        "go.sum"
+      ]
     },
     {
       "id": "HR-004",
       "rule": "Agent connect URL must include /ws path",
       "detail": "Fixed in commit dc02281. If the user provides a URL without /ws (e.g., wss://host:7700), the agent appends /ws automatically. The server's WebSocket upgrade handler is at /ws.",
-      "affected": ["cmd/probe-client/main.go", "internal/agent/agent.go"]
+      "affected": [
+        "cmd/probe-client/main.go",
+        "internal/agent/agent.go"
+      ]
     },
     {
       "id": "HR-005",
       "rule": "TLS cert fingerprint verification",
       "detail": "The agent verifies the server's TLS certificate fingerprint on first connect. For testing, use --insecure flag to skip verification. Production should use proper CA-signed certs.",
-      "affected": ["internal/protocol/websocket.go"]
+      "affected": [
+        "internal/protocol/websocket.go"
+      ]
     },
     {
       "id": "HR-006",
       "rule": "Platform tools must be installed on target",
       "detail": "Linux: xdotool (click/type/key), import or scrot (screenshot), xclip (clipboard). macOS: osascript (screenshot), pbcopy/pbpaste (clipboard). Windows: PowerShell, .NET screen capture. Missing tools cause command timeouts, not clear errors.",
-      "affected": ["internal/platform/platform_linux.go"]
+      "affected": [
+        "internal/platform/platform_linux.go"
+      ]
     },
     {
       "id": "HR-007",
       "rule": "Screenshot requires DISPLAY env + Xvfb on headless hosts",
       "detail": "import/scrot need DISPLAY set and an X server running. On headless hosts (Kali container, CI), start Xvfb first: `Xvfb :1 -screen 0 1024x768x24 &`. Server must pass os.Environ() to screenshot commands. Fixed in b25a852.",
-      "affected": ["internal/server/server.go", "deployment"]
+      "affected": [
+        "internal/server/server.go",
+        "deployment"
+      ]
     },
     {
       "id": "HR-008",
       "rule": "Server --addr flag must be wired in main.go",
       "detail": "The server binary's main.go must use flag.String for --addr, --token, --registry with env var fallback. Without this, --addr is silently ignored and server always binds localhost:7700. Fixed in b25a852.",
-      "affected": ["cmd/server/main.go"]
+      "affected": [
+        "cmd/server/main.go"
+      ]
     },
     {
       "id": "HR-009",
       "rule": "import defaults to PostScript when piping to stdout",
       "detail": "ImageMagick's `import -window root -` produces PostScript by default. Use `import -window root png:-` to force PNG output. Fixed in b25a852.",
-      "affected": ["internal/server/server.go"]
+      "affected": [
+        "internal/server/server.go"
+      ]
     },
     {
       "id": "HR-010",
       "rule": "Platform files are constrained by BOTH filename suffix AND build tag",
       "detail": "platform_linux.go / platform_windows.go / platform_darwin.go are automatically GOOS-restricted by their _linux/_windows/_darwin filename suffixes. Phase E Commit 3 added explicit //go:build linux tag to platform_linux.go as belt-and-suspenders (the other two already had tags). Each GOOS picks up exactly platform.go + its platform_<os>.go file, which defines the New() factory. Without the correct file for a target GOOS, the agent package fails with 'undefined: platform.New'.",
-      "affected": ["internal/platform/platform_linux.go", "internal/platform/platform_windows.go", "internal/platform/platform_darwin.go"]
+      "affected": [
+        "internal/platform/platform_linux.go",
+        "internal/platform/platform_windows.go",
+        "internal/platform/platform_darwin.go"
+      ]
     },
     {
       "id": "HR-011",
       "rule": "macOS ProcessList parses ps -axo from the end (comm contains spaces)",
-      "detail": "macOS `ps -axo pid,comm,pcpu,rss` — the comm column can contain spaces (e.g. '/path to/app'), so platform_darwin.go parses fields from the end: last field is rss (KB→MB), second-to-last is pcpu (float), field[0] is pid, and the middle is the joined name. Do not naively Sscanf the whole line.",
-      "affected": ["internal/platform/platform_darwin.go"]
+      "detail": "macOS `ps -axo pid,comm,pcpu,rss` \u2014 the comm column can contain spaces (e.g. '/path to/app'), so platform_darwin.go parses fields from the end: last field is rss (KB\u2192MB), second-to-last is pcpu (float), field[0] is pid, and the middle is the joined name. Do not naively Sscanf the whole line.",
+      "affected": [
+        "internal/platform/platform_darwin.go"
+      ]
     },
     {
       "id": "HR-012",
       "rule": "LLMProxy.Call signature changed to Call(agentID, prompt) in Phase E Commit 4",
       "detail": "Phase E Commit 4 added per-agent rate limiting. LLMProxy.Call now takes agentID as its first argument for per-agent token-bucket limiting. Any caller still using the old Call(prompt) signature will fail to compile. NewLLMProxy() still works unchanged (it creates a default RateLimiter). Use NewServerWithRateLimit(addr, token, registry, RateLimitConfig) to configure limits from CLI flags; NewServer(addr, token, registry) uses proxy defaults (10 req/s, burst 20, max 5 concurrent).",
-      "affected": ["internal/server/proxy.go", "internal/server/server.go", "cmd/server/main.go"]
+      "affected": [
+        "internal/server/proxy.go",
+        "internal/server/server.go",
+        "cmd/server/main.go"
+      ]
     },
     {
       "id": "HR-013",
       "rule": "AgentRecord has unexported time.Time fields excluded from JSON serialization",
-      "detail": "Phase E Commit 5 extended AgentRecord with internal connectedAt time.Time and lastHeartbeat time.Time fields (json:\"-\"-style via unexported fields). These are NOT serialized to JSON; they are reconstructed from the exported string fields (ConnectedAt, LastHeartbeat, both RFC3339) in Registry.load(). Any code that constructs an AgentRecord literal without setting connectedAt/lastHeartbeat will have zero-time internal fields, so computeHealthScore and ListAgents' uptime computation will return 0 — always use Registry.Register/Heartbeat/UpdateHealth which set both the string and internal fields together. The /api/agent/{id}/health endpoint and ListAgents recompute UptimeSeconds + HealthScore on read from these internal fields.",
-      "affected": ["internal/server/registry.go", "internal/server/server.go"]
+      "detail": "Phase E Commit 5 extended AgentRecord with internal connectedAt time.Time and lastHeartbeat time.Time fields (json:\"-\"-style via unexported fields). These are NOT serialized to JSON; they are reconstructed from the exported string fields (ConnectedAt, LastHeartbeat, both RFC3339) in Registry.load(). Any code that constructs an AgentRecord literal without setting connectedAt/lastHeartbeat will have zero-time internal fields, so computeHealthScore and ListAgents' uptime computation will return 0 \u2014 always use Registry.Register/Heartbeat/UpdateHealth which set both the string and internal fields together. The /api/agent/{id}/health endpoint and ListAgents recompute UptimeSeconds + HealthScore on read from these internal fields.",
+      "affected": [
+        "internal/server/registry.go",
+        "internal/server/server.go"
+      ]
     },
     {
       "id": "HR-014",
       "rule": "Stale-detector goroutine is started in NewServer and must be stopped via Registry.Stop()",
       "detail": "Phase E Commit 5 adds a background goroutine in Registry.runStaleDetector() that scans every 30s (staleCheckInterval) for agents with LastHeartbeat > 90s old (staleThreshold) and marks them 'stale'. It is started automatically by NewServer via reg.StartStaleDetector(). To avoid a goroutine leak, Server.Close() calls s.registry.Stop() which closes stopCh (idempotent via sync.Once). Any code that constructs a Registry directly (outside NewServer) and wants stale detection must call StartStaleDetector() explicitly; Stop() is safe to call even if StartStaleDetector was never called.",
-      "affected": ["internal/server/registry.go", "internal/server/server.go"]
+      "affected": [
+        "internal/server/registry.go",
+        "internal/server/server.go"
+      ]
     },
     {
       "id": "HR-015",
       "rule": "protocol.Dial/Listen/NewServer signatures changed in Phase E Commit 7 (mTLS)",
-      "detail": "Phase E Commit 7 added TLS mutual authentication. The signatures are now: protocol.Dial(rawURL, certPath, clientCertFile, clientKeyFile, token) — the two new params (clientCertFile, clientKeyFile) sit BETWEEN certPath and token. protocol.Listen(addr, certFile, keyFile, clientCAFile) — new trailing param. protocol.NewServer(addr, certFile, keyFile, clientCAFile) — new trailing param. Any caller using the old 3-arg Dial, 3-arg Listen, or 3-arg NewServer will fail to compile with 'not enough arguments'. The only callers in-tree (agent.runOutbound, agent.runInbound) were updated in the same commit. Server.StartTLS(certFile, keyFile) signature is UNCHANGED (the params are now optional overrides of the stored certFile/keyFile; pass empty strings to use the stored values from NewServerWithTLS). For mTLS the server uses NewServerWithTLS(addr, token, registry, certFile, keyFile, clientCAFile) + StartTLS(\"\",\"\"). When no cert/key is provided the server and agent behave exactly as before (plain HTTP / wss with InsecureSkipVerify).",
-      "affected": ["internal/protocol/websocket.go", "internal/protocol/server.go", "internal/agent/agent.go", "internal/server/server.go"]
+      "detail": "Phase E Commit 7 added TLS mutual authentication. The signatures are now: protocol.Dial(rawURL, certPath, clientCertFile, clientKeyFile, token) \u2014 the two new params (clientCertFile, clientKeyFile) sit BETWEEN certPath and token. protocol.Listen(addr, certFile, keyFile, clientCAFile) \u2014 new trailing param. protocol.NewServer(addr, certFile, keyFile, clientCAFile) \u2014 new trailing param. Any caller using the old 3-arg Dial, 3-arg Listen, or 3-arg NewServer will fail to compile with 'not enough arguments'. The only callers in-tree (agent.runOutbound, agent.runInbound) were updated in the same commit. Server.StartTLS(certFile, keyFile) signature is UNCHANGED (the params are now optional overrides of the stored certFile/keyFile; pass empty strings to use the stored values from NewServerWithTLS). For mTLS the server uses NewServerWithTLS(addr, token, registry, certFile, keyFile, clientCAFile) + StartTLS(\"\",\"\"). When no cert/key is provided the server and agent behave exactly as before (plain HTTP / wss with InsecureSkipVerify).",
+      "affected": [
+        "internal/protocol/websocket.go",
+        "internal/protocol/server.go",
+        "internal/agent/agent.go",
+        "internal/server/server.go"
+      ]
     },
     {
       "id": "HR-016",
       "rule": "GenerateSelfSignedCert was removed in Phase E Commit 7 (dead code)",
       "detail": "protocol.GenerateSelfSignedCert (a function containing a hardcoded PEM certificate block and a redacted private key placeholder) was removed in Phase E Commit 7. It was never called anywhere in the codebase and the hardcoded PEM was not a valid usable certificate. Do not re-add it; use a real CA-signed cert or generate one with `openssl req -x509` / `cfssl` for testing. The protocol/server.go file no longer imports 'os' (the only user of os was the removed function).",
-      "affected": ["internal/protocol/server.go"]
+      "affected": [
+        "internal/protocol/server.go"
+      ]
     }
   ],
   "recent_changes": [
     {
-      "version": "v0.1.0-a0",
+      "version": "v1.13.0",
       "date": "2026-06-16",
-      "summary": "Phase E Commit 7 (FINAL): TLS Mutual Authentication (mTLS). protocol.Dial signature now Dial(rawURL, certPath, clientCertFile, clientKeyFile, token) — loads client cert via tls.LoadX509KeyPair into TLSClientConfig.Certificates for mTLS. protocol.Listen signature now Listen(addr, certFile, keyFile, clientCAFile) — when clientCAFile non-empty, loads CA into x509.CertPool, sets ClientAuth=RequireAndVerifyClientCert + ClientCAs. protocol.NewServer signature now NewServer(addr, certFile, keyFile, clientCAFile); ListenAndServe serves plain HTTP when no cert/key, TLS+mTLS otherwise. Removed dead GenerateSelfSignedCert (hardcoded PEM, never called). internal/server: Server gains certFile/keyFile/clientCAFile fields; NEW NewServerWithTLS(addr,token,registry,certFile,keyFile,clientCAFile) + NewServerWithTLSRateLimit(...+RateLimitConfig); StartTLS builds tls.Config with RequireAndVerifyClientCert+ClientCAs when clientCAFile set (logs TLS+mTLS vs TLS). agent.Config gains ClientCertFile/ClientKeyFile; runOutbound passes to Dial. CLI: server --cert-file/--key-file/--client-ca (TLS+mTLS when all provided); agent --client-cert/--client-key (mTLS outbound) + --cert (CA verify) + --cert-file/--key-file (inbound certs). Backward compatible (StartTLS params now optional overrides; no flags removed; plain HTTP when no cert). Zero new deps (crypto/tls, crypto/x509 stdlib). Build+vet+tests pass (6/6); cross-compile clean all 6 targets. Added gotchas HR-015, HR-016.",
+      "summary": "Phase E Commit 7 (FINAL): TLS Mutual Authentication (mTLS). protocol.Dial signature now Dial(rawURL, certPath, clientCertFile, clientKeyFile, token) \u2014 loads client cert via tls.LoadX509KeyPair into TLSClientConfig.Certificates for mTLS. protocol.Listen signature now Listen(addr, certFile, keyFile, clientCAFile) \u2014 when clientCAFile non-empty, loads CA into x509.CertPool, sets ClientAuth=RequireAndVerifyClientCert + ClientCAs. protocol.NewServer signature now NewServer(addr, certFile, keyFile, clientCAFile); ListenAndServe serves plain HTTP when no cert/key, TLS+mTLS otherwise. Removed dead GenerateSelfSignedCert (hardcoded PEM, never called). internal/server: Server gains certFile/keyFile/clientCAFile fields; NEW NewServerWithTLS(addr,token,registry,certFile,keyFile,clientCAFile) + NewServerWithTLSRateLimit(...+RateLimitConfig); StartTLS builds tls.Config with RequireAndVerifyClientCert+ClientCAs when clientCAFile set (logs TLS+mTLS vs TLS). agent.Config gains ClientCertFile/ClientKeyFile; runOutbound passes to Dial. CLI: server --cert-file/--key-file/--client-ca (TLS+mTLS when all provided); agent --client-cert/--client-key (mTLS outbound) + --cert (CA verify) + --cert-file/--key-file (inbound certs). Backward compatible (StartTLS params now optional overrides; no flags removed; plain HTTP when no cert). Zero new deps (crypto/tls, crypto/x509 stdlib). Build+vet+tests pass (6/6); cross-compile clean all 6 targets. Added gotchas HR-015, HR-016.",
       "files": [
         "internal/protocol/websocket.go",
         "internal/protocol/server.go",
@@ -273,9 +425,9 @@
       ]
     },
     {
-      "version": "v0.1.0-a0",
+      "version": "v1.13.0",
       "date": "2026-06-16",
-      "summary": "Phase E Commit 6: Token Rotation — server-side token rotation (Server gains tokenTTL, tokenExpiry map, tokenStop channel, tokenWG). NEW InitiateTokenRotation(agentID, newToken) sends TypeTokenRotate with TokenRotateParams{NewToken, Expiry}. NEW proactive rotation goroutine (runTokenRotation) scans every 60s, rotates within 5min of expiry. NEW SetTokenTTL/SetTokenExpiry/ClearTokenExpiry + generateToken() (crypto/rand→hex). NEW TypeTokenRefresh message (agent→server proactive refresh). TokenRotateParams gains optional Expiry; NEW TokenRotateResult{Rotated,NewToken}. Agent handleTokenRotate updates cfg.Token+tokenExpiry, persists to TokenFile (0600). Agent proactive refresh ticker (60s). NEW LoadPersistedToken(path). CLI: --token-ttl (server, 24h), --token-file (agent). Zero new deps. Build+vet+tests+cross-compile pass.",
+      "summary": "Phase E Commit 6: Token Rotation \u2014 server-side token rotation (Server gains tokenTTL, tokenExpiry map, tokenStop channel, tokenWG). NEW InitiateTokenRotation(agentID, newToken) sends TypeTokenRotate with TokenRotateParams{NewToken, Expiry}. NEW proactive rotation goroutine (runTokenRotation) scans every 60s, rotates within 5min of expiry. NEW SetTokenTTL/SetTokenExpiry/ClearTokenExpiry + generateToken() (crypto/rand\u2192hex). NEW TypeTokenRefresh message (agent\u2192server proactive refresh). TokenRotateParams gains optional Expiry; NEW TokenRotateResult{Rotated,NewToken}. Agent handleTokenRotate updates cfg.Token+tokenExpiry, persists to TokenFile (0600). Agent proactive refresh ticker (60s). NEW LoadPersistedToken(path). CLI: --token-ttl (server, 24h), --token-file (agent). Zero new deps. Build+vet+tests+cross-compile pass.",
       "files": [
         "internal/server/server.go",
         "internal/protocol/messages.go",
@@ -288,9 +440,9 @@
       ]
     },
     {
-      "version": "v0.1.0-a0",
+      "version": "v1.13.0",
       "date": "2026-06-16",
-      "summary": "Phase E Commit 5: Health Monitoring — extended AgentRecord with UptimeSeconds/LastError/ErrorCount/HealthScore/ResourceUsage + internal non-serialized time.Time fields. NEW ResourceInfo struct (CPUPercent/MemoryMB/DiskFreeMB). Health score formula (0.0-1.0): heartbeat recency (0.0-0.4) + error count (0.0-0.3) + uptime stability (0.0-0.3). NEW Registry methods: RecordError, UpdateHealth, GetHealth, StartStaleDetector (idempotent), Stop (idempotent via stopCh+sync.Once). Stale detector goroutine scans every 30s, marks heartbeat > 90s as 'stale'; started in NewServer, stopped in Close (no leak). NEW GET /api/agent/{id}/health endpoint (404 for unknown). Enhanced /health returns {status,total_agents,active_agents,stale_agents,uptime_seconds}. Error recording wired into handleMessages (TypeError→RecordError, TypeHealthResult→UpdateHealth with ResourceInfo). protocol.HealthResult extended with optional resource fields. Zero new deps. Build+vet+tests pass. Added gotchas HR-013, HR-014.",
+      "summary": "Phase E Commit 5: Health Monitoring \u2014 extended AgentRecord with UptimeSeconds/LastError/ErrorCount/HealthScore/ResourceUsage + internal non-serialized time.Time fields. NEW ResourceInfo struct (CPUPercent/MemoryMB/DiskFreeMB). Health score formula (0.0-1.0): heartbeat recency (0.0-0.4) + error count (0.0-0.3) + uptime stability (0.0-0.3). NEW Registry methods: RecordError, UpdateHealth, GetHealth, StartStaleDetector (idempotent), Stop (idempotent via stopCh+sync.Once). Stale detector goroutine scans every 30s, marks heartbeat > 90s as 'stale'; started in NewServer, stopped in Close (no leak). NEW GET /api/agent/{id}/health endpoint (404 for unknown). Enhanced /health returns {status,total_agents,active_agents,stale_agents,uptime_seconds}. Error recording wired into handleMessages (TypeError\u2192RecordError, TypeHealthResult\u2192UpdateHealth with ResourceInfo). protocol.HealthResult extended with optional resource fields. Zero new deps. Build+vet+tests pass. Added gotchas HR-013, HR-014.",
       "files": [
         "internal/server/registry.go",
         "internal/server/server.go",
@@ -302,9 +454,9 @@
       ]
     },
     {
-      "version": "v0.1.0-a0",
+      "version": "v1.13.0",
       "date": "2026-06-16",
-      "summary": "Phase E Commit 4: Rate Limiting — per-agent token-bucket rate limiter on the LLM proxy (stdlib sync+time only, zero new deps). RateLimiter struct with per-agent tokenBucket map, Allow(agentID)/Release(), configurable rate/burst/maxConcurrent (defaults 10 req/s, burst 20, max 5 concurrent). LLMProxy.Call signature changed to Call(agentID, prompt); returns 'rate_limited' provider marker when denied. SetRateLimiter() overrides defaults. Server gains rateLimit field + exported RateLimitConfig + NewServerWithRateLimit constructor. CLI flags: --rate-limit (10), --rate-burst (20), --max-concurrent (5). 6 unit tests in internal/server/proxy_test.go all pass. Build + vet + cross-compile (darwin/linux/windows × amd64/arm64) all exit 0.",
+      "summary": "Phase E Commit 4: Rate Limiting \u2014 per-agent token-bucket rate limiter on the LLM proxy (stdlib sync+time only, zero new deps). RateLimiter struct with per-agent tokenBucket map, Allow(agentID)/Release(), configurable rate/burst/maxConcurrent (defaults 10 req/s, burst 20, max 5 concurrent). LLMProxy.Call signature changed to Call(agentID, prompt); returns 'rate_limited' provider marker when denied. SetRateLimiter() overrides defaults. Server gains rateLimit field + exported RateLimitConfig + NewServerWithRateLimit constructor. CLI flags: --rate-limit (10), --rate-burst (20), --max-concurrent (5). 6 unit tests in internal/server/proxy_test.go all pass. Build + vet + cross-compile (darwin/linux/windows \u00d7 amd64/arm64) all exit 0.",
       "files": [
         "internal/server/proxy.go",
         "internal/server/proxy_test.go",
@@ -317,9 +469,9 @@
       ]
     },
     {
-      "version": "v0.1.0-a0",
+      "version": "v1.13.0",
       "date": "2026-06-16",
-      "summary": "Phase E Commit 3: macOS Real Implementation — NEW platform_darwin.go implements all 25 Platform interface methods via macOS-native CLI tools (zero new deps). Screenshot (screencapture -x -t png -), ScreenInfo (system_profiler), Click/TypeText/KeyPress/Hotkey (osascript AppleScript + key-code map), Clipboard (pbpaste/pbcopy), OpenURL (open), Notify (osascript display notification), ProcessList (ps -axo, parse-from-end for spaces in comm), ProcessKill (syscall.Kill), Exec (bash -c, cmd.Process.Kill timeout). ScreenStreamStart/Stop kept as stubs (Phase F). Added explicit //go:build linux tag to platform_linux.go. Cross-compile + vet pass for darwin/linux/windows. Added gotchas HR-010, HR-011.",
+      "summary": "Phase E Commit 3: macOS Real Implementation \u2014 NEW platform_darwin.go implements all 25 Platform interface methods via macOS-native CLI tools (zero new deps). Screenshot (screencapture -x -t png -), ScreenInfo (system_profiler), Click/TypeText/KeyPress/Hotkey (osascript AppleScript + key-code map), Clipboard (pbpaste/pbcopy), OpenURL (open), Notify (osascript display notification), ProcessList (ps -axo, parse-from-end for spaces in comm), ProcessKill (syscall.Kill), Exec (bash -c, cmd.Process.Kill timeout). ScreenStreamStart/Stop kept as stubs (Phase F). Added explicit //go:build linux tag to platform_linux.go. Cross-compile + vet pass for darwin/linux/windows. Added gotchas HR-010, HR-011.",
       "files": [
         "internal/platform/platform_darwin.go",
         "internal/platform/platform_linux.go",
@@ -330,9 +482,9 @@
       ]
     },
     {
-      "version": "v0.1.0-a0",
+      "version": "v1.13.0",
       "date": "2026-06-16",
-      "summary": "Phase E Commit 2: Windows Real Implementation — replaced 6 stubs in platform_windows.go with PowerShell-based real implementations. Screenshot (System.Drawing→PNG), ScreenInfo (AllScreens parsing), Click (Cursor+user32.dll), TypeText/KeyPress/Hotkey (SendKeys), Notify (msg.exe+ToastNotificationManager). ScreenStreamStart/Stop kept as stubs. Added strconv/strings imports. Zero new deps. Cross-compile and vet pass cleanly.",
+      "summary": "Phase E Commit 2: Windows Real Implementation \u2014 replaced 6 stubs in platform_windows.go with PowerShell-based real implementations. Screenshot (System.Drawing\u2192PNG), ScreenInfo (AllScreens parsing), Click (Cursor+user32.dll), TypeText/KeyPress/Hotkey (SendKeys), Notify (msg.exe+ToastNotificationManager). ScreenStreamStart/Stop kept as stubs. Added strconv/strings imports. Zero new deps. Cross-compile and vet pass cleanly.",
       "files": [
         "internal/platform/platform_windows.go",
         "CHANGELOG.md",
@@ -342,9 +494,9 @@
       ]
     },
     {
-      "version": "v0.1.0-a0",
+      "version": "v1.13.0",
       "date": "2026-06-16",
-      "summary": "Phase E Commit 1: Reconnect Hardening — replaced fixed 5s backoff with exponential backoff + jitter. Added Config fields (MaxRetries, BackoffMin, BackoffMax), computeBackoff() method, CLI flags (--max-retries, --backoff-min, --backoff-max). Build and vet pass cleanly.",
+      "summary": "Phase E Commit 1: Reconnect Hardening \u2014 replaced fixed 5s backoff with exponential backoff + jitter. Added Config fields (MaxRetries, BackoffMin, BackoffMax), computeBackoff() method, CLI flags (--max-retries, --backoff-min, --backoff-max). Build and vet pass cleanly.",
       "files": [
         "internal/agent/agent.go",
         "cmd/probe-client/main.go",
@@ -355,9 +507,9 @@
       ]
     },
     {
-      "version": "v0.1.0-a0",
+      "version": "v1.13.0",
       "date": "2026-06-16",
-      "summary": "Phase D complete: Kali Linux integration test — 7/7 endpoints PASS. 3 bugs found and fixed (screenshot env, process-list route, --addr flag). 4 gotchas added (HR-007–HR-009). Windows binaries cross-compiled. CODER.md rule #6 doc-update obligation encoded.",
+      "summary": "Phase D complete: Kali Linux integration test \u2014 7/7 endpoints PASS. 3 bugs found and fixed (screenshot env, process-list route, --addr flag). 4 gotchas added (HR-007\u2013HR-009). Windows binaries cross-compiled. CODER.md rule #6 doc-update obligation encoded.",
       "files": [
         "internal/server/server.go",
         "cmd/server/main.go",
@@ -370,7 +522,7 @@
       ]
     },
     {
-      "version": "v0.1.0-a0",
+      "version": "v1.13.0",
       "date": "2026-06-14",
       "summary": "8 bugs fixed across 6 files. Go agent connects + all 4 endpoints verified. Plugin registers 5 remote_* tools. Ready for Phase D (integration test on remote host).",
       "files": [
@@ -383,11 +535,11 @@
       ]
     },
     {
-      "version": "v0.1.0-a0",
+      "version": "v1.13.0",
       "date": "2026-06-13",
-      "summary": "Initial scaffold — protocol, server, agent, platform, CLI, plugin. Builds and vets cleanly.",
+      "summary": "Initial scaffold \u2014 protocol, server, agent, platform, CLI, plugin. Builds and vets cleanly.",
       "files": [
-        "ALL files — initial commit"
+        "ALL files \u2014 initial commit"
       ]
     }
   ]

@@ -3,6 +3,69 @@
 All notable changes to PROBE are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [Semantic Versioning](https://semver.org/).
 
+## [v1.13.0] — 2026-08-08
+
+### Added — Flow Runtime (Part A)
+
+#### Flow Manager + Dispatcher
+- **`internal/server/flows.go`** — `FlowManager` with `Flow`, `FlowStep`, `FlowRun`, `FlowTrigger`, `ClassifyRule` types. CRUD: `Create/Get/List/Update/Delete/Enable/Disable/RunNow/Assign/Unassign`. Persistent JSON storage. Per-agent flow queries.
+- **`internal/server/flows_dispatcher.go`** — `FlowDispatcher` with step DAG execution. Step types: `command` (reuses TaskManager + forwardToAgent), `wait` (ctx-aware), `branch` (==, !=, contains, starts_with), `compute_diff` (recursive maps + slices), `classify` (glob rules), `emit` (writes survey event). Cycle detection, `on_error: continue` support, timeout via context.
+- **`internal/server/flows_events.go`** — `NDEventStore`: NDJSON append-only event log. Single writer goroutine, drop-on-overflow buffer, query with filter.
+- **`internal/server/flow_templates.go`** — `TemplateManager` loads JSON templates from `flowtemplates/` directory. `List/Get/Instantiate` operations.
+
+#### Flow REST API
+- `GET /api/v1/flows` — list all flows
+- `POST /api/v1/flows` — create flow
+- `GET /api/v1/flows/{id}` — get flow by ID
+- `PUT /api/v1/flows/{id}` — update flow
+- `DELETE /api/v1/flows/{id}` — delete flow
+- `POST /api/v1/flows/{id}/enable` — enable flow
+- `POST /api/v1/flows/{id}/disable` — disable flow
+- `POST /api/v1/flows/{id}/run-now` — create + dispatch FlowRun immediately
+- `POST /api/v1/flows/{id}/assign` — assign flow to agent
+- `POST /api/v1/flows/{id}/unassign` — remove agent assignment
+- `GET /api/v1/flow-runs` — list runs (filter by `flow_id`)
+- `GET /api/v1/flow-runs/{id}` — get run
+- `GET /api/v1/agents/{id}/flows` — flows assigned to agent
+- `GET /api/v1/agents/{id}/survey` — survey events for agent
+- `GET /api/v1/flow-templates` — list available templates
+- `POST /api/v1/flows/from-template` — instantiate flow from template
+
+#### Built-in Flow Templates
+- **`network_summary`** — periodic snapshot of host's network connections (NetConnections command, recurring 5min default)
+- **`sensitive_file_access`** — scan user profile dirs for keys/credentials/wallets (file_search, recurring 5min)
+- **`file_watch_summary`** — hourly file inventory via fs_list + sysinfo
+
+#### Audit Extension
+- `AuditEntry` now has `flow_id`, `step_id`, `event_type` first-class fields
+- `AuditLogger.LogFlow(flowID, stepID, eventType, action, agentID, operatorID, extra)` wrapper
+
+#### Frontend
+- `web/src/pages/Flows.tsx` — full CRUD page with templates, runs table, enable/disable, run-now, agent assignment
+- `web/src/components/agent/SurveyTab.tsx` — per-agent survey events timeline with filter + auto-refresh
+- `web/src/pages/AgentDetail.tsx` — new "Survey" tab
+- `web/src/components/Sidebar.tsx` — Flows nav item
+- `web/src/api/client.ts` + `web/src/api/types.ts` — flow API client + types
+
+#### Server Wiring
+- `cmd/probe/serve.go` — `--flows-path` flag, calls `srv.SetFlowsPath()` at startup
+- `internal/server/server.go` — `SetFlowsPath` initializes FlowManager, FlowDispatcher, NDEventStore, TemplateManager
+
+### Changed
+- **Version bump** — `appVersion` and `Version` consts now `v1.13.0` / `1.13.0`
+- **build process** — frontend must be rebuilt (`npm run build`) before `go build` for embedded UI to include new pages
+
+### Tests
+- 15 FlowManager unit tests (CRUD, persistence, concurrency, validation)
+- 17 FlowDispatcher unit tests (step types, cycle detection, context cancel, on_error: continue)
+- 13 FlowAPI integration tests via `httptest.NewServer` (login, list, create, get, update, delete, enable/disable, run-now, assign/unassign, full roundtrip, unauthorized, invalid JSON, validation)
+- Full server suite passes with `-race`
+
+### Backward Compatibility
+- v1.12.1 agents (e.g., gorproxmox) connect to v1.13.0 server without changes — verified live on OVH
+- New server routes are additive; old server + new agent = same behavior (unknown types ignored)
+- `operator_id` in audit log uses `op-` prefix (was raw)
+
 ## [v1.9.4] — 2026-07-28
 
 ### Fixed — Tunnel WebUI + Buffer Performance

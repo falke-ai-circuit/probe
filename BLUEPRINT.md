@@ -170,3 +170,99 @@ Plugin deployed to operative profile
 Evolution entry in orchestrator evolution.jsonl
 CLOSURE_REQUEST sent to FalkeCondBot
 ```
+
+
+---
+
+## Flow Runtime Design (v1.13.0)
+
+**Author:** Architect
+**Date:** 2026-08-08
+**Status:** IMPLEMENTED — Part A complete, deployed to OVH, verified end-to-end.
+
+### Goals
+
+1. **Server-side workflow orchestration** — flows are defined, stored, and executed by the server, not the agent. The agent remains a stateless command executor.
+2. **Reuse existing commands** — flows call existing agent commands (NetConnections, FileSearch, Sysinfo, …) via the existing `forwardToAgent` path. No new agent-side code for the common case.
+3. **Reuse existing scheduler** — the server's `TaskManager` already runs recurring commands. Flows piggyback on it for the `command` step type; the dispatcher just calls `TaskManager.Create` internally for any `command` step.
+4. **Decoupled from agent lifecycle** — flows can target any connected agent, queued and dispatched when the agent comes online. No agent-side state for the framework.
+5. **Operator-first** — every flow has an operator ID at creation time. Every action (create, update, enable, run-now, assign) is written to the audit log.
+
+### Architecture
+
+```
+┌──────────────────┐
+│  REST API        │  /api/v1/flows, /api/v1/flow-runs, /api/v1/flow-templates,
+│  (api_v1.go)     │  /api/v1/agents/{id}/flows, /api/v1/agents/{id}/survey
+└────────┬─────────┘
+         │
+┌────────▼─────────┐    ┌──────────────────┐
+│  FlowManager     │◄──►│  TemplateManager │  loads flowtemplates/*.json
+│  (flows.go)      │    │  (flow_templates.go)│
+│  CRUD + persist  │    └──────────────────┘
+└────────┬─────────┘
+         │            ┌──────────────────┐
+┌────────▼─────────┐   │  NDEventStore     │  append-only NDJSON
+│  FlowDispatcher  │──►│  (flows_events.go)│  single writer goroutine
+│  (flows_dispatcher.go)│└──────────────────┘  drop-on-overflow
+└────────┬─────────┘
+         │ uses
+┌────────▼─────────┐
+│  TaskManager     │  already in the codebase; dispatcher.Create + await
+│  (existing)     │
+└──────────────────┘
+```
+
+### Step types and their semantics
+
+| Step | Code path | State mutation | Notes |
+|---|---|---|---|
+| `command` | `forwardToAgent(agentID, type, params)` | stores result under `as` / `store_as` | Reuses TaskManager. Returns the result of the command. If agent is offline, run stays `pending` until reconnect. |
+| `wait` | `time.After(seconds)` with `ctx.Done()` select | none | Cancellable via flow context (5-min default timeout). |
+| `branch` | `evalCondition("{{state.x}} == value")` | none | Supports `==`, `!=`, `contains`, `starts_with`. Returns next step ID. |
+| `compute_diff` | `computeDiff(left, right)` via JSON unmarshal | stores diff under `diff_as` | Recursive for maps and slices; returns `{added, removed, changed}` for scalars. |
+| `classify` | `globToRegex(rule.If).MatchString(input)` | stores `{input, label}` under `classify_as` | First matching rule wins. Empty label if no match. |
+| `emit` | `flowEvents.Append(&FlowEvent{...})` | none | Writes to NDJSON. Non-blocking; drops on full buffer. |
+
+### Flow definition schema (JSON)
+
+```json
+{
+  "name": "network_summary",
+  "description": "Periodic snapshot of network connections",
+  "trigger": { "type": "recurring", "interval_seconds": 300 },
+  "steps": [
+    { "id": "s1", "type": "command", "command_type": "net_connections", "store_as": "snapshot" },
+    { "id": "s2", "type": "compute_diff", "left": "baseline", "right": "snapshot", "diff_as": "delta" },
+    { "id": "s3", "type": "emit", "signal": "network_summary", "payload": "{{state.snapshot}}" }
+  ]
+}
+```
+
+State is a `map[string]json.RawMessage`. Steps reference prior step results by the key they were stored under.
+
+### Server integration
+
+- `cmd/probe/serve.go` parses `--flows-path` and calls `srv.SetFlowsPath()`.
+- `internal/server/server.go: SetFlowsPath` initializes FlowManager, FlowDispatcher, NDEventStore, TemplateManager in one shot.
+- `api_v1.go: registerV1Routes` adds 15 new flow routes (CRUD + templates + survey).
+
+### What was deliberately NOT done
+
+- **No agent-side state** for the flow framework. All state lives on the server.
+- **No per-flow worker pool**. One goroutine per active run, cancelled when done or on 5-min timeout.
+- **No FalkorDB graph queries** for flow state — that's deferred. NDJSON is enough for v1.13.0.
+- **No real-time push** of survey events. Frontend polls every 5s. WebSocket push is on the roadmap.
+- **No flow versioning** — flows are mutable. Use git for history.
+
+### Open questions
+
+- **Q1:** Should flow runs be retried on transient failure? (Currently: no. Run status is `failed` after one try.)
+- **Q2:** Should `flow.from_template` audit-log the template name? (Yes, currently it does.)
+- **Q3:** Survey event retention? (Currently: unbounded. Plan: logrotate config + `--flows-store-max-size` flag.)
+
+### Compatibility
+
+- v1.12.x agents (e.g., gorproxmox) connect to v1.13.0 server without changes.
+- v1.13.0 server treats unknown message types from old agents as `ErrUnknownCommand` (existing behavior).
+- Frontend can be rolled back to v1.12.0 builds; new routes return 404 gracefully.

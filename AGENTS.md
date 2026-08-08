@@ -49,3 +49,22 @@ See `.github/agents/` for per-agent task templates:
 - `CODER.md` — Implementation
 - `REVIEWER.md` — Quality gate
 - `OPERATIVE.md` — Deployment + troubleshooting
+
+
+## Flows (v1.13.0+)
+
+PROBE has a server-side flow runtime. When working with flow code:
+
+- **Where it lives**: `internal/server/flows*.go`. NOT `internal/sensors/` (that was an early design name that was rejected).
+- **The dispatcher uses TaskManager** for `command` steps. Don't write a parallel scheduler.
+- **NDJSON event store** is a single writer goroutine. Don't bypass with direct file writes.
+- **Templates are loaded at startup** from `internal/server/flowtemplates/`. To add a template: drop a JSON file and restart the server.
+- **Server-flow integration test**: a flow's `command` step calls `forwardToAgent`. Test by assigning the flow to a connected agent and verifying the event lands in the survey log.
+
+### Common mistakes (do NOT do)
+
+- Creating `internal/sensors/` package — use the manager-on-Agent pattern, NOT a new package
+- Using `strings.Contains` to check CIDR — use `net.ParseCIDR`
+- Returning a `*Channel` from a handler — the `mux` expects `func(http.ResponseWriter, *http.Request)`
+- Forgetting to call `s.audit.Log` on flow CRUD operations — every change is auditable
+- Hardcoding the version in flow steps — use the JSON schema, never strings
