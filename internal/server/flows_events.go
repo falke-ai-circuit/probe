@@ -158,6 +158,13 @@ func (s *NDEventStore) Query(filter FlowEventFilter) ([]*FlowEvent, error) {
 	return out, nil
 }
 
+// Stop is the implementation backing FlowEventStore interface (caller must
+// type-assert) and is called from server.go's RegisterOnShutdown hook.
+// Returns nil; logs any final errors.
+func (s *NDEventStore) Close() {
+	s.Stop()
+}
+
 // Stop signals the write loop to drain and exit. Safe to call once.
 func (s *NDEventStore) Stop() {
 	select {

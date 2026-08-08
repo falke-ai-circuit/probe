@@ -27,6 +27,7 @@ type FlowEvent struct {
 type FlowEventStore interface {
 	Append(ev *FlowEvent) error
 	Query(filter FlowEventFilter) ([]*FlowEvent, error)
+	Stop()
 }
 
 // FlowEventFilter narrows event queries.
@@ -125,9 +126,11 @@ func (fd *FlowDispatcher) runFlow(ctx context.Context, run *FlowRun, flow *Flow)
 				}
 			default:
 				fd.failRun(run, fmt.Sprintf("step %s: %v", step.ID, err))
+				fd.auditStep(run, flow, step, "error", err.Error())
 				return
 			}
 		}
+		fd.auditStep(run, flow, step, "done", "")
 		current = next
 	}
 
@@ -448,4 +451,20 @@ func deepEqualJSON(a, b interface{}) bool {
 	aj, _ := json.Marshal(a)
 	bj, _ := json.Marshal(b)
 	return string(aj) == string(bj)
+}
+// auditStep writes a per-step audit entry. Called from the dispatcher on
+// both success and error paths. No-op if audit is nil or the server has
+// no audit logger configured.
+func (fd *FlowDispatcher) auditStep(run *FlowRun, flow *Flow, step FlowStep, eventType string, errMsg string) {
+	if fd.server == nil || fd.server.audit == nil {
+		return
+	}
+	extra := map[string]string{
+		"run_id":  run.ID,
+		"flow_name": flow.Name,
+	}
+	if errMsg != "" {
+		extra["error"] = errMsg
+	}
+	fd.server.audit.LogFlow(flow.ID, step.ID, eventType, "flow.step", run.AgentID, "", extra)
 }

@@ -2,6 +2,7 @@ import type {
   APIResponse, AgentRecord, HealthInfo, BuildConfig, Profile, Task,
   Operator, EnrollmentToken, AuditEntry, RevokedAgent, FileTransfer,
   SecurityStatus, LoginAttemptsStatus, FlowRecord, FlowRun, FlowTemplate, SurveyEvent,
+  SensorInfo, SensorAssignment, SensorState,
 } from './types'
 
 const BASE = '/api/v1'
@@ -420,4 +421,24 @@ export const api = {
       `/agents/${agentID}/survey${qs ? `?${qs}` : ''}`
     )
   },
+
+  // Sensor subsystem (v1.14.0) — agent-side catalog + assignment
+  getAgentSensors: (agentID: string) =>
+    apiFetch<SensorAssignment>(`/agents/${agentID}/sensors`),
+  setAgentSensors: (agentID: string, assignment: Partial<SensorAssignment>) =>
+    apiFetch<SensorAssignment>(`/agents/${agentID}/sensors`, {
+      method: 'PUT',
+      body: JSON.stringify(assignment),
+    }),
+  enableSensor: (agentID: string, name: string, args?: Record<string, string>) =>
+    apiFetch<{ enabled: string; sensor: string; agent_id: string }>(
+      `/agents/${agentID}/sensors/${name}/enable`,
+      { method: 'POST', body: JSON.stringify({ args: args || {} }) }
+    ),
+  disableSensor: (agentID: string, name: string) =>
+    apiFetch<{ enabled: string; sensor: string; agent_id: string }>(
+      `/agents/${agentID}/sensors/${name}/disable`,
+      { method: 'POST' }
+    ),
+
 }

@@ -483,3 +483,7 @@ func TestDispatcher_ContextCancelFailsRun(t *testing.T) {
 		t.Errorf("error = %q, want context/cancel message", errMsg)
 	}
 }
+
+func (f *fakeEventStore) Stop() {
+	// no-op for tests
+}

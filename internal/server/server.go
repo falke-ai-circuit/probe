@@ -439,6 +439,17 @@ func (s *Server) Start() error {
 	// Start the task scheduler background goroutine.
 	s.tasks.Start()
 
+	// Shutdown hook: when the http server returns (graceful shutdown or
+	// crash), drain the flow event store and stop the flow scheduler.
+	s.srv.RegisterOnShutdown(func() {
+		if s.flowEvents != nil {
+			s.flowEvents.Stop()
+		}
+		if s.flows != nil {
+			s.flows.Stop()
+		}
+	})
+
 	log.Printf("[server] starting on %s", s.addr)
 	return s.srv.ListenAndServe()
 }
@@ -604,6 +615,8 @@ func (s *Server) SetTasksPath(path string) {
 func (s *Server) SetFlowsPath(path string) {
 	s.flows = NewFlowManager(path, s)
 	s.flowDispatcher = NewFlowDispatcher(s)
+	// Start the flow scheduler so recurring/delayed triggers fire.
+	s.flows.Start()
 	// Derive the events path from the flows path by replacing the extension.
 	// This keeps flow state and events colocated by default.
 	eventsPath := path + ".events.ndjson"

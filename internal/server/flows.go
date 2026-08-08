@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -127,9 +128,13 @@ type FlowManager struct {
 	savePath string
 	server   *Server
 
-	stopCh   chan struct{}
-	stopOnce sync.Once
-	started  bool
+	// Scheduler state. One goroutine ticks every 30 seconds and fires
+	// any flow whose trigger conditions are met (recurring at interval,
+	// delayed after delay elapses). Stop() halts the goroutine.
+	stopCh     chan struct{}
+	stopOnce   sync.Once
+	started    bool
+	schedStart map[string]time.Time // flowID → time the trigger was last fired
 }
 
 // NewFlowManager creates a new FlowManager. savePath is the file path for
@@ -137,11 +142,12 @@ type FlowManager struct {
 // forwarding agent commands (may be nil for tests that only test CRUD).
 func NewFlowManager(savePath string, srv *Server) *FlowManager {
 	fm := &FlowManager{
-		flows:    make(map[string]*Flow),
-		runs:     make(map[string]*FlowRun),
-		savePath: savePath,
-		server:   srv,
-		stopCh:   make(chan struct{}),
+		flows:      make(map[string]*Flow),
+		runs:       make(map[string]*FlowRun),
+		savePath:   savePath,
+		server:     srv,
+		stopCh:     make(chan struct{}),
+		schedStart: make(map[string]time.Time),
 	}
 	fm.load()
 	return fm
@@ -422,9 +428,9 @@ func (fm *FlowManager) ListFlowsForAgent(agentID string) []*Flow {
 }
 
 // saveLocked persists flows to disk. Caller must hold fm.mu.
-func (fm *FlowManager) saveLocked() {
+func (fm *FlowManager) saveLocked() error {
 	if fm.savePath == "" {
-		return
+		return nil
 	}
 	dir := ""
 	for i := len(fm.savePath) - 1; i >= 0; i-- {
@@ -439,11 +445,13 @@ func (fm *FlowManager) saveLocked() {
 	data, err := json.MarshalIndent(fm.flows, "", "  ")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[flows] save marshal error: %v\n", err)
-		return
+		return err
 	}
 	if err := os.WriteFile(fm.savePath, data, 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "[flows] save write error: %v\n", err)
+		return err
 	}
+	return nil
 }
 
 // load reads flows from disk.
@@ -486,4 +494,140 @@ func pathDir(p string) string {
 		}
 	}
 	return ""
+}
+// Start launches the scheduler goroutine. Idempotent — calling twice is
+// a no-op. The scheduler fires flows whose trigger conditions are met.
+// Safe to call before any flows are registered.
+func (fm *FlowManager) Start() {
+	fm.mu.Lock()
+	if fm.started {
+		fm.mu.Unlock()
+		return
+	}
+	fm.started = true
+	fm.mu.Unlock()
+	go fm.schedulerLoop()
+}
+
+// Stop halts the scheduler. Safe to call multiple times. The map of
+// "last fired" timestamps is preserved across stop/start cycles so
+// recurring flows don't re-fire when the server restarts.
+func (fm *FlowManager) Stop() {
+	fm.stopOnce.Do(func() {
+		close(fm.stopCh)
+	})
+}
+
+// schedulerLoop ticks every 30 seconds and dispatches any flow whose
+// trigger is due. The check is cheap (one iteration over the flows map)
+// so the loop can run frequently without load concerns.
+func (fm *FlowManager) schedulerLoop() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	// Run once immediately so flows registered just before Start get a
+	// chance to fire (e.g., recurring template instantiated at startup).
+	fm.tickSchedules()
+	for {
+		select {
+		case <-fm.stopCh:
+			return
+		case <-ticker.C:
+			fm.tickSchedules()
+		}
+	}
+}
+
+// tickSchedules walks all enabled flows and dispatches those whose trigger
+// is due. Recurring: fires every IntervalSeconds after the previous fire.
+// Delayed: fires once, DelaySeconds after flow creation.
+// Once: never re-fires (manual run-now only).
+func (fm *FlowManager) tickSchedules() {
+	fm.mu.Lock()
+	now := time.Now()
+	due := make([]string, 0, len(fm.flows))
+	for id, f := range fm.flows {
+		if !f.Enabled {
+			continue
+		}
+		if len(f.AgentIDs) == 0 {
+			continue // unassigned
+		}
+		switch f.Trigger.Type {
+		case "recurring":
+			if f.Trigger.IntervalSeconds <= 0 {
+				continue
+			}
+			last, ok := fm.schedStart[id]
+			if !ok {
+				// First time we see this — fire now, then every IntervalSeconds.
+				fm.schedStart[id] = now
+				due = append(due, id)
+				continue
+			}
+			if now.Sub(last) >= time.Duration(f.Trigger.IntervalSeconds)*time.Second {
+				fm.schedStart[id] = now
+				due = append(due, id)
+			}
+		case "delayed":
+			if f.Trigger.DelaySeconds <= 0 {
+				continue
+			}
+			if _, already := fm.schedStart[id]; already {
+				continue
+			}
+			if now.Sub(f.CreatedAt) >= time.Duration(f.Trigger.DelaySeconds)*time.Second {
+				fm.schedStart[id] = now
+				due = append(due, id)
+			}
+		case "once", "":
+			// Skip — manual run-now only.
+		default:
+			log.Printf("[flows] unknown trigger type %q for flow %s — skipping", f.Trigger.Type, id)
+		}
+	}
+	fm.mu.Unlock()
+
+	for _, id := range due {
+		fm.fireScheduled(id)
+	}
+}
+
+// fireScheduled dispatches one flow against each of its assigned agents.
+// Called from the scheduler. Errors are logged but don't propagate — the
+// scheduler must keep running.
+func (fm *FlowManager) fireScheduled(flowID string) {
+	fm.mu.Lock()
+	f, ok := fm.flows[flowID]
+	if !ok {
+		fm.mu.Unlock()
+		return
+	}
+	agentIDs := append([]string(nil), f.AgentIDs...)
+	fm.mu.Unlock()
+
+	if len(agentIDs) == 0 {
+		return
+	}
+	for _, agentID := range agentIDs {
+		run := &FlowRun{
+			ID:        generateFlowID(),
+			FlowID:    flowID,
+			AgentID:   agentID,
+			Status:    "pending",
+			StartedAt: time.Now().UTC(),
+		}
+		fm.mu.Lock()
+		fm.runs[run.ID] = run
+		fm.mu.Unlock()
+		if err := fm.saveLocked(); err != nil {
+			log.Printf("[flows] save error after scheduling %s: %v", flowID, err)
+		}
+		if fm.server != nil && fm.server.flowDispatcher != nil {
+			ctx := context.Background()
+			go fm.server.flowDispatcher.runFlow(ctx, run, f)
+		}
+		if fm.server != nil && fm.server.audit != nil {
+			fm.server.audit.LogFlow(flowID, "", "scheduled_fire", "flow.scheduled", agentID, "", map[string]string{"run_id": run.ID})
+		}
+	}
 }

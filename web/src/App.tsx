@@ -10,6 +10,7 @@ import Transfers from './pages/Transfers'
 import Credentials from './pages/Credentials'
 import Settings from './pages/Settings'
 import Flows from './pages/Flows'
+import Sensors from './pages/Sensors'
 import Login from './pages/Login'
 import { getToken } from './api/client'
 
@@ -35,6 +36,7 @@ export default function App() {
           <Route path="/transfers" element={<Transfers />} />
           <Route path="/credentials" element={<Credentials />} />
           <Route path="/flows" element={<Flows />} />
+          <Route path="/sensors" element={<Sensors />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

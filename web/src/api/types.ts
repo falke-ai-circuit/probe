@@ -258,3 +258,21 @@ export interface SurveyEvent {
   payload: unknown
   timestamp: string
 }
+
+// Sensor subsystem (v1.14.0)
+
+export interface SensorInfo {
+  name: string
+  category: string
+  description: string
+}
+
+export interface SensorState {
+  enabled: boolean
+  args?: Record<string, string>
+}
+
+export interface SensorAssignment {
+  agent_id: string
+  sensors: Record<string, SensorState>
+}
