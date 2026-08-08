@@ -1,7 +1,7 @@
 {
   "project": "probe",
-  "version": "v1.13.0",
-  "last_updated": "2026-08-08T18:30:00Z",
+  "version": "v1.14.0",
+  "last_updated": "2026-08-08T22:00:00Z",
   "hot_cache": [
     {
       "key": "module_path",
@@ -137,6 +137,26 @@
       "key": "flow_template_dir",
       "value": "internal/server/flowtemplates/*.json",
       "note": "Ship 3 built-in: network_summary, sensitive_file_access, file_watch_summary. Drop a .json in to add."
+    },
+    {
+      "key": "sensor_registry_path",
+      "value": "internal/agent/agent_sensor.go (Sensor interface) + sensors_*.go (implementations)",
+      "note": "16 sensors, all stdlib. New sensors: implement Sensor interface, add to sensors_register.go init() slice."
+    },
+    {
+      "key": "sensor_assign_path",
+      "value": "/data/runtime/flows.json.sensors.json",
+      "note": "Per-agent assignment persisted by SensorAssignmentManager."
+    },
+    {
+      "key": "sensor_routes",
+      "value": "GET/PUT /api/v1/agents/{id}/sensors, POST /sensors/{name}/{enable,disable}",
+      "note": "All require Bearer auth. Each enable/disable is audited (sensor.enable / sensor.disable)."
+    },
+    {
+      "key": "sensor_protocol",
+      "value": "sensor_list / sensor_read / sensor_result / sensor_error",
+      "note": "Wire types: SensorReadParams{Name, Args}, SensorResult{Name, Payload, Timestamp, Duration}, SensorInfo{Name, Category, Description}."
     }
   ],
   "architecture": {
@@ -408,7 +428,7 @@
   ],
   "recent_changes": [
     {
-      "version": "v1.13.0",
+      "version": "v1.14.0",
       "date": "2026-06-16",
       "summary": "Phase E Commit 7 (FINAL): TLS Mutual Authentication (mTLS). protocol.Dial signature now Dial(rawURL, certPath, clientCertFile, clientKeyFile, token) \u2014 loads client cert via tls.LoadX509KeyPair into TLSClientConfig.Certificates for mTLS. protocol.Listen signature now Listen(addr, certFile, keyFile, clientCAFile) \u2014 when clientCAFile non-empty, loads CA into x509.CertPool, sets ClientAuth=RequireAndVerifyClientCert + ClientCAs. protocol.NewServer signature now NewServer(addr, certFile, keyFile, clientCAFile); ListenAndServe serves plain HTTP when no cert/key, TLS+mTLS otherwise. Removed dead GenerateSelfSignedCert (hardcoded PEM, never called). internal/server: Server gains certFile/keyFile/clientCAFile fields; NEW NewServerWithTLS(addr,token,registry,certFile,keyFile,clientCAFile) + NewServerWithTLSRateLimit(...+RateLimitConfig); StartTLS builds tls.Config with RequireAndVerifyClientCert+ClientCAs when clientCAFile set (logs TLS+mTLS vs TLS). agent.Config gains ClientCertFile/ClientKeyFile; runOutbound passes to Dial. CLI: server --cert-file/--key-file/--client-ca (TLS+mTLS when all provided); agent --client-cert/--client-key (mTLS outbound) + --cert (CA verify) + --cert-file/--key-file (inbound certs). Backward compatible (StartTLS params now optional overrides; no flags removed; plain HTTP when no cert). Zero new deps (crypto/tls, crypto/x509 stdlib). Build+vet+tests pass (6/6); cross-compile clean all 6 targets. Added gotchas HR-015, HR-016.",
       "files": [
@@ -425,7 +445,7 @@
       ]
     },
     {
-      "version": "v1.13.0",
+      "version": "v1.14.0",
       "date": "2026-06-16",
       "summary": "Phase E Commit 6: Token Rotation \u2014 server-side token rotation (Server gains tokenTTL, tokenExpiry map, tokenStop channel, tokenWG). NEW InitiateTokenRotation(agentID, newToken) sends TypeTokenRotate with TokenRotateParams{NewToken, Expiry}. NEW proactive rotation goroutine (runTokenRotation) scans every 60s, rotates within 5min of expiry. NEW SetTokenTTL/SetTokenExpiry/ClearTokenExpiry + generateToken() (crypto/rand\u2192hex). NEW TypeTokenRefresh message (agent\u2192server proactive refresh). TokenRotateParams gains optional Expiry; NEW TokenRotateResult{Rotated,NewToken}. Agent handleTokenRotate updates cfg.Token+tokenExpiry, persists to TokenFile (0600). Agent proactive refresh ticker (60s). NEW LoadPersistedToken(path). CLI: --token-ttl (server, 24h), --token-file (agent). Zero new deps. Build+vet+tests+cross-compile pass.",
       "files": [
@@ -440,7 +460,7 @@
       ]
     },
     {
-      "version": "v1.13.0",
+      "version": "v1.14.0",
       "date": "2026-06-16",
       "summary": "Phase E Commit 5: Health Monitoring \u2014 extended AgentRecord with UptimeSeconds/LastError/ErrorCount/HealthScore/ResourceUsage + internal non-serialized time.Time fields. NEW ResourceInfo struct (CPUPercent/MemoryMB/DiskFreeMB). Health score formula (0.0-1.0): heartbeat recency (0.0-0.4) + error count (0.0-0.3) + uptime stability (0.0-0.3). NEW Registry methods: RecordError, UpdateHealth, GetHealth, StartStaleDetector (idempotent), Stop (idempotent via stopCh+sync.Once). Stale detector goroutine scans every 30s, marks heartbeat > 90s as 'stale'; started in NewServer, stopped in Close (no leak). NEW GET /api/agent/{id}/health endpoint (404 for unknown). Enhanced /health returns {status,total_agents,active_agents,stale_agents,uptime_seconds}. Error recording wired into handleMessages (TypeError\u2192RecordError, TypeHealthResult\u2192UpdateHealth with ResourceInfo). protocol.HealthResult extended with optional resource fields. Zero new deps. Build+vet+tests pass. Added gotchas HR-013, HR-014.",
       "files": [
@@ -454,7 +474,7 @@
       ]
     },
     {
-      "version": "v1.13.0",
+      "version": "v1.14.0",
       "date": "2026-06-16",
       "summary": "Phase E Commit 4: Rate Limiting \u2014 per-agent token-bucket rate limiter on the LLM proxy (stdlib sync+time only, zero new deps). RateLimiter struct with per-agent tokenBucket map, Allow(agentID)/Release(), configurable rate/burst/maxConcurrent (defaults 10 req/s, burst 20, max 5 concurrent). LLMProxy.Call signature changed to Call(agentID, prompt); returns 'rate_limited' provider marker when denied. SetRateLimiter() overrides defaults. Server gains rateLimit field + exported RateLimitConfig + NewServerWithRateLimit constructor. CLI flags: --rate-limit (10), --rate-burst (20), --max-concurrent (5). 6 unit tests in internal/server/proxy_test.go all pass. Build + vet + cross-compile (darwin/linux/windows \u00d7 amd64/arm64) all exit 0.",
       "files": [
@@ -469,7 +489,7 @@
       ]
     },
     {
-      "version": "v1.13.0",
+      "version": "v1.14.0",
       "date": "2026-06-16",
       "summary": "Phase E Commit 3: macOS Real Implementation \u2014 NEW platform_darwin.go implements all 25 Platform interface methods via macOS-native CLI tools (zero new deps). Screenshot (screencapture -x -t png -), ScreenInfo (system_profiler), Click/TypeText/KeyPress/Hotkey (osascript AppleScript + key-code map), Clipboard (pbpaste/pbcopy), OpenURL (open), Notify (osascript display notification), ProcessList (ps -axo, parse-from-end for spaces in comm), ProcessKill (syscall.Kill), Exec (bash -c, cmd.Process.Kill timeout). ScreenStreamStart/Stop kept as stubs (Phase F). Added explicit //go:build linux tag to platform_linux.go. Cross-compile + vet pass for darwin/linux/windows. Added gotchas HR-010, HR-011.",
       "files": [
@@ -482,7 +502,7 @@
       ]
     },
     {
-      "version": "v1.13.0",
+      "version": "v1.14.0",
       "date": "2026-06-16",
       "summary": "Phase E Commit 2: Windows Real Implementation \u2014 replaced 6 stubs in platform_windows.go with PowerShell-based real implementations. Screenshot (System.Drawing\u2192PNG), ScreenInfo (AllScreens parsing), Click (Cursor+user32.dll), TypeText/KeyPress/Hotkey (SendKeys), Notify (msg.exe+ToastNotificationManager). ScreenStreamStart/Stop kept as stubs. Added strconv/strings imports. Zero new deps. Cross-compile and vet pass cleanly.",
       "files": [
@@ -494,7 +514,7 @@
       ]
     },
     {
-      "version": "v1.13.0",
+      "version": "v1.14.0",
       "date": "2026-06-16",
       "summary": "Phase E Commit 1: Reconnect Hardening \u2014 replaced fixed 5s backoff with exponential backoff + jitter. Added Config fields (MaxRetries, BackoffMin, BackoffMax), computeBackoff() method, CLI flags (--max-retries, --backoff-min, --backoff-max). Build and vet pass cleanly.",
       "files": [
@@ -507,7 +527,7 @@
       ]
     },
     {
-      "version": "v1.13.0",
+      "version": "v1.14.0",
       "date": "2026-06-16",
       "summary": "Phase D complete: Kali Linux integration test \u2014 7/7 endpoints PASS. 3 bugs found and fixed (screenshot env, process-list route, --addr flag). 4 gotchas added (HR-007\u2013HR-009). Windows binaries cross-compiled. CODER.md rule #6 doc-update obligation encoded.",
       "files": [
@@ -522,7 +542,7 @@
       ]
     },
     {
-      "version": "v1.13.0",
+      "version": "v1.14.0",
       "date": "2026-06-14",
       "summary": "8 bugs fixed across 6 files. Go agent connects + all 4 endpoints verified. Plugin registers 5 remote_* tools. Ready for Phase D (integration test on remote host).",
       "files": [
@@ -535,7 +555,7 @@
       ]
     },
     {
-      "version": "v1.13.0",
+      "version": "v1.14.0",
       "date": "2026-06-13",
       "summary": "Initial scaffold \u2014 protocol, server, agent, platform, CLI, plugin. Builds and vets cleanly.",
       "files": [

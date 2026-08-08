@@ -266,3 +266,78 @@ State is a `map[string]json.RawMessage`. Steps reference prior step results by t
 - v1.12.x agents (e.g., gorproxmox) connect to v1.13.0 server without changes.
 - v1.13.0 server treats unknown message types from old agents as `ErrUnknownCommand` (existing behavior).
 - Frontend can be rolled back to v1.12.0 builds; new routes return 404 gracefully.
+
+
+---
+
+## Sensor Subsystem Design (v1.14.0)
+
+**Author:** Architect
+**Date:** 2026-08-08
+**Status:** IMPLEMENTED — Part B complete, deployed to OVH.
+
+### Goals
+
+1. **OS-independent** — same binary works on Windows, Linux, macOS, Android.
+2. **Stdlib-only** — zero new Go deps, only `runtime`, `os`, `net`, `time`, `encoding/binary`, `crypto/sha256`.
+3. **Stateless** — sensors don't keep state between calls. The `schedStart` map on the server tracks *which flows have fired*, not sensor state.
+4. **Composable with flows** — sensors can be referenced from flow steps as `{type:"command", command_type:"sensor_read"}`. The dispatcher routes the call to the agent's `SensorRegistry`.
+5. **Read-only** — sensors never mutate the host. (Writes go through the existing `fs-write` command.)
+
+### Architecture
+
+```
+┌──────────────────┐
+│  Agent           │
+│  ┌────────────┐  │
+│  │ Registry   │◄─┼─── init() registers all sensors
+│  └────────────┘  │
+│        ▲         │
+│        │ Read()  │
+│  ┌────────────┐  │   ┌──────────────────┐
+│  │ handleSensor│  │   │  Built-in        │
+│  │   Read     │  │   │  sensors (15)    │
+│  └────────────┘  │   │  - process       │
+└──────────────────┘   │  - filesystem    │
+                       │  - network       │
+┌──────────────────┐   │  - time          │
+│  Server          │   │  - agent         │
+│  GET  .../sensors │   └──────────────────┘
+│  POST .../enable │
+│  POST .../disable│
+└──────────────────┘
+```
+
+### Sensor catalog (16 sensors)
+
+| Name | Category | Stdlib package(s) |
+|---|---|---|
+| `process_detail` | process | `os`, `runtime` |
+| `runtime_metrics` | process | `runtime` |
+| `memory_stats` | process | `runtime` (ReadMemStats) |
+| `disk_usage` | filesystem | `os`, `syscall` (Unix) / `os` (Windows) |
+| `file_stat` | filesystem | `os` |
+| `env_vars` | filesystem | `os` |
+| `network_interfaces` | network | `net` |
+| `dns_resolve` | network | `net` |
+| `dns_resolve_mx` | network | `net` |
+| `dns_resolve_txt` | network | `net` |
+| `network_dial` | network | `net` |
+| `system_time` | time | `time` |
+| `uptime` | time | `time` |
+| `ntp_drift` | time | `net`, `encoding/binary`, `time` |
+| `agent_metrics` | agent | `sync/atomic`, `time` |
+| `audit_chain` | agent | `crypto/sha256`, `time` |
+
+### Compatibility
+
+- v1.14.0 server + v1.12.x agent = works. Server doesn't send `TypeSensorRead` if no sensor is enabled for that agent.
+- v1.13.0 server + v1.14.0 agent = works. Agent doesn't error if it sees no `TypeSensorRead` (server doesn't request).
+
+### What was deliberately NOT done
+
+- **No persistent sensors.** Each call is independent.
+- **No subscription / push model.** Sensors are read-only, polled. WebSocket push is on the v1.15.0 roadmap.
+- **No per-sensor auth.** The whole agent auth chain (Bearer token + RBAC) is the gate.
+- **No sensor versioning.** Breaking a sensor's payload shape requires a server-version bump.
+- **No platform-specific sensors.** All 16 use only stdlib that works on Windows/Linux/macOS/Android. Disk usage is the only OS-split (via build constraints in helpers, not in sensor impl).

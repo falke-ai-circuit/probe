@@ -68,3 +68,28 @@ PROBE has a server-side flow runtime. When working with flow code:
 - Returning a `*Channel` from a handler — the `mux` expects `func(http.ResponseWriter, *http.Request)`
 - Forgetting to call `s.audit.Log` on flow CRUD operations — every change is auditable
 - Hardcoding the version in flow steps — use the JSON schema, never strings
+
+
+## Sensors (v1.14.0+)
+
+PROBE ships 16 generic sensors. When working with sensor code:
+
+- **Where it lives**: `internal/agent/sensors_*.go` + `internal/agent/agent_sensor.go`.
+- **No `internal/sensors/` package** — files are flat in `internal/agent/` matching the existing pattern.
+- **Adding a sensor**: implement the `Sensor` interface (Name/Category/Description/Read), then add the type to the slice in `sensors_register.go`'s init().
+- **Stdlib only**. No `golang.org/x/sys`, no `github.com/shirou/gopsutil`, no `github.com/shirou/gopsutil/v3`. Use `runtime`, `os`, `net`, `time`, `encoding/binary`, `crypto/sha256`.
+- **OS-independent**: same code runs on Windows, Linux, macOS, Android. The only exception is `disk_usage` and `file_stat` which use build tags to pick `syscall.Statfs` (Unix) vs `os.DiskUsage` (Windows). Do NOT add platform-specific sensors.
+- **Read-only**. Never mutate the host. Writes go through the `fs-write` command.
+- **Stateless**. No state between calls.
+
+### Common mistakes (do NOT do)
+
+- Importing `github.com/shirou/gopsutil` — that violates the zero-deps rule
+- Using `/proc/...` directly — Linux-only, violates OS-independence
+- Caching results in a struct field — sensors are stateless
+- Using `os/exec` — sensor implementations should never shell out
+- Adding a `Init()` method to the `Sensor` interface — registration is via package init() in sensors_register.go
+
+### Verification
+
+Run `go test -race ./internal/agent/ -run TestSensors` to confirm all 16 sensors still register and metadata is intact.
