@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -591,11 +592,22 @@ func (s *Server) SetTasksPath(path string) {
 	s.tasks = NewTaskManager(path, s)
 }
 
-// SetFlowsPath initializes the FlowManager and FlowDispatcher bound to this
-// server. Called before Start/StartTLS.
+// SetFlowsPath initializes the FlowManager, FlowDispatcher, and FlowEventStore
+// bound to this server. Called before Start/StartTLS.
 func (s *Server) SetFlowsPath(path string) {
 	s.flows = NewFlowManager(path, s)
 	s.flowDispatcher = NewFlowDispatcher(s)
+	// Derive the events path from the flows path by replacing the extension.
+	// This keeps flow state and events colocated by default.
+	eventsPath := path + ".events.ndjson"
+	if dir := filepath.Dir(path); dir != "" {
+		// If flows are stored under /data/runtime, put events under /data/logs.
+		// This avoids filling the runtime volume with event data.
+		if filepath.Base(dir) == "runtime" {
+			eventsPath = filepath.Join(filepath.Dir(dir), "logs", filepath.Base(path)+".events.ndjson")
+		}
+	}
+	s.flowEvents = NewNDEventStore(eventsPath)
 }
 
 // SetTransferPath configures persistent file transfer state. When set,

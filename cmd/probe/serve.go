@@ -36,6 +36,7 @@ func runServe(args []string) {
 	allowedCIDR := fs.String("allowed-cidr", "100.64.0.0/10,10.10.10.0/24,172.16.0.0/12", "CIDR ranges allowed for WebUI/API HTTP routes (default: Tailscale 100.64.0.0/10 + subnet-routed 10.10.10.0/24 + Docker bridges 172.16.0.0/12). Comma-separated for multiple. /ws is always open from any IP. Set to 0.0.0.0/0 to disable.")
 	blacklistCIDR := fs.String("blacklist-cidr", "", "Comma-separated CIDR ranges to block from ALL routes including /ws (e.g., \"1.2.3.0/24,5.6.7.8/32\"). Blocks known-bad IPs from connecting.")
 	auditLogPath := fs.String("audit-log", "", "Path to audit log file (JSONL format). Logs every command, login, and access decision. Default: /tmp/probe-audit.jsonl")
+	flowsPath := fs.String("flows-path", "", "Path to flow definitions JSON file (persistent). Default: /data/runtime/flows.json. Created if missing.")
 	adminPassword := fs.String("admin-password", "", "password for the default admin operator created on startup if no operators exist")
 	operatorPath := fs.String("operator-db", "", "operator database file path (default: PROBE_OPERATOR_DB env or /tmp/probe-operators.json)")
 	vtAPIKey := fs.String("vt-api-key", "", "VirusTotal API key for auto-scan after build and manual scan API (default: PROBE_VT_API_KEY env)")
@@ -150,6 +151,16 @@ func runServe(args []string) {
 	// Configure audit logging (every command, login, and access decision).
 	srv.SetAuditPath(*auditLogPath)
 	log.Printf("Audit log: %s", *auditLogPath)
+
+	// Configure flow runtime (server-side workflow orchestrator). The flow
+	// manager is persistent on disk; the event store is also persistent.
+	// Both default to /tmp/* for dev; production sets --flows-path.
+	flowsPathValue := *flowsPath
+	if flowsPathValue == "" {
+		flowsPathValue = "/data/runtime/flows.json"
+	}
+	srv.SetFlowsPath(flowsPathValue)
+	log.Printf("Flows: %s", flowsPathValue)
 
 	// Configure IP blacklist (blocks specific IPs from ALL routes).
 	if *blacklistCIDR != "" {

@@ -18,3 +18,5 @@ gorizia-proxmox
 gorizia-proxmox-fud
 gorizia-proxmox.json
 probe-client-gorizia.json
+runtime/
+test-agent.json
