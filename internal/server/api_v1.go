@@ -352,6 +352,11 @@ func (s *Server) registerV1Routes() {
 	s.mux.HandleFunc("GET /api/v1/builds/{id}/download", s.handleV1DownloadBuild)
 	s.mux.HandleFunc("DELETE /api/v1/builds/{id}", s.handleV1DeleteBuild)
 
+	// Sensors (v1.14.0)
+	s.mux.HandleFunc("GET /api/v1/agents/{id}/sensors", s.v1WrapAgentHandler("list", s.handleV1GetAgentSensors))
+	s.mux.HandleFunc("PUT /api/v1/agents/{id}/sensors", s.v1WrapAgentHandler("exec", s.handleV1SetAgentSensors))
+	s.mux.HandleFunc("POST /api/v1/agents/{id}/sensors/{name}/enable", s.v1WrapSensorHandler("exec", s.handleV1EnableSensor))
+	s.mux.HandleFunc("POST /api/v1/agents/{id}/sensors/{name}/disable", s.v1WrapSensorHandler("exec", s.handleV1DisableSensor))
 	// Flow runtime (v1.13.0)
 	s.mux.HandleFunc("GET /api/v1/flows", s.handleV1ListFlows)
 	s.mux.HandleFunc("POST /api/v1/flows", s.handleV1CreateFlow)

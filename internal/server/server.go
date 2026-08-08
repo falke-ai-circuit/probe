@@ -116,6 +116,9 @@ type Server struct {
 	// Flow templates: predefined flow definitions that can be instantiated.
 	flowTemplates *TemplateManager
 
+	// Sensor assignment manager: per-agent sensor enable/disable + args.
+	sensorAssign *SensorAssignmentManager
+
 	// File transfer manager: resumable chunked file transfers.
 	transferMgr *TransferManager
 
@@ -618,6 +621,9 @@ func (s *Server) SetFlowsPath(path string) {
 		templatesDir = filepath.Join(dir, "flowtemplates")
 	}
 	s.flowTemplates = NewTemplateManager(templatesDir)
+	// Sensor assignment store lives alongside flows.
+	assignPath := path + ".sensors.json"
+	s.sensorAssign = NewSensorAssignmentManager(assignPath)
 }
 
 // SetTransferPath configures persistent file transfer state. When set,

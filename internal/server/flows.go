@@ -466,3 +466,24 @@ func (fm *FlowManager) load() {
 	}
 	log.Printf("[flows] loaded %d flows from %s", len(fm.flows), fm.savePath)
 }
+// readFile reads a file. Package-level so other managers can reuse.
+func readFile(path string) ([]byte, error) {
+	return os.ReadFile(path)
+}
+
+// writeFile writes data, creating parent dirs.
+func writeFile(path string, data []byte) error {
+	if dir := pathDir(path); dir != "" {
+		_ = os.MkdirAll(dir, 0o755)
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+func pathDir(p string) string {
+	for i := len(p) - 1; i >= 0; i-- {
+		if p[i] == '/' {
+			return p[:i]
+		}
+	}
+	return ""
+}

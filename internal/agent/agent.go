@@ -488,6 +488,10 @@ func (a *Agent) handleCommand(conn *websocket.Conn, env protocol.Envelope) {
 		resp = a.handleClipboardRead(env)
 	case protocol.TypeClipboardWrite:
 		resp = a.handleClipboardWrite(env)
+	case protocol.TypeSensorList:
+		resp = a.handleSensorList(env)
+	case protocol.TypeSensorRead:
+		resp = a.handleSensorRead(env)
 	case protocol.TypeAuthRefresh, protocol.TypeTokenRotate:
 		resp = a.handleTokenRotate(env)
 	case protocol.TypeTunnelOpen:

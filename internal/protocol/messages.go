@@ -45,6 +45,14 @@ const (
 	TypeStreamEnd     = "stream_end"
 	TypeStreamData    = "stream_data" // Agent → Server: individual video frame (base64 JPEG)
 
+	// Sensor subsystem (v1.14.0) — generic on-demand data read.
+	// Sensors are stateless, OS-independent (stdlib only), and return
+	// a single JSON payload. See internal/agent/sensors_*.go.
+	TypeSensorList    = "sensor_list"     // Server → Agent: list available sensors
+	TypeSensorRead    = "sensor_read"     // Server → Agent: read a single sensor value
+	TypeSensorResult  = "sensor_result"   // Agent → Server: sensor reading payload
+	TypeSensorError   = "sensor_error"    // Agent → Server: sensor read failed
+
 	// TCP tunnel — Server → Agent: open a tunnel to a target host:port
 	TypeTunnelOpen    = "tunnel_open"
 	TypeTunnelClose   = "tunnel_close"
@@ -309,6 +317,50 @@ type ScreenStreamParams struct {
 	Display int `json:"display,omitempty"`
 	FPS     int `json:"fps,omitempty"`
 	Quality int `json:"quality,omitempty"`
+}
+
+// Sensor subsystem (v1.14.0) parameter types.
+
+// SensorReadParams is sent Server → Agent for TypeSensorRead. The sensor
+// name is the canonical key (e.g. "memory_stats", "network_interfaces").
+// The Args map carries sensor-specific parameters (e.g. {"path": "/"} for
+// disk_usage). Args is intentionally typed as map[string]string to keep the
+// wire format simple; sensors that need structured args should JSON-encode
+// them and decode on the agent.
+type SensorReadParams struct {
+	Name string            `json:"name"`
+	Args map[string]string `json:"args,omitempty"`
+}
+
+// SensorResult is sent Agent → Server for TypeSensorResult. Payload is
+// sensor-specific JSON; the server treats it opaquely and may re-emit it as
+// part of a flow step or agent survey event.
+type SensorResult struct {
+	Name      string          `json:"name"`
+	Payload   json.RawMessage `json:"payload"`
+	Timestamp time.Time       `json:"timestamp"`
+	Duration  int64           `json:"duration_us"`
+}
+
+// SensorInfo is one entry in the SensorList response. Sensors advertise
+// their name, category, and a brief description so the server can render
+// them in the UI without hard-coding the list.
+type SensorInfo struct {
+	Name        string `json:"name"`
+	Category    string `json:"category"` // "process" | "filesystem" | "network" | "time" | "agent"
+	Description string `json:"description"`
+}
+
+// SensorListResult is sent Agent → Server for TypeSensorList.
+type SensorListResult struct {
+	Sensors []SensorInfo `json:"sensors"`
+}
+
+// SensorError is sent Agent → Server for TypeSensorError. The server
+// surfaces this to the operator via the API response and the audit log.
+type SensorError struct {
+	Name    string `json:"name"`
+	Message string `json:"message"`
 }
 
 type ScreenStreamStartResult struct {
