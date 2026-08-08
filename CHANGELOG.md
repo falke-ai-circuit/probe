@@ -3,57 +3,6 @@
 All notable changes to PROBE are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [Semantic Versioning](https://semver.org/).
 
-## [v1.14.0] — 2026-08-08
-
-### Added — Sensor Subsystem (Part B)
-
-#### Sensor Framework
-- **`internal/agent/agent_sensor.go`** — `Sensor` interface + `sensorRegistry`. Sensors register at init, advertise metadata (name, category, description), and return JSON-marshalable payloads. Thread-safe with `sync.RWMutex`.
-- **`internal/agent/agent.go`** — dispatch table routes `TypeSensorList` and `TypeSensorRead` to new handlers.
-
-#### 16 Built-in Sensors (stdlib only, OS-independent)
-- **process** (2): `process_detail`, `runtime_metrics`
-- **filesystem** (3): `memory_stats`, `disk_usage`, `file_stat`, `env_vars`
-- **network** (5): `network_interfaces`, `dns_resolve`, `dns_resolve_mx`, `dns_resolve_txt`, `network_dial`
-- **time** (3): `system_time`, `uptime`, `ntp_drift`
-- **agent** (2): `agent_metrics`, `audit_chain`
-
-Each sensor uses only Go stdlib (runtime, os, net, time, encoding/binary, crypto/sha256). The only OS-specific helpers are `disk_usage` and `file_stat`, split via build tags between `syscall.Statfs` (Unix) and `os.DiskUsage` (Windows).
-
-#### Protocol Additions (`internal/protocol/messages.go`)
-- New constants: `TypeSensorList`, `TypeSensorRead`, `TypeSensorResult`, `TypeSensorError`
-- New structs: `SensorReadParams`, `SensorResult`, `SensorInfo`, `SensorListResult`, `SensorError`
-
-#### Server-Side Sensor Routes (`internal/server/sensor_assignments.go`)
-- `GET /api/v1/agents/{id}/sensors` — get per-agent assignment
-- `PUT /api/v1/agents/{id}/sensors` — replace assignment
-- `POST /api/v1/agents/{id}/sensors/{name}/enable` — enable one sensor
-- `POST /api/v1/agents/{id}/sensors/{name}/disable` — disable one sensor
-- `SensorAssignmentManager` persists assignments to `flows.json.sensors.json`
-
-#### Frontend
-- **`web/src/pages/Sensors.tsx`** — Sensors page with category-grouped table, enable/disable per agent
-- Sidebar Sensors nav item with Activity icon
-- `web/src/api/client.ts` + `web/src/api/types.ts` — full sensor API client + types
-
-### Fixed — Reviewer Findings from v1.13.0
-
-- **HIGH:** Dispatcher now writes per-step audit entries via `LogFlow` wrapper (was a dormant method)
-- **HIGH:** Scheduled flow fires (recurring + delayed triggers) now actually run via `schedulerLoop` (was data-only)
-- **MED:** `NDEventStore.Stop()` now called from `srv.RegisterOnShutdown` (was leaking goroutines on shutdown)
-- **MED:** `saveLocked()` returns error (was silent on disk-full)
-- **MED:** New templates `process_anomalies` + `login_audit` deferred to v1.13.1 (require new commands)
-
-### Tests
-- 5 sensor registry tests (count, metadata, uniqueness, stable order, no-error reads)
-- All previous 41 flow tests still pass
-- Full server suite passes with `-race`
-
-### Backward Compatibility
-- v1.13.0 server + v1.14.0 agent = works (server ignores sensor types if not implemented)
-- v1.14.0 server + v1.12.x agent = works (server treats unknown message types as `ErrUnknownCommand`)
-- All previous routes still present and unchanged
-
 ## [v1.13.0] — 2026-08-08
 
 ### Added — Flow Runtime (Part A)

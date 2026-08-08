@@ -131,6 +131,7 @@ type Agent struct {
 func (a *Agent) writeMessage(conn *websocket.Conn, env protocol.Envelope) error {
 	a.writeMu.Lock()
 	defer a.writeMu.Unlock()
+	agentMsgSent.Add(1)
 
 	if a.e2eMgr != nil && a.e2eMgr.IsActive() {
 		// Encrypt the JSON payload
@@ -208,6 +209,7 @@ func (a *Agent) runOutbound() error {
 		conn, err := a.dialWithFailover()
 		if err != nil {
 			a.backoffAttempt++
+			agentReconnects.Add(1)
 			if a.cfg.MaxRetries > 0 && a.backoffAttempt > a.cfg.MaxRetries {
 				return fmt.Errorf("max retries (%d) exceeded: %w", a.cfg.MaxRetries, err)
 			}
@@ -338,6 +340,7 @@ func (a *Agent) handleConnection(conn *websocket.Conn) {
 				readErr <- err
 				return
 			}
+			agentMsgRecv.Add(1)
 			var env protocol.Envelope
 			if err := json.Unmarshal(msg, &env); err != nil {
 				resp := protocol.NewError("", protocol.ErrInvalidParams, "invalid JSON")
@@ -991,7 +994,7 @@ func (a *Agent) SendPrompt(prompt string) {
 }
 
 // Version is the agent version.
-const Version = "1.14.0"
+const Version = "1.13.0"
 
 func getOS() string   { return runtime.GOOS }
 func getArch() string { return runtime.GOARCH }

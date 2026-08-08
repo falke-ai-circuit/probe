@@ -115,6 +115,9 @@ func (m *SensorAssignmentManager) saveLocked() error {
 // can stub them in tests.
 
 // handleV1GetAgentSensors returns the sensor assignment for a given agent.
+// Writes a raw JSON body — NOT wrapped via writeJSON — because this route
+// is registered via v1WrapAgentHandler which already adds the APIResponse
+// envelope. (Reviewer #1 — double-wrap fix.)
 func (s *Server) handleV1GetAgentSensors(w http.ResponseWriter, r *http.Request, agentID string) {
 	if _, ok := s.v1CheckAuth(w, r, "list"); !ok {
 		return
@@ -123,10 +126,12 @@ func (s *Server) handleV1GetAgentSensors(w http.ResponseWriter, r *http.Request,
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "sensor assignment not available"})
 		return
 	}
-	writeJSON(w, http.StatusOK, s.sensorAssign.Get(agentID))
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(s.sensorAssign.Get(agentID))
 }
 
 // handleV1SetAgentSensors replaces the sensor assignment for an agent.
+// Writes a raw JSON body for the same reason as handleV1GetAgentSensors.
 func (s *Server) handleV1SetAgentSensors(w http.ResponseWriter, r *http.Request, agentID string) {
 	if _, ok := s.v1CheckAuth(w, r, "exec"); !ok {
 		return
@@ -147,6 +152,12 @@ func (s *Server) handleV1SetAgentSensors(w http.ResponseWriter, r *http.Request,
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
 		return
 	}
+	operatorID := ""
+	if op := r.Context().Value(operatorContextKey{}); op != nil {
+		if o, ok := op.(*Operator); ok {
+			operatorID = o.ID
+		}
+	}
 	a.AgentID = agentID
 	if err := s.sensorAssign.Set(&a); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -155,12 +166,14 @@ func (s *Server) handleV1SetAgentSensors(w http.ResponseWriter, r *http.Request,
 	if s.audit != nil {
 		s.audit.Log(AuditEntry{
 			AgentID:    agentID,
+			OperatorID: operatorID,
 			Action:     "sensor.assign",
 			Params:     map[string]string{"agent_id": agentID, "count": fmt.Sprintf("%d", len(a.Sensors))},
 			Result:     "success",
 		})
 	}
-	writeJSON(w, http.StatusOK, &a)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(&a)
 }
 
 // handleV1EnableSensor enables a single sensor for an agent.

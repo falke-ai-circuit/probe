@@ -2,46 +2,10 @@
 
 Remote agent for the Hermes ecosystem. Run Hermes natively on any remote machine using the main server's LLM infrastructure.
 
-**Version:** v1.14.0
+**Version:** v1.13.0
 **Repo:** `github.com/falke-ai-circuit/probe`
 **Go:** 1.22 (Go 1.23/1.25 crash on Valmet VM — pinned to 1.22)
 **Dependencies:** `gorilla/websocket` only (zero other external deps)
-
-## Sensors (v1.14.0+)
-
-PROBE ships 16 built-in sensors that return JSON payloads on demand. Sensors are **OS-independent** (the same binary works on Windows, Linux, macOS, Android), use **only Go stdlib** (no build tags in the implementations themselves — only `disk_usage`/`file_stat` are platform-split via build constraints, picking `syscall.Statfs` vs `os.DiskUsage`), and are read-only.
-
-### Sensor categories
-
-| Category | Sensors |
-|---|---|
-| process | `process_detail`, `runtime_metrics` |
-| filesystem | `memory_stats`, `disk_usage`, `file_stat`, `env_vars` |
-| network | `network_interfaces`, `dns_resolve`, `dns_resolve_mx`, `dns_resolve_txt`, `network_dial` |
-| time | `system_time`, `uptime`, `ntp_drift` |
-| agent | `agent_metrics`, `audit_chain` |
-
-### Usage
-
-```bash
-# List sensors for an agent (assignment state)
-curl -H "Authorization: Bearer $TOKEN" http://server:7701/api/v1/agents/vegas-c2022/sensors
-
-# Enable a sensor (with args)
-curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"args":{"hostname":"example.com"}}' \
-  http://server:7701/api/v1/agents/vegas-c2022/sensors/dns_resolve/enable
-
-# Disable
-curl -X POST -H "Authorization: Bearer $TOKEN" \
-  http://server:7701/api/v1/agents/vegas-c2022/sensors/dns_resolve/disable
-```
-
-### WebUI
-
-The Sensors sidebar item shows a category-grouped table with one row per sensor. Enable/disable toggles write to per-agent assignments persisted to `/data/runtime/flows.json.sensors.json`.
-
-See [CHANGELOG.md](CHANGELOG.md) for the full v1.14.0 release notes.
 
 ## Flow Runtime (v1.13.0+)
 
