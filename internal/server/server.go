@@ -103,6 +103,15 @@ type Server struct {
 	// Task scheduler: delayed, recurring, and offline-queued tasks.
 	tasks *TaskManager
 
+	// Flow manager: server-side workflow orchestrator. Wired in via SetFlowsPath.
+	flows *FlowManager
+
+	// Flow dispatcher: runs flow steps. Wired in via SetFlowsPath.
+	flowDispatcher *FlowDispatcher
+
+	// Flow event store: NDJSON append-only log of survey events. Stubbed in A.2, full impl in A.5.
+	flowEvents FlowEventStore
+
 	// File transfer manager: resumable chunked file transfers.
 	transferMgr *TransferManager
 
@@ -580,6 +589,13 @@ func (s *Server) SetVTAPIKey(apiKey string) {
 // called before Start/StartTLS.
 func (s *Server) SetTasksPath(path string) {
 	s.tasks = NewTaskManager(path, s)
+}
+
+// SetFlowsPath initializes the FlowManager and FlowDispatcher bound to this
+// server. Called before Start/StartTLS.
+func (s *Server) SetFlowsPath(path string) {
+	s.flows = NewFlowManager(path, s)
+	s.flowDispatcher = NewFlowDispatcher(s)
 }
 
 // SetTransferPath configures persistent file transfer state. When set,
