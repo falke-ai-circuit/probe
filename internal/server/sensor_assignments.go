@@ -114,9 +114,30 @@ func (m *SensorAssignmentManager) saveLocked() error {
 // They're defined as small wrappers around os.ReadFile/WriteFile so we
 // can stub them in tests.
 
+// handleV1GetAgentSensorsRaw is the top-level route handler. It does auth,
+// then delegates to handleV1GetAgentSensors. Registered directly (without
+// v1WrapAgentHandler) to avoid the double-wrap response bug.
+func (s *Server) handleV1GetAgentSensorsRaw(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.v1CheckAuth(w, r, "list"); !ok {
+		return
+	}
+	agentID := r.PathValue("id")
+	s.handleV1GetAgentSensors(w, r, agentID)
+}
+
+// handleV1SetAgentSensorsRaw is the top-level PUT handler — same pattern as
+// the GET. Does auth, then delegates.
+func (s *Server) handleV1SetAgentSensorsRaw(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.v1CheckAuth(w, r, "exec"); !ok {
+		return
+	}
+	agentID := r.PathValue("id")
+	s.handleV1SetAgentSensors(w, r, agentID)
+}
+
 // handleV1GetAgentSensors returns the sensor assignment for a given agent.
 // Writes a raw JSON body — NOT wrapped via writeJSON — because this route
-// is registered via v1WrapAgentHandler which already adds the APIResponse
+// is registered via the raw handler above which does NOT add an APIResponse
 // envelope. (Reviewer #1 — double-wrap fix.)
 func (s *Server) handleV1GetAgentSensors(w http.ResponseWriter, r *http.Request, agentID string) {
 	if _, ok := s.v1CheckAuth(w, r, "list"); !ok {
@@ -127,7 +148,9 @@ func (s *Server) handleV1GetAgentSensors(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(s.sensorAssign.Get(agentID))
+	body, _ := json.Marshal(s.sensorAssign.Get(agentID))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(fmt.Sprintf(`{"ok":true,"data":%s}`, string(body))))
 }
 
 // handleV1SetAgentSensors replaces the sensor assignment for an agent.
@@ -173,7 +196,9 @@ func (s *Server) handleV1SetAgentSensors(w http.ResponseWriter, r *http.Request,
 		})
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(&a)
+	bodyBytes, _ := json.Marshal(&a)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(fmt.Sprintf(`{"ok":true,"data":%s}`, string(bodyBytes))))
 }
 
 // handleV1EnableSensor enables a single sensor for an agent.

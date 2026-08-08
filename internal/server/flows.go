@@ -74,12 +74,12 @@ type FlowStep struct {
 	// Type=compute_diff
 	Left       string `json:"left,omitempty"`  // ref into state
 	Right      string `json:"right,omitempty"`
-	DiffAs     string `json:"as,omitempty"`
+	DiffAs     string `json:"diff_as,omitempty"` // where to store the diff
 
 	// Type=classify
 	Input       string         `json:"input,omitempty"`    // ref into state
 	Rules       []ClassifyRule `json:"rules,omitempty"`    // ordered, first match wins
-	ClassifyAs  string         `json:"as,omitempty"`
+	ClassifyAs  string         `json:"classify_as,omitempty"`
 
 	// Type=emit
 	Signal  string          `json:"signal,omitempty"`  // survey signal name
