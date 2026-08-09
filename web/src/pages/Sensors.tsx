@@ -241,7 +241,7 @@ export default function Sensors() {
                     <th>Category</th>
                     <th>Description</th>
                     <th>Status</th>
-                    <th style={{ width: 100, textAlign: 'right' }}>Action</th>
+                    <th style={{ width: 110, textAlign: 'right' }}>Action</th>
                   </tr>
                 </thead>
                 <tbody>
