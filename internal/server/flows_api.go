@@ -503,6 +503,16 @@ func (s *Server) handleV1InstantiateFromTemplate(w http.ResponseWriter, r *http.
 	writeJSON(w, http.StatusOK, flow)
 }
 
+// handleV1ListAgentSurveyEventsRaw is the raw route handler. It does auth
+// then delegates. Registered directly to avoid the double-wrap bug.
+func (s *Server) handleV1ListAgentSurveyEventsRaw(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.v1CheckAuth(w, r, "list"); !ok {
+		return
+	}
+	agentID := r.PathValue("id")
+	s.handleV1ListAgentSurveyEvents(w, r, agentID)
+}
+
 // handleV1ListAgentSurveyEvents returns survey events for a specific agent.
 func (s *Server) handleV1ListAgentSurveyEvents(w http.ResponseWriter, r *http.Request, agentID string) {
 	if _, ok := s.v1CheckAuth(w, r, "list"); !ok {
