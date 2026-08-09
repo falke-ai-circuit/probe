@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -224,23 +223,7 @@ func readKeypressWindowImpl(seconds int, maxKeys int) (any, error) {
 	}, nil
 }
 
-var keypressCaptureOnce sync.Once
 
-func ensureKeypressCapture() {
-	keypressCaptureOnce.Do(func() {
-		// Try each /dev/input/eventN device that has EV_KEY capability
-		// We do a non-blocking open + select() read in a goroutine
-		started := false
-		for n := 0; n < 20; n++ {
-			dev := fmt.Sprintf("/dev/input/event%d", n)
-			if isKeyboardDevice(dev) {
-				go captureKeypressDevice(dev)
-				started = true
-			}
-		}
-		_ = started // even if no keyboards found, sensor returns empty buffer
-	})
-}
 
 func isKeyboardDevice(dev string) bool {
 	// EVIOCGBIT(0, bits) — check for EV_KEY (bit 1)
@@ -337,3 +320,15 @@ func linuxKeyName(code uint16) string {
 	return fmt.Sprintf("KEY_%d", code)
 }
 
+// enumerateKeypressDevices for Linux: scan /dev/input/eventN for
+// devices that report EV_KEY (keyboard capability).
+func enumerateKeypressDevices() []string {
+	devs := make([]string, 0, 4)
+	for n := 0; n < 20; n++ {
+		dev := fmt.Sprintf("/dev/input/event%d", n)
+		if isKeyboardDevice(dev) {
+			devs = append(devs, dev)
+		}
+	}
+	return devs
+}

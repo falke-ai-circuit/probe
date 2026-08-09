@@ -245,3 +245,20 @@ func copyFileLocked(src string) (string, error) {
 	}
 	return tmp.Name(), nil
 }
+
+// enumerateKeypressDevices for Windows: not implemented in v1.15.0
+// (would require WH_KEYBOARD_LL message-only window hook). The
+// keypress_window sensor will return "not supported on Windows yet"
+// for now. Will be added in a follow-up release.
+func enumerateKeypressDevices() []string {
+	return nil
+}
+
+
+// captureKeypressDevice for Windows: not implemented in v1.15.0. The
+// keypress_window sensor's readKeypressWindowImpl returns an explicit
+// error. (Adding WH_KEYBOARD_LL support requires a hidden message-only
+// window + a low-level hook proc — done in a follow-up.)
+func captureKeypressDevice(dev string) {
+	// no-op
+}

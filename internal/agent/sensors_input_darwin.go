@@ -247,3 +247,16 @@ func copyFileLocked(src string) (string, error) {
 func readKeypressWindowImpl(seconds int, maxKeys int) (any, error) {
 	return nil, fmt.Errorf("keypress_capture not supported on macOS (requires accessibility permission + system extension)")
 }
+
+// enumerateKeypressDevices for macOS: denied. The keypress_window
+// sensor's readKeypressWindowImpl returns an explicit error.
+func enumerateKeypressDevices() []string {
+	return nil
+}
+
+
+// captureKeypressDevice for macOS: not implemented. The keypress_window
+// sensor's readKeypressWindowImpl returns an explicit error.
+func captureKeypressDevice(dev string) {
+	// no-op
+}
