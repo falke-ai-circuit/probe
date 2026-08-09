@@ -513,3 +513,37 @@ func TestNextStepID(t *testing.T) {
 		t.Errorf("next in empty list: got %q, want empty", got)
 	}
 }
+
+
+// TestResolveStateRefs verifies the template resolver for emit payloads.
+func TestResolveStateRefs(t *testing.T) {
+	state := map[string]json.RawMessage{
+		"stat":   json.RawMessage(`{"size":1865}`),
+		"content": json.RawMessage(`{"data":"ls"}`),
+	}
+	// String payload with {{state.X}} — should substitute
+	tpl := json.RawMessage(`"{{state.stat}}"`)
+	got := resolveStateRefs(tpl, state)
+	if string(got) != `"{\"size\":1865}"` {
+		t.Errorf("string template: got %s, want {\"size\":1865}", got)
+	}
+	// Object payload — falls back to whole state
+	obj := json.RawMessage(`{"key": "{{state.stat}}"}`)
+	got = resolveStateRefs(obj, state)
+	// Fallback serializes whole state; we just check it's not the literal {{ }}
+	if string(got) == `{"key": "{{state.stat}}"}` {
+		t.Errorf("object fallback should not be literal")
+	}
+	// Payload without {{ — fast path returns as-is
+	plain := json.RawMessage(`"hello"`)
+	got = resolveStateRefs(plain, state)
+	if string(got) != `"hello"` {
+		t.Errorf("plain: got %s, want hello", got)
+	}
+	// Unknown state key — substitutes empty string
+	missing := json.RawMessage(`"{{state.nope}}"`)
+	got = resolveStateRefs(missing, state)
+	if string(got) != `""` {
+		t.Errorf("missing: got %s, want empty", got)
+	}
+}

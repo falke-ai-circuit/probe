@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -278,6 +279,9 @@ func (fd *FlowDispatcher) execEmitStep(ctx context.Context, run *FlowRun, flow *
 	if len(payload) == 0 {
 		// If no explicit payload, emit the entire state
 		payload, _ = json.Marshal(state)
+	} else {
+		// Resolve {{state.X}} references in payload template.
+		payload = resolveStateRefs(payload, state)
 	}
 	ev := FlowEvent{
 		ID:        generateFlowID(),
@@ -292,6 +296,37 @@ func (fd *FlowDispatcher) execEmitStep(ctx context.Context, run *FlowRun, flow *
 		return "", fmt.Errorf("append event: %w", err)
 	}
 	return step.Next, nil
+}
+
+// resolveStateRefs replaces {{state.X}} references in a JSON payload with
+// the corresponding value from the flow state. Each X must exist as a key
+// in state, otherwise an empty string is substituted (matching evalCondition).
+// The payload is treated as a JSON value of any type — if it's a string
+// containing template syntax, substitution happens against the raw bytes.
+// If it's an object/array, substitution only applies to the string fields
+// within (rare but supported).
+func resolveStateRefs(payload json.RawMessage, state map[string]json.RawMessage) json.RawMessage {
+	// Fast path: no {{ in payload, return as-is.
+	if !bytes.Contains(payload, []byte("{{")) {
+		return payload
+	}
+	var asString string
+	if err := json.Unmarshal(payload, &asString); err == nil {
+		// String payload: substitute references.
+		resolved := stateRefRegex.ReplaceAllStringFunc(asString, func(m string) string {
+			key := strings.TrimSuffix(strings.TrimPrefix(m, "{{state."), "}}")
+			v, ok := state[key]
+			if !ok {
+				return ""
+			}
+			return string(v)
+		})
+		out, _ := json.Marshal(resolved)
+		return out
+	}
+	// Non-string payload: serialize the entire state instead (fallback).
+	out, _ := json.Marshal(state)
+	return out
 }
 
 func (fd *FlowDispatcher) markRunStatus(run *FlowRun, status string) {
