@@ -142,32 +142,40 @@ export default function Sensors() {
   return (
     <div>
       <div className="page-header-row">
-        <div>
+        <div style={{ flex: 1, minWidth: 280 }}>
           <h1>Sensors</h1>
           <div className="page-subtitle">
             Per-agent capability toggles. Sensors are stateless primitives that a flow can invoke via <code style={{ background: 'var(--bg-input)', padding: '1px 6px', borderRadius: 3 }}>command_type</code> or that you can read on demand.
           </div>
-        </div>
-        <div className="page-meta">
-          <span className="meta-item">
-            <select
-              className="toolbar-input"
-              value={selectedAgent}
-              onChange={(e) => setSelectedAgent(e.target.value)}
-              style={{ minWidth: 200 }}
-            >
-              {agents.length === 0 && <option value="">(no agents connected)</option>}
-              {agents.map((a) => (
-                <option key={a.agent_id} value={a.agent_id}>{a.name} · {a.status}</option>
-              ))}
-            </select>
-          </span>
-          <span className="meta-item">
-            <span className="meta-value" style={{ color: metrics.enabledCount > 0 ? 'var(--green)' : 'var(--text-muted)' }}>
-              {metrics.enabledCount}
+          <div className="page-meta" style={{ marginTop: 12 }}>
+            <span className="meta-item">
+              <span className="meta-value" style={{ color: metrics.enabledCount > 0 ? 'var(--green)' : 'var(--text-muted)' }}>
+                {metrics.enabledCount}
+              </span>
+              <span style={{ opacity: 0.6 }}>of {metrics.totalCount} enabled</span>
             </span>
-            <span style={{ opacity: 0.6 }}>of {metrics.totalCount} enabled</span>
-          </span>
+            {metrics.byCategory.map(({ cat, total, enabled }) => (
+              <span key={cat} className="meta-item">
+                <span className="meta-value" style={{ color: enabled > 0 ? 'var(--green-dim)' : 'var(--text-dim)', fontSize: 11 }}>
+                  {enabled}/{total}
+                </span>
+                <span style={{ opacity: 0.6, fontSize: 11 }}>{cat}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+        <div className="page-actions">
+          <select
+            className="toolbar-input"
+            value={selectedAgent}
+            onChange={(e) => setSelectedAgent(e.target.value)}
+            style={{ minWidth: 200 }}
+          >
+            {agents.length === 0 && <option value="">(no agents connected)</option>}
+            {agents.map((a) => (
+              <option key={a.agent_id} value={a.agent_id}>{a.name} · {a.status}</option>
+            ))}
+          </select>
         </div>
       </div>
 

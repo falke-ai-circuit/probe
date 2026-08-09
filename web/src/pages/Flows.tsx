@@ -209,24 +209,32 @@ export default function Flows() {
   return (
     <div>
       <div className="page-header-row">
-        <div>
+        <div style={{ flex: 1, minWidth: 280 }}>
           <h1>Flows</h1>
           <div className="page-subtitle">
             Compose server-side workflows from existing commands + sensors. Triggers run on schedule; results stream as survey events.
           </div>
-        </div>
-        <div className="page-meta">
-          <span className="meta-item">
-            <span className="meta-value">{metrics.active}</span>
-            <span style={{ opacity: 0.6 }}>/ {metrics.total} active</span>
-          </span>
-          <span className="meta-item">
-            <span className="meta-value" style={{ color: metrics.failed > 0 ? 'var(--red)' : 'var(--green)' }}>
-              {metrics.successRate}%
+          <div className="page-meta" style={{ marginTop: 12 }}>
+            <span className="meta-item">
+              <span className="meta-value">{metrics.active}</span>
+              <span style={{ opacity: 0.6 }}>/ {metrics.total} active</span>
             </span>
-            <span style={{ opacity: 0.6 }}>success ({metrics.recent} runs)</span>
-          </span>
-          <button className="btn btn-primary" onClick={startCreate} style={{ marginLeft: 8 }}>
+            <span className="meta-item">
+              <span className="meta-value" style={{ color: metrics.failed > 0 ? 'var(--red)' : 'var(--green)' }}>
+                {metrics.successRate}%
+              </span>
+              <span style={{ opacity: 0.6 }}>success ({metrics.recent} runs)</span>
+            </span>
+            <span className="meta-item">
+              <span className="meta-value" style={{ color: metrics.failed > 0 ? 'var(--red)' : 'var(--text-muted)' }}>
+                {metrics.failed}
+              </span>
+              <span style={{ opacity: 0.6 }}>failed</span>
+            </span>
+          </div>
+        </div>
+        <div className="page-actions">
+          <button className="btn btn-primary" onClick={startCreate}>
             <span style={{ fontSize: 16, lineHeight: 1 }}>+</span> New Flow
           </button>
           <button className="btn" onClick={load}>↻ Refresh</button>
@@ -499,10 +507,12 @@ export default function Flows() {
                       <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }}>
                         {(r.started_at || '').replace('T', ' ').slice(0, 19)}
                       </td>
-                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }}>
-                        {r.duration_ms ? `${(r.duration_ms / 1000).toFixed(1)}s` : '—'}
+                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: r.duration_ms ? 'var(--text)' : 'var(--text-dim)' }}>
+                        {r.duration_ms != null && r.duration_ms >= 0
+                          ? r.duration_ms >= 1000 ? `${(r.duration_ms / 1000).toFixed(1)}s` : `${r.duration_ms}ms`
+                          : r.status === 'running' || r.status === 'pending' ? '...' : '—'}
                       </td>
-                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: r.error ? 'var(--red)' : 'var(--text-dim)', maxWidth: 360 }} className="truncate">
+                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: r.error ? 'var(--red)' : 'var(--text-dim)', maxWidth: 320 }} className="truncate" title={r.error || ''}>
                         {r.error || ''}
                       </td>
                     </tr>

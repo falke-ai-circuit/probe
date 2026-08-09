@@ -451,8 +451,8 @@ table tr.clickable { cursor: pointer; }
 
 /* === HEADER (with inline sub-line) === */
 .page-header-row {
-  display: flex; align-items: flex-end; justify-content: space-between;
-  gap: 16px; margin-bottom: 20px;
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 24px; margin-bottom: 20px; flex-wrap: wrap;
 }
 .page-header-row h1 {
   font-size: 22px; font-weight: 600; margin: 0;
@@ -460,12 +460,17 @@ table tr.clickable { cursor: pointer; }
 }
 .page-header-row .page-subtitle {
   color: var(--text-muted); font-size: 13px;
-  margin-top: 4px;
+  margin-top: 4px; max-width: 680px; line-height: 1.5;
+}
+.page-header-row .page-actions {
+  display: flex; align-items: center; gap: 8px;
+  flex-shrink: 0;
 }
 .page-header-row .page-meta {
-  display: flex; align-items: center; gap: 16px;
+  display: flex; align-items: center; gap: 18px;
   color: var(--text-muted); font-size: 12px;
   font-family: var(--font-mono);
+  flex-wrap: wrap;
 }
 .page-header-row .page-meta .meta-item {
   display: flex; align-items: center; gap: 6px;
