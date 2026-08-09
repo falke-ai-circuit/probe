@@ -33,7 +33,7 @@ services:
       - --token
       - falke-admin-2026
       - --admin-password
-      - f4lk3.PROBE
+      - ${PROBE_ADMIN_PASSWORD:-f4lk3.PROBE}
       - --allowed-cidr
       - 100.64.0.0/10,10.10.10.0/24,172.16.0.0/12
       - --require-api-auth
@@ -55,6 +55,10 @@ services:
       - /data/runtime/ca
       - --audit-log
       - /data/logs/audit.jsonl
+      - --flows-path
+      - /data/runtime/flows.json
+      - --blacklist-cidr
+      - ${PROBE_BLACKLIST_CIDR:-}
     healthcheck:
       test: ["CMD", "sh", "-c", "curl -sf http://localhost:7701/api/v1/agents || exit 1"]
       interval: 30s
