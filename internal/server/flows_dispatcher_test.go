@@ -487,3 +487,29 @@ func TestDispatcher_ContextCancelFailsRun(t *testing.T) {
 func (f *fakeEventStore) Stop() {
 	// no-op for tests
 }
+
+
+// TestNextStepID verifies the auto-advance helper returns the next step
+// in the ordered slice, or empty when at the end.
+func TestNextStepID(t *testing.T) {
+	steps := []FlowStep{
+		{ID: "a"},
+		{ID: "b"},
+		{ID: "c"},
+	}
+	if got := nextStepID(steps, "a"); got != "b" {
+		t.Errorf("next after a: got %q, want b", got)
+	}
+	if got := nextStepID(steps, "b"); got != "c" {
+		t.Errorf("next after b: got %q, want c", got)
+	}
+	if got := nextStepID(steps, "c"); got != "" {
+		t.Errorf("next after c (last): got %q, want empty", got)
+	}
+	if got := nextStepID(steps, "unknown"); got != "" {
+		t.Errorf("next after unknown: got %q, want empty", got)
+	}
+	if got := nextStepID([]FlowStep{}, "a"); got != "" {
+		t.Errorf("next in empty list: got %q, want empty", got)
+	}
+}

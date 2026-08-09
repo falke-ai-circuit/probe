@@ -131,6 +131,12 @@ func (fd *FlowDispatcher) runFlow(ctx context.Context, run *FlowRun, flow *Flow)
 			}
 		}
 		fd.auditStep(run, flow, step, "done", "")
+		// Auto-advance: if the step didn't specify a Next step, fall through
+		// to the next step in the ordered steps slice. This lets users write
+		// flows as a linear list without chaining each step by ID.
+		if next == "" {
+			next = nextStepID(steps, step.ID)
+		}
 		current = next
 	}
 
@@ -312,6 +318,20 @@ func findStep(steps []FlowStep, id string) (FlowStep, bool) {
 		}
 	}
 	return FlowStep{}, false
+}
+
+// nextStepID returns the ID of the step immediately after the one with
+// the given ID in the ordered steps slice. Returns "" if no next step.
+func nextStepID(steps []FlowStep, currentID string) string {
+	for i, s := range steps {
+		if s.ID == currentID {
+			if i+1 < len(steps) {
+				return steps[i+1].ID
+			}
+			return ""
+		}
+	}
+	return ""
 }
 
 // evalCondition evaluates a simple condition like "{{state.x}} == value"
