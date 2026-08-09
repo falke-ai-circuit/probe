@@ -543,6 +543,15 @@ table .trigger-badge.once { color: var(--text-muted); border-color: var(--border
   box-shadow: 0 4px 16px rgba(0,0,0,0.5), 0 0 12px rgba(0,255,65,0.06);
   z-index: 100; overflow: hidden;
 }
+.kebab-menu-fixed {
+  position: fixed;
+  min-width: 180px; background: var(--bg-card);
+  border: 1px solid var(--border-glow); border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5), 0 0 12px rgba(0,255,65,0.06);
+  z-index: 1000; overflow: hidden;
+  /* Position is set via inline style (top, left) computed from the
+     trigger's getBoundingClientRect so the menu always fits on screen. */
+}
 .kebab-item {
   display: flex; align-items: center; gap: 8px;
   padding: 9px 14px; width: 100%;

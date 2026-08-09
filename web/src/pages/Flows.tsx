@@ -1,7 +1,8 @@
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { api } from '../api/client'
-import type { FlowRecord, FlowTrigger, FlowStep, FlowTemplate, FlowRun } from '../api/types'
+import type { FlowRecord, FlowTrigger, FlowStep, FlowTemplate, FlowRun, AgentRecord } from '../api/types'
 import { StatusBadge } from '../components/StatusBadge'
+import { ActionMenu } from '../components/ActionMenu'
 
 const STEP_TYPES = ['command', 'wait', 'branch', 'compute_diff', 'classify', 'emit']
 const TRIGGER_TYPES = [
@@ -19,28 +20,9 @@ const emptyFlow = (): Partial<FlowRecord> => ({
   steps: [emptyStep()],
 })
 
-// A small kebab/dropdown component for row actions.
-function ActionMenu({ children }: { children: (close: () => void) => React.ReactNode }) {
-  const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    const onDoc = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', onDoc)
-    return () => document.removeEventListener('mousedown', onDoc)
-  }, [])
-  return (
-    <div className="kebab-wrap" ref={ref}>
-      <button className="kebab-btn" onClick={() => setOpen(o => !o)} aria-label="Actions">⋯</button>
-      {open && (
-        <div className="kebab-menu">
-          {children(() => setOpen(false))}
-        </div>
-      )}
-    </div>
-  )
-}
+
+// (ActionMenu extracted to web/src/components/ActionMenu.tsx for reuse
+//  + viewport-aware positioning that handles clipping + escape-to-close.)
 
 function copyText(text: string) {
   navigator.clipboard?.writeText(text).catch(() => {})
@@ -63,7 +45,10 @@ export default function Flows() {
   const [flows, setFlows] = useState<FlowRecord[]>([])
   const [templates, setTemplates] = useState<FlowTemplate[]>([])
   const [runs, setRuns] = useState<FlowRun[]>([])
+  const [agents, setAgents] = useState<AgentRecord[]>([])
   const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<FlowRecord | null>(null)
   const [form, setForm] = useState<Partial<FlowRecord>>(emptyFlow())
@@ -71,19 +56,28 @@ export default function Flows() {
   const [flowFilter, setFlowFilter] = useState('')
   const [runFilter, setRunFilter] = useState('')
   const [showRunForFlow, setShowRunForFlow] = useState<string | null>(null)
+  // Agent picker modal state
+  const [runPickerFlow, setRunPickerFlow] = useState<FlowRecord | null>(null)
+  // JSON params error per step index (so the operator can see what went wrong)
+  const [paramsErrors, setParamsErrors] = useState<Record<number, string>>({})
 
   const load = async () => {
+    setLoading(true)
     try {
-      const [f, t, r] = await Promise.all([
+      const [f, t, r, a] = await Promise.all([
         api.listFlows(),
         api.listFlowTemplates(),
         api.listFlowRuns(),
+        api.listAgents().catch(() => []),
       ])
       setFlows(Array.isArray(f) ? f : [])
       setTemplates(Array.isArray(t) ? t : [])
       setRuns(Array.isArray(r) ? r : [])
+      setAgents(Array.isArray(a) ? a : [])
     } catch (e) {
       setError((e as Error).message)
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -122,16 +116,22 @@ export default function Flows() {
   }
 
   const remove = async (id: string) => {
+    if (busy) return
     if (!confirm('Delete this flow?')) return
+    setBusy(true)
     try {
       await api.deleteFlow(id)
       await load()
     } catch (e) {
       setError((e as Error).message)
+    } finally {
+      setBusy(false)
     }
   }
 
   const toggleEnabled = async (flow: FlowRecord) => {
+    if (busy) return
+    setBusy(true)
     try {
       if (flow.enabled) {
         await api.disableFlow(flow.id)
@@ -141,19 +141,22 @@ export default function Flows() {
       await load()
     } catch (e) {
       setError((e as Error).message)
+    } finally {
+      setBusy(false)
     }
   }
 
   const runNow = async (flow: FlowRecord, agentID: string) => {
-    if (!agentID) {
-      alert('Enter an agent_id to run this flow against')
-      return
-    }
+    if (busy) return
+    if (!agentID) return
+    setBusy(true)
     try {
       await api.runFlowNow(flow.id, agentID)
       await load()
     } catch (e) {
       setError((e as Error).message)
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -220,13 +223,13 @@ export default function Flows() {
               <span style={{ opacity: 0.6 }}>/ {metrics.total} active</span>
             </span>
             <span className="meta-item">
-              <span className="meta-value" style={{ color: metrics.failed > 0 ? 'var(--red)' : 'var(--green)' }}>
+              <span className="meta-value" style={{ color: 'var(--green-dim)' }}>
                 {metrics.successRate}%
               </span>
               <span style={{ opacity: 0.6 }}>success ({metrics.recent} runs)</span>
             </span>
             <span className="meta-item">
-              <span className="meta-value" style={{ color: metrics.failed > 0 ? 'var(--red)' : 'var(--text-muted)' }}>
+              <span className="meta-value" style={{ color: metrics.failed > 0 ? 'var(--red)' : 'var(--text-dim)' }}>
                 {metrics.failed}
               </span>
               <span style={{ opacity: 0.6 }}>failed</span>
@@ -320,7 +323,28 @@ export default function Flows() {
               {step.type === 'command' && (
                 <div className="form-row" style={{ gap: 8 }}>
                   <input className="toolbar-input" style={{ flex: 1, minWidth: 0 }} placeholder="command_type (e.g. fs_read)" value={step.command_type || ''} onChange={(e) => updateStep(idx, { command_type: e.target.value })} />
-                  <input className="toolbar-input" style={{ flex: 2, minWidth: 0 }} placeholder="params JSON (optional)" defaultValue={step.params ? JSON.stringify(step.params) : ''} onBlur={(e) => { try { if (e.target.value) updateStep(idx, { params: JSON.parse(e.target.value) }) } catch {} }} />
+                  <input
+                    className="toolbar-input"
+                    style={{ flex: 2, minWidth: 0, borderColor: paramsErrors[idx] ? 'var(--red)' : undefined }}
+                    placeholder='params JSON (optional), e.g. {"path":"/root"}'
+                    defaultValue={step.params ? JSON.stringify(step.params) : ''}
+                    onBlur={(e) => {
+                      const v = e.target.value.trim()
+                      if (!v) { updateStep(idx, { params: undefined }); setParamsErrors(s => { const n = { ...s }; delete n[idx]; return n }); return }
+                      try {
+                        const parsed = JSON.parse(v)
+                        updateStep(idx, { params: parsed })
+                        setParamsErrors(s => { const n = { ...s }; delete n[idx]; return n })
+                      } catch (err) {
+                        setParamsErrors(s => ({ ...s, [idx]: (err as Error).message }))
+                      }
+                    }}
+                  />
+                </div>
+              )}
+              {paramsErrors[idx] && (
+                <div style={{ fontSize: 11, color: 'var(--red)', fontFamily: 'var(--font-mono)', marginTop: 4 }}>
+                  Invalid JSON: {paramsErrors[idx]}
                 </div>
               )}
               {step.type === 'emit' && (
@@ -367,7 +391,12 @@ export default function Flows() {
               {filteredFlows.length} of {flows.length}
             </span>
           </div>
-          <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+          <div className="card" style={{ padding: 0, overflow: 'hidden', opacity: loading ? 0.5 : 1, transition: 'opacity 0.15s' }}>
+            {loading && (
+              <div style={{ padding: '14px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 12, fontFamily: 'var(--font-mono)' }}>
+                loading flows…
+              </div>
+            )}
             <div className="table-container" style={{ overflowX: 'auto' }}>
               <table style={{ tableLayout: 'fixed', minWidth: 920 }}>
                 <colgroup>
@@ -417,16 +446,18 @@ export default function Flows() {
                         <StatusBadge status={f.enabled ? 'active' : 'inactive'} />
                       </td>
                       <td style={{ textAlign: 'right' }}>
-                        <ActionMenu>
+                        <ActionMenu label={`Actions for ${f.name}`}>
                           {(close) => (
                             <>
                               <button className="kebab-item" onClick={() => { close(); startEdit(f) }}>✎ Edit</button>
-                              <button className="kebab-item" onClick={() => { close(); toggleEnabled(f) }}>
+                              <button className="kebab-item" disabled={busy} onClick={() => { close(); toggleEnabled(f) }}>
                                 {f.enabled ? '⏸ Disable' : '▶ Enable'}
                               </button>
-                              <button className="kebab-item" onClick={() => { close(); const aid = prompt('Agent ID to run against:'); if (aid) runNow(f, aid) }}>▶ Run Now</button>
+                              <button className="kebab-item" disabled={busy || agents.length === 0} onClick={() => { close(); setRunPickerFlow(f) }}>
+                                ▶ Run Now…
+                              </button>
                               <button className="kebab-item" onClick={() => { close(); setShowRunForFlow(f.id) }}>📊 Show Runs</button>
-                              <button className="kebab-item danger" onClick={() => { close(); remove(f.id) }}>🗑 Delete</button>
+                              <button className="kebab-item danger" disabled={busy} onClick={() => { close(); remove(f.id) }}>🗑 Delete</button>
                             </>
                           )}
                         </ActionMenu>
@@ -446,7 +477,7 @@ export default function Flows() {
           <h2 style={{ fontSize: 16, fontFamily: 'var(--font-mono)' }}>Recent Runs</h2>
           {showRunForFlow && (
             <div style={{ marginTop: 6, fontSize: 12, color: 'var(--text-muted)' }}>
-              Filtered to one flow · <button className="copy-id" onClick={() => setShowRunForFlow(null)}>clear filter</button>
+              Filtered to one flow · <button className="btn btn-sm" onClick={() => setShowRunForFlow(null)}>clear filter</button>
             </div>
           )}
         </div>
@@ -483,7 +514,12 @@ export default function Flows() {
               showing {filteredRuns.length} of {runs.length}
             </span>
           </div>
-          <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+          <div className="card" style={{ padding: 0, overflow: 'hidden', opacity: loading ? 0.5 : 1, transition: 'opacity 0.15s' }}>
+            {loading && (
+              <div style={{ padding: '14px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 12, fontFamily: 'var(--font-mono)' }}>
+                loading flows…
+              </div>
+            )}
             <div className="table-container" style={{ overflowX: 'auto' }}>
               <table style={{ tableLayout: 'fixed', minWidth: 980 }}>
                 <colgroup>
@@ -539,6 +575,104 @@ export default function Flows() {
           </div>
         </>
       )}
+
+      {/* === RUN-NOW AGENT PICKER MODAL === */}
+      {runPickerFlow && (
+        <RunPickerModal
+          flow={runPickerFlow}
+          agents={agents}
+          onPick={(agentID) => { runNow(runPickerFlow, agentID); setRunPickerFlow(null) }}
+          onClose={() => setRunPickerFlow(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+// RunPickerModal — replaces the host-browser prompt() with a proper
+// operator UX: list of connected agents, click to run, Escape to close.
+function RunPickerModal({ flow, agents, onPick, onClose }: {
+  flow: FlowRecord
+  agents: AgentRecord[]
+  onPick: (agentID: string) => void
+  onClose: () => void
+}) {
+  useEffect(() => {
+    const onEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', onEsc)
+    return () => document.removeEventListener('keydown', onEsc)
+  }, [onClose])
+  const active = agents.filter(a => a.status === 'active')
+  const others = agents.filter(a => a.status !== 'active')
+  return (
+    <div
+      style={{
+        position: 'fixed', inset: 0,
+        background: 'rgba(0,0,0,0.7)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        zIndex: 2000,
+      }}
+      onClick={onClose}
+    >
+      <div
+        className="card"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Run ${flow.name} on agent`}
+        style={{ width: 480, maxWidth: '90vw', padding: 24, margin: 0 }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="card-title">▶ Run “{flow.name}”</div>
+        <p style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 14 }}>
+          Pick an agent to run this flow against. The flow will execute once with that agent as target.
+        </p>
+        {active.length > 0 && (
+          <>
+            <div style={{ fontSize: 11, color: 'var(--green-dim)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6 }}>Active</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: others.length > 0 ? 12 : 0 }}>
+              {active.map(a => (
+                <button
+                  key={a.agent_id}
+                  className="kebab-item"
+                  onClick={() => onPick(a.agent_id)}
+                  style={{ borderRadius: 4, border: '1px solid var(--border)' }}
+                >
+                  <span style={{ color: 'var(--green)', fontWeight: 600 }}>● {a.name}</span>
+                  <span style={{ marginLeft: 'auto', opacity: 0.6, fontSize: 11, fontFamily: 'var(--font-mono)' }}>{a.version}</span>
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+        {others.length > 0 && (
+          <>
+            <div style={{ fontSize: 11, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6, marginTop: 4 }}>Inactive / stale</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {others.map(a => (
+                <button
+                  key={a.agent_id}
+                  className="kebab-item"
+                  disabled
+                  title={`Agent is ${a.status} — cannot run flow`}
+                  style={{ borderRadius: 4, border: '1px solid var(--border)', opacity: 0.5, cursor: 'not-allowed' }}
+                >
+                  <span style={{ color: 'var(--text-dim)' }}>○ {a.name}</span>
+                  <span style={{ marginLeft: 'auto', opacity: 0.6, fontSize: 11, fontFamily: 'var(--font-mono)' }}>{a.status}</span>
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+        {agents.length === 0 && (
+          <div className="empty-state" style={{ padding: 24 }}>
+            <h3>No agents connected</h3>
+            <p>Wait for an agent to register, then try again.</p>
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: 8, marginTop: 20, justifyContent: 'flex-end' }}>
+          <button className="btn" onClick={onClose}>Cancel</button>
+        </div>
+      </div>
     </div>
   )
 }

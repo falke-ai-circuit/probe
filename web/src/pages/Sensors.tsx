@@ -322,13 +322,20 @@ export default function Sensors() {
 
       {/* Args prompt modal */}
       {pendingArgs && (
-        <div style={{
-          position: 'fixed', inset: 0,
-          background: 'rgba(0,0,0,0.7)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          zIndex: 1000,
-        }}>
-          <div className="card" style={{ width: 480, padding: 24, margin: 0 }}>
+        <div
+          style={{
+            position: 'fixed', inset: 0,
+            background: 'rgba(0,0,0,0.7)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 1000,
+          }}
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Enable sensor ${pendingArgs.sensor}`}
+          onClick={() => setPendingArgs(null)}
+          onKeyDown={(e) => { if (e.key === 'Escape') setPendingArgs(null) }}
+        >
+          <div className="card" style={{ width: 480, padding: 24, margin: 0 }} onClick={(e) => e.stopPropagation()}>
             <div className="card-title">Enable {pendingArgs.sensor}</div>
             <p style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 14 }}>
               This sensor requires arguments. Enter as <code style={{ background: 'var(--bg-input)', padding: '1px 6px', borderRadius: 3 }}>key=value</code> separated by spaces or commas. Required keys for this sensor:
