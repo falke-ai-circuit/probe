@@ -367,16 +367,23 @@ export default function Flows() {
               {filteredFlows.length} of {flows.length}
             </span>
           </div>
-          <div className="card" style={{ padding: 0 }}>
-            <div className="table-container">
-              <table>
+          <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+            <div className="table-container" style={{ overflowX: 'auto' }}>
+              <table style={{ tableLayout: 'fixed', minWidth: 920 }}>
+                <colgroup>
+                  <col style={{ width: '40%' }} />
+                  <col style={{ width: '14%' }} />
+                  <col style={{ width: '8%' }} />
+                  <col style={{ width: '10%' }} />
+                  <col style={{ width: '8%', minWidth: 90 }} />
+                </colgroup>
                 <thead>
                   <tr>
                     <th>Name</th>
                     <th>Trigger</th>
                     <th>Steps</th>
                     <th>Status</th>
-                    <th style={{ width: 60, textAlign: 'right' }}>Actions</th>
+                    <th style={{ textAlign: 'right' }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -476,9 +483,18 @@ export default function Flows() {
               showing {filteredRuns.length} of {runs.length}
             </span>
           </div>
-          <div className="card" style={{ padding: 0 }}>
-            <div className="table-container">
-              <table>
+          <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+            <div className="table-container" style={{ overflowX: 'auto' }}>
+              <table style={{ tableLayout: 'fixed', minWidth: 980 }}>
+                <colgroup>
+                  <col style={{ width: '12%' }} />
+                  <col style={{ width: '12%' }} />
+                  <col style={{ width: '10%' }} />
+                  <col style={{ width: '10%' }} />
+                  <col style={{ width: '14%' }} />
+                  <col style={{ width: '8%' }} />
+                  <col style={{ width: '34%' }} />
+                </colgroup>
                 <thead>
                   <tr>
                     <th>Run</th>

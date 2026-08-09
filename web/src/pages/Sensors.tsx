@@ -232,16 +232,23 @@ export default function Sensors() {
           </div>
 
           {/* Unified table — single header, category column for context */}
-          <div className="card" style={{ padding: 0 }}>
-            <div className="table-container">
-              <table>
+          <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+            <div className="table-container" style={{ overflowX: 'auto' }}>
+              <table style={{ tableLayout: 'fixed', minWidth: 920 }}>
+                <colgroup>
+                  <col style={{ width: '20%' }} />
+                  <col style={{ width: '12%' }} />
+                  <col style={{ width: '46%' }} />
+                  <col style={{ width: '12%' }} />
+                  <col style={{ width: '10%', minWidth: 110 }} />
+                </colgroup>
                 <thead>
                   <tr>
                     <th>Sensor</th>
                     <th>Category</th>
                     <th>Description</th>
                     <th>Status</th>
-                    <th style={{ width: 110, textAlign: 'right' }}>Action</th>
+                    <th style={{ textAlign: 'right' }}>Action</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -280,8 +287,8 @@ export default function Sensors() {
                         <td>
                           <span className="trigger-badge once" style={{ textTransform: 'uppercase' }}>{s.category}</span>
                         </td>
-                        <td style={{ color: 'var(--text-muted)', fontSize: 12, maxWidth: 480 }} className="truncate">
-                          {s.description}
+                        <td style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+                          <div className="truncate" title={s.description}>{s.description}</div>
                         </td>
                         <td>
                           <StatusBadge status={enabled ? 'active' : 'inactive'} />
