@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 )
 
 // handleV1ListFlows returns all flows.
@@ -312,6 +313,26 @@ func (s *Server) handleV1ListFlowRuns(w http.ResponseWriter, r *http.Request) {
 		Status:  r.URL.Query().Get("status"),
 	}
 	runs := s.flows.ListRuns(filter)
+	// Augment each run with duration_ms + a copy-safe payload field if missing.
+	for i := range runs {
+		if runs[i].StartedAt.IsZero() {
+			continue
+		}
+		var end time.Time
+		if runs[i].CompletedAt != nil {
+			end = *runs[i].CompletedAt
+		}
+		if end.IsZero() && (runs[i].Status == "running" || runs[i].Status == "pending") {
+			end = time.Now().UTC()
+		}
+		if !end.IsZero() {
+			dur := end.Sub(runs[i].StartedAt).Milliseconds()
+			if dur < 0 {
+				dur = 0
+			}
+			runs[i].DurationMs = dur
+		}
+	}
 	writeJSON(w, http.StatusOK, runs)
 }
 

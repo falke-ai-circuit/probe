@@ -238,6 +238,7 @@ export interface FlowRun {
   status: string
   started_at: string
   completed_at?: string
+  duration_ms?: number
   error?: string
   state?: Record<string, unknown>
 }
@@ -265,6 +266,7 @@ export interface SensorInfo {
   name: string
   category: string
   description: string
+  args?: string[]
 }
 
 export interface SensorState {

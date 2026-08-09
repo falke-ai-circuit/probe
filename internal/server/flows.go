@@ -115,6 +115,7 @@ type FlowRun struct {
 	Status     string          `json:"status"`
 	StartedAt  time.Time       `json:"started_at"`
 	CompletedAt *time.Time     `json:"completed_at,omitempty"`
+	DurationMs int64           `json:"duration_ms,omitempty"`
 	Error      string          `json:"error,omitempty"`
 	State      json.RawMessage `json:"state,omitempty"` // step state: {stepID: result}
 }
