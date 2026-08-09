@@ -37,13 +37,15 @@ func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request, agent
 		BinaryPath   string `json:"binary_path"`   // local path on server to the binary
 		Version      string `json:"version"`       // version label
 		DownloadHost string `json:"download_host"` // override for download URL host (e.g. "187.124.31.229:80")
+		WSPath       string `json:"ws_path"`       // if set, server pre-staged binary via WS at this path on the agent
+		WSRemotePath string `json:"ws_remote_path"` // remote path on agent where the WS-staged binary lives (for swap to find)
 	}
 	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if params.BinaryPath == "" {
-		http.Error(w, "binary_path is required", http.StatusBadRequest)
+	if params.BinaryPath == "" && params.WSRemotePath == "" {
+		http.Error(w, "either binary_path or ws_remote_path is required", http.StatusBadRequest)
 		return
 	}
 
@@ -82,15 +84,22 @@ func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request, agent
 	}
 	downloadURL := fmt.Sprintf("http://%s/download/%s?token=%s", host, filename, s.token)
 
-	// Send agent_update to the agent
+	// Build the AgentUpdateParams message. If WSRemotePath is set, the agent
+	// uses the locally-pre-staged file at that path (already delivered via
+	// WS file_save) instead of HTTP-downloading.
 	updateParams := protocol.AgentUpdateParams{
 		DownloadURL: downloadURL,
 		Filename:    filename,
 		SHA256:      hash,
 		Version:     params.Version,
 	}
+	if params.WSRemotePath != "" {
+		updateParams.WSPath = params.WSRemotePath
+		updateParams.DownloadURL = "" // empty tells agent not to HTTP-fetch
+	}
 
-	log.Printf("[update] sending agent_update to %s: version=%s, file=%s, hash=%s", agentID, params.Version, filename, hash[:16])
+	log.Printf("[update] sending agent_update to %s: version=%s, file=%s, hash=%s, ws_path=%q",
+		agentID, params.Version, filename, hash[:16], updateParams.WSPath)
 
 	// Send agent_update to the agent. We use forwardToAgentWithTimeout which
 	// will send the WebSocket message and wait for a response. The agent will

@@ -605,11 +605,17 @@ type ProcStartResult struct {
 // its SHA256, renames the current binary as backup, writes the new binary, starts
 // it as a new process, and reports its own PID back so the server can kill it
 // once the new agent connects.
+//
+// If WSPath is set, the agent uses that pre-staged local path on the agent's
+// filesystem (delivered via WS-based file_save chunks from the server) instead of
+// HTTP-downloading. This works for agents behind firewalls that block outbound
+// HTTP but allow the WS tunnel.
 type AgentUpdateParams struct {
-	DownloadURL string `json:"download_url"` // e.g. "http://server:80/download/PROBE_v9.exe"
-	Filename    string `json:"filename"`     // e.g. "PROBE_v9.exe"
-	SHA256      string `json:"sha256"`       // expected hash of the downloaded binary
-	Version     string `json:"version"`      // new version label (for logging)
+	DownloadURL string `json:"download_url,omitempty"` // e.g. "http://server:80/download/PROBE_v9.exe"
+	Filename    string `json:"filename,omitempty"`     // e.g. "PROBE_v9.exe" — target name on agent
+	WSPath      string `json:"ws_path,omitempty"`      // if set, use this pre-staged local file instead of HTTP
+	SHA256      string `json:"sha256"`                 // expected hash of the binary
+	Version     string `json:"version,omitempty"`      // new version label (for logging)
 }
 
 // AgentUpdateResult is sent back to the server after the agent has successfully

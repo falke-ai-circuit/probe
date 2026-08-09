@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -34,7 +35,13 @@ func (a *Agent) handleAgentUpdate(env protocol.Envelope) protocol.Envelope {
 		return protocol.NewError(env.ID, protocol.ErrInvalidParams, err.Error())
 	}
 
-	log.Printf("[update] received update command: version=%s, file=%s", params.Version, params.Filename)
+	log.Printf("[update] received update command: version=%s, file=%s, ws_path=%q", params.Version, params.Filename, params.WSPath)
+
+	// If WSPath is set, the server pre-staged the binary at this path via WS
+	// file_save chunks. Use it directly instead of HTTP-downloading.
+	if params.WSPath != "" {
+		return a.handleAgentUpdateFromWSPath(env, params)
+	}
 
 	// Step 1: Download the new binary
 	// Use a temp path in the same directory as the current exe to ensure
@@ -67,6 +74,11 @@ func (a *Agent) handleAgentUpdate(env protocol.Envelope) protocol.Envelope {
 	}
 	log.Printf("[update] downloaded %d bytes", written)
 
+	// Ensure downloaded file is executable (http.Get may create with 0644)
+	if err := os.Chmod(tmpPath, 0755); err != nil {
+		log.Printf("[update] chmod warning: %v", err)
+	}
+
 	// Step 2: Verify SHA256
 	if params.SHA256 != "" {
 		actualHash, err := hashFile(tmpPath)
@@ -86,11 +98,9 @@ func (a *Agent) handleAgentUpdate(env protocol.Envelope) protocol.Envelope {
 
 	// Step 4: On Windows, we cannot rename a running .exe. Instead, we write
 	// the new binary to a clean .exe path next to the current one and start it from there.
-	// Use the filename from the update params to get a clean .exe name.
-	// This avoids the ".new" chain problem where each update appends ".new" again.
+	// On Linux, we write it next to the current binary without the .exe suffix.
 	newExePath := filepath.Join(filepath.Dir(currentExe), params.Filename)
-	// If the filename doesn't end in .exe, append .exe (Windows requirement)
-	if !strings.HasSuffix(strings.ToLower(newExePath), ".exe") {
+	if runtime.GOOS == "windows" && !strings.HasSuffix(strings.ToLower(newExePath), ".exe") {
 		newExePath = newExePath + ".exe"
 	}
 	// Remove any previous file at this path (ignore error — may be locked)
@@ -148,6 +158,75 @@ func (a *Agent) handleAgentUpdate(env protocol.Envelope) protocol.Envelope {
 
 	// Don't wait for the new process — just return the result.
 	// The server will confirm the new agent connected and then kill this old process.
+	return protocol.NewResult(env.ID, protocol.TypeAgentUpdateResult, result)
+}
+
+// handleAgentUpdateFromWSPath swaps the agent binary when the server has
+// pre-staged the new binary via WS-based file_save (no HTTP download needed).
+// The pre-staged file at params.WSPath has already been SHA256-verified by
+// the transfer manager; we still re-verify as defense-in-depth, then rename
+// the current binary as backup, move the new one into place, start it, and
+// return the old PID so the server can kill us when the new agent connects.
+func (a *Agent) handleAgentUpdateFromWSPath(env protocol.Envelope, params protocol.AgentUpdateParams) protocol.Envelope {
+	log.Printf("[update] using WS-pre-staged binary at %s", params.WSPath)
+
+	// Defense-in-depth SHA256 verify
+	if params.SHA256 != "" {
+		actualHash, err := hashFile(params.WSPath)
+		if err != nil {
+			return protocol.NewError(env.ID, protocol.ErrInternal, fmt.Sprintf("hash failed: %v", err))
+		}
+		if actualHash != params.SHA256 {
+			return protocol.NewError(env.ID, protocol.ErrInvalidParams, fmt.Sprintf("hash mismatch: expected %s, got %s", params.SHA256, actualHash))
+		}
+		log.Printf("[update] SHA256 verified: %s", actualHash)
+	}
+
+	// Make sure the staged file is executable (file_save chunks preserve mode but may set 0600)
+	if err := os.Chmod(params.WSPath, 0755); err != nil {
+		log.Printf("[update] chmod warning: %v", err)
+	}
+
+	// Step 1: Determine target path on disk
+	currentExe, _ := os.Executable()
+	newExePath := filepath.Join(filepath.Dir(currentExe), params.Filename)
+	if !strings.HasSuffix(strings.ToLower(newExePath), ".exe") {
+		newExePath = newExePath + ".exe"
+	}
+
+	// Step 2: Move staged binary into place (fall back to copy if rename fails)
+	os.Remove(newExePath)
+	if err := os.Rename(params.WSPath, newExePath); err != nil {
+		if copyErr := copyFileAgent(params.WSPath, newExePath); copyErr != nil {
+			return protocol.NewError(env.ID, protocol.ErrInternal, fmt.Sprintf("move staged exe failed: rename=%v, copy=%v", err, copyErr))
+		}
+	}
+	log.Printf("[update] staged binary moved to %s", newExePath)
+
+	// Step 3: Start new binary with same config
+	configPath := getConfigPath()
+	args := []string{"connect", "--config", configPath}
+	newCmd := exec.Command(newExePath, args...)
+	newCmd.Stdin = nil
+	newCmd.Stdout = nil
+	newCmd.Stderr = nil
+	newCmd.SysProcAttr = getSysProcAttr()
+
+	if err := newCmd.Start(); err != nil {
+		os.Remove(newExePath)
+		return protocol.NewError(env.ID, protocol.ErrInternal, fmt.Sprintf("start new process failed: %v", err))
+	}
+
+	newPID := newCmd.Process.Pid
+	oldPID := os.Getpid()
+	log.Printf("[update] (WS) new process started: PID=%d, old PID=%d", newPID, oldPID)
+
+	result := protocol.AgentUpdateResult{
+		Success: true,
+		OldPID:  oldPID,
+		NewPID:  newPID,
+		Message: fmt.Sprintf("update to %s via WS-path successful, new PID=%d", params.Version, newPID),
+	}
 	return protocol.NewResult(env.ID, protocol.TypeAgentUpdateResult, result)
 }
 
