@@ -22,9 +22,15 @@ const SENSOR_CATALOG: SensorInfo[] = [
   { name: 'ntp_drift', category: 'time', description: 'NTP query and clock drift vs local (ms). Args: server (default time.google.com:123)' },
   { name: 'agent_metrics', category: 'agent', description: 'Agent internal counters: messages sent/received, reconnects, uptime' },
   { name: 'audit_chain', category: 'agent', description: 'Hash of agent identity + start time (tamper detection)' },
+
+  // INPUT category — OS-dependent, requires appropriate permissions
+  { name: 'active_window', category: 'input', description: 'Title of the foreground window (Linux/Windows/macOS)' },
+  { name: 'clipboard_read', category: 'input', description: 'Read the OS clipboard (raw text, no redaction)' },
+  { name: 'browser_history', category: 'input', description: 'Most recent N visits from default browser (default 50, max 1000). Requires sqlite3 CLI.' },
+  { name: 'keypress_window', category: 'input', description: 'Rolling buffer of recent keystrokes (Linux/Windows only, macOS denied)' },
 ]
 
-const CATEGORIES = ['process', 'filesystem', 'network', 'time', 'agent']
+const CATEGORIES = ['process', 'filesystem', 'network', 'time', 'agent', 'input']
 
 export default function Sensors() {
   const [agents, setAgents] = useState<AgentRecord[]>([])

@@ -29,6 +29,12 @@ func init() {
 		// Group 5: agent-internal
 		agentMetricsSensor{},
 		auditChainSensor{},
+
+		// Group 6: input (OS-dependent, requires appropriate permissions)
+		activeWindowSensor{},
+		clipboardReadSensor{},
+		browserHistorySensor{},
+		keypressWindowSensor{},
 	} {
 		agentSensors.Register(s)
 	}
