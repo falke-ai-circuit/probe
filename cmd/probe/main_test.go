@@ -63,10 +63,13 @@ func TestCLI_VersionSubcommand(t *testing.T) {
 }
 
 func TestCLI_NoArgs_PrintsUsage(t *testing.T) {
+	// With no config and no args, PROBE starts as supervisor by default.
+	// The supervisor itself is documented in stderr (endpoints + modes).
+	// Pass with a config flag to check usage.
 	bin := buildProbe(t)
-	_, stderr, code := runProbe(t, bin)
+	_, stderr, code := runProbe(t, bin, "--help")
 	if code == 0 {
-		t.Log("note: no-args exit code is 1 (usage error)")
+		t.Log("note: --help exit code is 0")
 	}
 	if !strings.Contains(stderr, "Usage:") {
 		t.Errorf("expected 'Usage:' in stderr, got: %s", stderr)
