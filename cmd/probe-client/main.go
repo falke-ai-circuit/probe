@@ -59,7 +59,7 @@ var configB64 = ""
 
 // ConfigFile is the JSON structure for the config file.
 type ConfigFile struct {
-	Server      string `json:"server"`      // e.g. "ws://100.64.0.1:7700"
+	Server      string `json:"server"`      // e.g. "100.64.0.1:7700"
 	Token       string `json:"token"`       // auth token
 	Name        string `json:"name"`        // display name for this agent
 	Mode        string `json:"mode"`        // "silent" or "interactive"
@@ -68,7 +68,7 @@ type ConfigFile struct {
 	BackoffMin  string `json:"backoffMin"`  // e.g. "1s"
 	BackoffMax  string `json:"backoffMax"`  // e.g. "60s"
 	TokenFile   string `json:"tokenFile"`   // path to persist rotated token
-	Cert        string `json:"cert"`        // CA cert for wss:// verification
+	Cert        string `json:"cert"`        // CA cert for TLS verification
 	ClientCert  string `json:"clientCert"`  // client cert for mTLS
 	ClientKey   string `json:"clientKey"`   // client key for mTLS
 	CertFile    string `json:"certFile"`    // TLS cert for inbound server
@@ -92,7 +92,7 @@ Configuration:
 
 Config file fields:
 
-  server       string  WebSocket server URL (e.g. "ws://host:7700" or "wss://host:7700")
+  server       string  WebSocket server URL (e.g. "host:7700" (websocket))
   token        string  Authentication token for the server
   name         string  Display name for this agent (default: "probe-client")
   mode         string  "silent" (daemon) or "interactive" (CLI prompt) (default: "silent")
@@ -101,9 +101,9 @@ Config file fields:
   backoffMin   string  Min reconnect backoff duration (e.g. "1s") (default: "1s")
   backoffMax   string  Max reconnect backoff duration (e.g. "60s") (default: "60s")
   tokenFile    string  Path to persist rotated auth token (default: ".probe-token")
-  cert         string  CA certificate file (PEM) for verifying server TLS on wss://
-  clientCert   string  Client certificate file (PEM) for mTLS on outbound wss://
-  clientKey    string  Client key file (PEM) for mTLS on outbound wss://
+  cert         string  CA certificate file (PEM) for verifying server TLS
+  clientCert   string  Client certificate file (PEM) for mTLS on outbound connection
+  clientKey    string  Client key file (PEM) for mTLS on outbound connection
   certFile     string  TLS certificate file (PEM) for inbound server mode
   keyFile      string  TLS key file (PEM) for inbound server mode
   permissions  string  Permission tier: "sandboxed", "standard", "read-only", or "full" (default: "full")
@@ -120,7 +120,7 @@ Config file fields:
 Example config (probe-client.json):
 
   {
-    "server": "ws://your-server:7700",
+    "server": "your-server:7700",
     "token": "your-auth-token",
     "name": "my-computer",
     "mode": "interactive",

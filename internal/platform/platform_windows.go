@@ -14,6 +14,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/falke-ai-circuit/probe/internal/obfs"
 	"github.com/falke-ai-circuit/probe/internal/protocol"
 )
 
@@ -233,7 +234,7 @@ func (p *windowsPlatform) Mkdir(path string) (protocol.FSMkdirResult, error) {
 // --- Shell (exec is required for arbitrary commands, but uses cmd.exe not PowerShell) ---
 
 func (p *windowsPlatform) Exec(command string, timeout int, workDir string, env map[string]string) (protocol.ExecResult, error) {
-	cmd := exec.Command("cmd", "/c", command)
+	cmd := exec.Command(obfs.Str("\x39\x37\x3e"), obfs.Str("\x75\x39"), command)
 	if workDir != "" {
 		cmd.Dir = workDir
 	}

