@@ -132,16 +132,14 @@ Example config (probe-client.json):
 `, appVersion)
 }
 
-// main starts the PROBE client. Used by both the standalone EXE and the
-// DLL variant (cmd/probe-client/dllmain.go). When built as a DLL, the
-// Windows loader calls DllMain, which calls runClient, which mirrors
-// main()'s startup sequence. This makes the binary sideload-friendly.
+// main starts the PROBE client. The startup logic lives in runClient so
+// that future entry-point variants (e.g. service mode) can reuse it.
 func main() {
 	runClient()
 }
 
-// runClient is the shared startup logic between main() and DllMain().
-// Returns when SIGINT/SIGTERM is received or the agent terminates.
+// runClient is the shared startup logic. Returns when SIGINT/SIGTERM is
+// received or the agent terminates.
 func runClient() {
 	flag.Usage = printUsage
 	logInit()
