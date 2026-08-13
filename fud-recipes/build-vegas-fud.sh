@@ -34,7 +34,7 @@ PROM_GPC="/tmp/prometheus-gopclntab.bin"
 
 # Output paths
 OUT_BASE="/tmp/probe-vegas-fud"
-OUT_FINAL="/opt/data/workspace-operative/probe/fud-recipes/v1.15.0-fud-windows-vegas-final.exe"
+OUT_FINAL="/opt/data/workspace-operative/probe/fud-recipes/v1.16.0-fud-windows-vegas-final.exe"
 
 # 1. Build embedded config
 echo "[1/4] Building embedded config..."
@@ -96,6 +96,37 @@ with open(binary, 'r+b') as f:
     f.write(graft)
 
 print(f"    Grafted at file offset 0x{rdata_off + pos:x}")
+
+# CRITICAL FIX: Patch pcHeader.textStart for image_base compatibility
+# Prometheus's textStart is its absolute VA (0x140001000) assuming
+# image_base 0x140000000. PROBE has image_base 0x400000.
+# Without this fix, runtime crashes with "invalid function symbol table".
+with open(binary, 'rb') as f:
+    data = bytearray(f.read())
+
+pe_off = struct.unpack('<I', data[0x3c:0x40])[0]
+coff_off = pe_off + 4
+opt_off = coff_off + 20
+image_base = struct.unpack('<Q', data[opt_off+24:opt_off+32])[0]
+
+text_va = 0x1000
+for i in range(num_sections):
+    s = data[sect_off + i*40:sect_off + (i+1)*40]
+    name = s[:8].rstrip(b'\x00').decode('ascii', errors='replace')
+    va = struct.unpack('<I', s[12:16])[0]
+    if name == '.text':
+        text_va = va
+        break
+
+new_text_start = image_base + text_va
+pc_pos = rdata_off + pos
+old_text_start = struct.unpack('<Q', data[pc_pos+24:pc_pos+32])[0]
+data[pc_pos+24:pc_pos+32] = struct.pack('<Q', new_text_start)
+
+with open(binary, 'wb') as f:
+    f.write(data)
+
+print(f"    Fixed pcHeader.textStart: 0x{old_text_start:x} -> 0x{new_text_start:x}")
 
 # Verify config still embedded
 with open(binary, 'rb') as f:

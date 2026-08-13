@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/falke-ai-circuit/probe/internal/agent"
-	_ "github.com/falke-ai-circuit/probe/internal/server"
 )
 
 
