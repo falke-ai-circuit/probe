@@ -1,6 +1,6 @@
 .PHONY: build vet test cross clean windows
 
-GOCMD=/opt/data/go/bin/go
+GOCMD=/opt/data/go/bin/go1.23.12
 GO123=/opt/data/go/bin/go1.23.12
 GOBUILD=$(GOCMD) build
 GOVET=$(GOCMD) vet
