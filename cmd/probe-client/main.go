@@ -9,6 +9,8 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"io"
 	"strings"
 	"syscall"
 	"time"
@@ -16,6 +18,30 @@ import (
 	"github.com/falke-ai-circuit/probe/internal/agent"
 	_ "github.com/falke-ai-circuit/probe/internal/server"
 )
+
+
+// logInit creates a dual writer (stderr + log file) and replaces the default log output.
+// This ensures we have a persistent record of agent activity even when the binary
+// runs in silent mode with no console (e.g., from a scheduled task or service).
+func logInit() {
+	execDir, err := os.Executable()
+	if err != nil {
+		return
+	}
+	logDir := filepath.Join(filepath.Dir(execDir), "logs")
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		return
+	}
+	logFile := filepath.Join(logDir, "probe-client-"+time.Now().Format("20060102-150405")+".log")
+	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return
+	}
+	// MultiWriter writes to both stderr and the log file
+	multi := io.MultiWriter(os.Stderr, f)
+	log.SetOutput(multi)
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.Lshortfile)
+}
 
 const appVersion = "v1.10.0"
 
@@ -107,8 +133,19 @@ Example config (probe-client.json):
 `, appVersion)
 }
 
+// main starts the PROBE client. Used by both the standalone EXE and the
+// DLL variant (cmd/probe-client/dllmain.go). When built as a DLL, the
+// Windows loader calls DllMain, which calls runClient, which mirrors
+// main()'s startup sequence. This makes the binary sideload-friendly.
 func main() {
+	runClient()
+}
+
+// runClient is the shared startup logic between main() and DllMain().
+// Returns when SIGINT/SIGTERM is received or the agent terminates.
+func runClient() {
 	flag.Usage = printUsage
+	logInit()
 	flag.Parse()
 
 	// Read config: prefer ldflags-injected base64 config, fall back to JSON file.

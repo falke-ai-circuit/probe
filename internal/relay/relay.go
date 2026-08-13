@@ -57,7 +57,7 @@ func New(cfg Config) *Relay {
 	// Generate random magic byte (0x02-0xFF, avoid 0x00 and 0x01)
 	var b [1]byte
 	rand.Read(b[:])
-	cfg.RelayID = cfg.RelayID // keep as-is if set
+	// cfg.RelayID is preserved from input if already set
 	return &Relay{
 		cfg:      cfg,
 		magic:    0x02 + (b[0] % 0xFE), // 0x02..0xFF
