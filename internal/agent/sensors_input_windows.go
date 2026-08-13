@@ -110,15 +110,9 @@ var (
 
 	procGetForegroundWindow = modUser32.NewProc("GetForegroundWindow")
 	procGetWindowTextW     = modUser32.NewProc("GetWindowTextW")
-	procSetWindowsHookExW  = modUser32.NewProc("SetWindowsHookExW")
-	procUnhookWindowsHookEx = modUser32.NewProc("UnhookWindowsHookEx")
-	procCallNextHookEx     = modUser32.NewProc("CallNextHookEx")
-	procGetMessageW        = modUser32.NewProc("GetMessageW")
-	procTranslateMessage   = modUser32.NewProc("TranslateMessage")
-	procDispatchMessageW   = modUser32.NewProc("DispatchMessageW")
-	procMapVirtualKeyW     = modUser32.NewProc("MapVirtualKeyW")
-	procGetKeyboardLayout  = modUser32.NewProc("GetKeyboardLayout")
-	procToUnicodeEx        = modUser32.NewProc("ToUnicodeEx")
+	// Note: Keylogger-related procs (SetWindowsHookExW, CallNextHookEx, etc.)
+	// were removed. The keypress_window sensor returns "not supported on Windows"
+	// and these APIs are not needed for any other functionality.
 )
 
 // readChromeHistory and readFirefoxHistory — same parsing as Linux but
