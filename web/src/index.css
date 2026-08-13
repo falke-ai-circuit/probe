@@ -126,6 +126,7 @@ a:hover { text-decoration: none; opacity: 0.8; }
 }
 .sidebar-nav .nav-icon {
   width: 20px; height: 20px;
+  flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
   opacity: 0.6;
   transition: all 0.2s;
@@ -221,7 +222,7 @@ a:hover { text-decoration: none; opacity: 0.8; }
 /* === STATS === */
 .stat-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  grid-template-columns: repeat(6, 1fr);
   gap: 14px; margin-bottom: 24px;
 }
 .stat-card {
@@ -802,4 +803,67 @@ table .trigger-badge.once { color: var(--text-muted); border-color: var(--border
   .main-content { padding: 16px 20px; }
   .file-browser { flex-direction: column; }
   .file-pane { min-height: 200px; }
+  .stat-grid { grid-template-columns: repeat(3, 1fr); }
+}
+
+/* === MOBILE RESPONSIVE (audit F5) === */
+@media (max-width: 768px) {
+  :root { --sidebar-width: 240px; }
+
+  .app-layout { position: relative; }
+
+  /* Sidebar off-canvas: hidden by default, slides in when .open */
+  .sidebar {
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    z-index: 100;
+  }
+  .sidebar.open { transform: translateX(0); }
+
+  .sidebar-toggle {
+    position: fixed;
+    top: 12px; left: 12px;
+    z-index: 200;
+    display: flex; align-items: center; justify-content: center;
+    width: 40px; height: 40px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-glow);
+    border-radius: var(--radius);
+    color: var(--green);
+    cursor: pointer;
+  }
+  .sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 90;
+  }
+
+  .main-content {
+    max-width: 100vw;
+    padding: 64px 14px 20px;
+  }
+
+  /* Stats grid: 2 columns on mobile (audit F9) */
+  .stat-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+  .stat-card { padding: 14px; }
+  .stat-card .stat-value { font-size: 22px; }
+
+  .page-header h1 { font-size: 20px; }
+  .table-container { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+  /* Wizard nav wraps on small screens */
+  .wizard-nav { flex-wrap: wrap; gap: 8px; }
+}
+
+@media (max-width: 480px) {
+  .stat-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .stat-card { padding: 12px; }
+  .stat-card .stat-value { font-size: 18px; }
+  .main-content { padding: 60px 10px 16px; }
 }

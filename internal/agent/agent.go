@@ -790,7 +790,9 @@ func (a *Agent) handleKeyCombo(env protocol.Envelope) protocol.Envelope {
 }
 
 func (a *Agent) handleHealth(env protocol.Envelope) protocol.Envelope {
-	return protocol.NewResult(env.ID, protocol.TypeHealthResult, a.plat.Health(a.cfg.Mode))
+	hr := a.plat.Health(a.cfg.Mode)
+	hr.Capabilities = a.cfg.Capabilities
+	return protocol.NewResult(env.ID, protocol.TypeHealthResult, hr)
 }
 
 func (a *Agent) handleTaskList(env protocol.Envelope) protocol.Envelope {
@@ -994,7 +996,7 @@ func (a *Agent) SendPrompt(prompt string) {
 }
 
 // Version is the agent version.
-const Version = "1.15.0"
+const Version = "1.15.1"
 
 func getOS() string   { return runtime.GOOS }
 func getArch() string { return runtime.GOARCH }

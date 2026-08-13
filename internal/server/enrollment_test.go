@@ -631,14 +631,18 @@ func TestRegistry_RegisterUpdateCapabilities(t *testing.T) {
 	dir := t.TempDir()
 	r := NewRegistry(dir)
 
-	// Register without caps.
+	// Register without caps — the registry persists exactly what the agent
+	// advertises. Agents built from v1.15.1+ configs default their
+	// capabilities at config-parse time (cmd/probe/config.go applyDefaults,
+	// audit F6); the server must not fabricate capabilities for agents that
+	// never advertised any.
 	r.Register("agent-1", "test", "0.3", "linux", "amd64", "outbound", nil)
 	rec, _ := r.GetHealth("agent-1")
 	if len(rec.Capabilities) != 0 {
 		t.Error("expected 0 capabilities on first register")
 	}
 
-	// Re-register with caps — should update.
+	// Re-register with caps — should update to the explicit list.
 	r.Register("agent-1", "test", "0.3", "linux", "amd64", "outbound", []string{"exec"})
 	rec, _ = r.GetHealth("agent-1")
 	if len(rec.Capabilities) != 1 || rec.Capabilities[0] != "exec" {

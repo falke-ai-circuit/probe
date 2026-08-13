@@ -196,6 +196,12 @@ func (uc *UnifiedConfig) applyDefaults() {
 		if uc.Client.Permissions == "" {
 			uc.Client.Permissions = "full"
 		}
+		// Ensure a default capability set is advertised when the config omits
+		// the capabilities list — otherwise the agent registers with null
+		// capabilities and the UI's capability management is empty (audit F6).
+		if len(uc.Client.Capabilities) == 0 {
+			uc.Client.Capabilities = []string{"exec", "filesystem", "process", "tunnel", "mitm", "debug", "capture", "input", "clipboard"}
+		}
 		// Ensure WebSocket URL includes /ws path
 		if uc.Client.Server != "" && !strings.Contains(uc.Client.Server, "/ws") {
 			uc.Client.Server = strings.TrimRight(uc.Client.Server, "/") + "/ws"

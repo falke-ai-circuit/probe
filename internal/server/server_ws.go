@@ -209,6 +209,9 @@ func (s *Server) handleMessages(agentID string, conn *websocket.Conn) {
 						MemoryMB:   hr.MemoryMB,
 						DiskFreeMB: hr.DiskFreeMB,
 					})
+					if len(hr.Capabilities) > 0 {
+						s.registry.UpdateCapabilities(agentID, hr.Capabilities)
+					}
 				}
 			}
 

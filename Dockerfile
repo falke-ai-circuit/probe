@@ -11,7 +11,7 @@
 FROM node:22-slim AS frontend
 WORKDIR /build
 COPY web/package.json web/package-lock.json* ./
-RUN npm ci --production 2>/dev/null || npm install
+RUN npm ci 2>/dev/null || npm install
 COPY web/ ./
 RUN npm run build
 

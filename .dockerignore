@@ -1,0 +1,13 @@
+# Build context hygiene (audit F6 companion)
+builds/
+runtime/
+data/
+reviews/
+web/node_modules/
+web/dist/
+*.exe
+*.db
+*.zip
+probe-client-vegas.json
+probe-vegas-README.md
+.git/

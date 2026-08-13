@@ -3,6 +3,21 @@
 All notable changes to PROBE are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [Semantic Versioning](https://semver.org/).
 
+## [v1.15.1] — 2026-08-13
+
+### Fixed — Adversarial audit (2026-08-13)
+
+- **F2 (CRITICAL):** `/api/v1/topology` now requires API auth (`v1CheckAuth`) — previously leaked the full agent/relay network map to unauthenticated requests.
+- **F1 (CRITICAL):** Dashboard topology graph no longer crashes with `b.edges is not iterable` when no relays are connected (`raw.edges || []`).
+- **F3 (MAJOR):** Topology API now emits parent→child edges (`{from: "server", to: agentID}`) matching the frontend `computeLayout`; `parentMap` builds child→parent lookups.
+- **F6 (MAJOR):** Agents now advertise a default capability set when config omits `capabilities` — no more null capability lists for active agents.
+- **F4 (MAJOR):** Repeated identical errors are tracked (`same_error_count`); ≥5 repeats flags `needs_attention` and caps `health_score` at 0.4 (below the 0.5 attention line). Flag clears on clean re-registration.
+- **F5 (MAJOR):** Mobile responsive layout — hamburger toggle, off-canvas sidebar <768px, 2-column stat grid, wrapping wizard nav.
+- **F7 (MINOR):** Builder "← Previous" button hidden on step 1 (no more misleading enabled look).
+- **F8 (MINOR):** Settings operator ID is copy-to-clipboard with full-ID tooltip.
+- **F9 (MINOR):** Dashboard stat grid stacks to 2 columns on mobile.
+- **F10 (MINOR):** Sidebar icon alignment fixed (`flex-shrink: 0` on `.nav-icon`).
+
 ## [v1.13.0] — 2026-08-08
 
 ### Added — Flow Runtime (Part A)

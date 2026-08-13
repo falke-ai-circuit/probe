@@ -154,7 +154,15 @@ export default function Settings() {
               <tbody>
                 {operators.map(o => (
                   <tr key={o.id}>
-                    <td className="mono dim">{o.id.slice(0, 12)}…</td>
+                    <td className="mono dim">
+                      <span
+                        title={o.id}
+                        onClick={() => { navigator.clipboard?.writeText(o.id); setSuccess(`Copied operator ID ${o.id.slice(0, 12)}…`) }}
+                        style={{ cursor: 'pointer', borderBottom: '1px dashed var(--border)' }}
+                      >
+                        {o.id.slice(0, 12)}…
+                      </span>
+                    </td>
                     <td>{o.name}</td>
                     <td><span className={`badge ${o.role === 'admin' ? 'badge-green' : o.role === 'operator' ? 'badge-blue' : 'badge-gray'}`}>{o.role}</span></td>
                     <td className="dim">{o.created_at ? new Date(o.created_at).toLocaleString() : '—'}</td>

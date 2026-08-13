@@ -15,6 +15,10 @@ import (
 const (
 	staleCheckInterval = 30 * time.Second
 	staleThreshold     = 90 * time.Second
+	// sameErrorThreshold is the number of consecutive identical errors after
+	// which an agent is flagged NeedsAttention and its health score is capped
+	// below 0.5 (audit F4 — repeated same-error auto-update failures).
+	sameErrorThreshold = 5
 )
 
 // ResourceInfo describes an agent's resource usage, typically reported
@@ -40,6 +44,8 @@ type AgentRecord struct {
 	UptimeSeconds int64         `json:"uptime_seconds"`
 	LastError     string        `json:"last_error,omitempty"`
 	ErrorCount    int           `json:"error_count"`
+	SameErrorCount int          `json:"same_error_count,omitempty"` // consecutive repeats of the same error (audit F4)
+	NeedsAttention bool         `json:"needs_attention,omitempty"`  // same error persisted past threshold (audit F4)
 	HealthScore   float64       `json:"health_score"` // 0.0-1.0 composite
 	ResourceUsage *ResourceInfo `json:"resource_usage,omitempty"`
 
@@ -55,6 +61,11 @@ type AgentRecord struct {
 //     floored at 0
 //   - uptime stability (0.0–0.3): scales linearly from 0 to 0.3 over the
 //     first 5 minutes of uptime, capped at 0.3
+//   - same-error persistence (audit F4): a repeated identical error is more
+//     severe than distinct errors — it indicates a stuck condition. The
+//     sameErrorThreshold (default 5) consecutive repeats of the same error
+//     caps the total score at 0.4 (below the 0.5 needs-attention line) and
+//     raises NeedsAttention.
 func (rec *AgentRecord) computeHealthScore(now time.Time) float64 {
 	var score float64
 
@@ -85,6 +96,15 @@ func (rec *AgentRecord) computeHealthScore(now time.Time) float64 {
 		} else if uptime > 0 {
 			score += 0.3 * (float64(uptime) / float64(5*time.Minute))
 		}
+	}
+
+	// same-error persistence penalty (audit F4): >=5 repeats of the SAME
+	// error drops the score below 0.5 and flags the agent for attention.
+	if rec.SameErrorCount >= sameErrorThreshold {
+		if score > 0.4 {
+			score = 0.4
+		}
+		rec.NeedsAttention = true
 	}
 
 	return score
@@ -129,6 +149,10 @@ func (r *Registry) Register(agentID, name, version, goos, arch, mode string, cap
 		rec.LastHeartbeat = nowStr
 		rec.lastHeartbeat = now
 		rec.Status = "active"
+		// A clean re-registration implies the agent recovered — clear the
+		// same-error attention flag (audit F4).
+		rec.SameErrorCount = 0
+		rec.NeedsAttention = false
 		rec.HealthScore = rec.computeHealthScore(now)
 	} else {
 		rec := &AgentRecord{
@@ -148,6 +172,23 @@ func (r *Registry) Register(agentID, name, version, goos, arch, mode string, cap
 		rec.HealthScore = rec.computeHealthScore(now)
 		r.agents[agentID] = rec
 	}
+	r.save()
+}
+
+// UpdateCapabilities updates the capability list advertised by an agent, e.g.
+// when capabilities arrive via a health report or heartbeat. Empty input is
+// ignored so a report lacking capabilities can't wipe the persisted set.
+func (r *Registry) UpdateCapabilities(agentID string, capabilities []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rec, ok := r.agents[agentID]
+	if !ok {
+		return
+	}
+	if len(capabilities) == 0 {
+		return
+	}
+	rec.Capabilities = capabilities
 	r.save()
 }
 
@@ -201,13 +242,21 @@ func (r *Registry) Heartbeat(agentID string) {
 }
 
 // RecordError records an error for an agent: sets LastError, increments
-// ErrorCount, and decrements HealthScore.
+// ErrorCount (and SameErrorCount when the error repeats identically), and
+// recalculates HealthScore. When the same error persists past
+// sameErrorThreshold, the agent is flagged NeedsAttention and its score is
+// capped below 0.5 (audit F4).
 func (r *Registry) RecordError(agentID string, errMsg string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	rec, ok := r.agents[agentID]
 	if !ok {
 		return
+	}
+	if rec.LastError == errMsg && errMsg != "" {
+		rec.SameErrorCount++
+	} else {
+		rec.SameErrorCount = 1
 	}
 	rec.LastError = errMsg
 	rec.ErrorCount++

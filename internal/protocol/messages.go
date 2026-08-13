@@ -404,6 +404,9 @@ type HealthResult struct {
 	UptimeSeconds  int64   `json:"uptime_seconds"`
 	Mode           string  `json:"mode"`
 	ConnectedSince string  `json:"connected_since"`
+	// Capabilities the agent advertises (audit F6 — lets the server refresh
+	// the persisted capability set from health reports as well as registration).
+	Capabilities []string `json:"capabilities,omitempty"`
 	// Resource usage (populated by agents that report it; zero = not reported).
 	CPUPercent float64 `json:"cpu_percent,omitempty"`
 	MemoryMB   float64 `json:"memory_mb,omitempty"`

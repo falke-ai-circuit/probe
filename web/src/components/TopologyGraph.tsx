@@ -178,9 +178,10 @@ export function TopologyGraph() {
       const relayNodes = raw.nodes.filter(n => n.type === 'relay')
 
       // Build parent map from edges
+      // API emits parent→child edges ({from: server, to: agent}); map child → parent
       const parentMap: Record<string, string> = {}
-      for (const e of raw.edges) {
-        parentMap[e.from] = e.to
+      for (const e of raw.edges || []) {
+        parentMap[e.to] = e.from
       }
 
       const transform = (n: any): TopologyNode => ({

@@ -99,6 +99,9 @@ func (s *Server) handleV1GetAgentMode(w http.ResponseWriter, r *http.Request) {
 // handleV1Topology returns the full relay topology tree.
 // GET /api/v1/topology
 func (s *Server) handleV1Topology(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.v1CheckAuth(w, r, "list"); !ok {
+		return
+	}
 	// Build topology from relay sessions + agent registry
 	s.relayMu.RLock()
 	relays := make([]*relaySession, 0, len(s.relays))
@@ -176,16 +179,16 @@ func (s *Server) handleV1Topology(w http.ResponseWriter, r *http.Request) {
 
 		nodes = append(nodes, relayNode)
 		edges = append(edges, TopologyEdge{
-			From: rs.relayID,
-			To:   "server",
+			From: "server",
+			To:   rs.relayID,
 			Type: "relay",
 		})
 
 		// Add edges for relayed agents
 		for _, child := range relayNode.Children {
 			edges = append(edges, TopologyEdge{
-				From: child.ID,
-				To:   rs.relayID,
+				From: rs.relayID,
+				To:   child.ID,
 				Type: "relayed",
 			})
 		}
@@ -218,8 +221,8 @@ func (s *Server) handleV1Topology(w http.ResponseWriter, r *http.Request) {
 		}
 		nodes = append(nodes, node)
 		edges = append(edges, TopologyEdge{
-			From: agentInfo.AgentID,
-			To:   "server",
+			From: "server",
+			To:   agentInfo.AgentID,
 			Type: "direct",
 		})
 	}

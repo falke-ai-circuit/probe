@@ -291,7 +291,9 @@ export default function Builder() {
 
         {/* Wizard nav */}
         <div className="wizard-nav">
-          <button className="btn" onClick={() => setStep(s => Math.max(0, s - 1))} disabled={step === 0}>← Previous</button>
+          {step > 0 && (
+            <button className="btn" onClick={() => setStep(s => Math.max(0, s - 1))}>← Previous</button>
+          )}
           {step < wizardSteps.length - 1 ? (
             <button className="btn btn-primary" onClick={() => setStep(s => s + 1)}>Next →</button>
           ) : (
