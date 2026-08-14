@@ -108,7 +108,7 @@ export default function Flows() {
     const steps = [...selectedFlow.steps, emptyStep()]
     setSelectedFlow({ ...selectedFlow, steps })
     const last = steps[steps.length - 1]
-    setPositions(p => ({ ...p, [last.id]: { x: 40, y: 40 + (steps.length - 1) * 140 } }))
+    setPositions(p => ({ ...p, [last.id]: { x: 40, y: 40 + (steps.length - 1) * 220 } }))
   }
 
   const updateStep = (idx: number, patch: Partial<FlowStep>) => {
