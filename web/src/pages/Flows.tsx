@@ -182,7 +182,8 @@ export default function Flows() {
 
   const latestRun = useMemo(() => {
     if (!selectedFlow) return null
-    return runs.filter(r => r.flow_id === selectedFlow.id).sort((a, b) => (b.started_at || '').localeCompare(a.started_at || ''))[0] || liveRun
+    if (liveRun) return liveRun
+    return runs.filter(r => r.flow_id === selectedFlow.id).sort((a, b) => (b.started_at || '').localeCompare(a.started_at || ''))[0] || null
   }, [runs, selectedFlow, liveRun])
 
   const runAccent = latestRun?.status === 'running' ? 'var(--cyan)' : latestRun?.status === 'completed' ? 'var(--green)' : latestRun?.status === 'failed' ? 'var(--red)' : 'var(--border)'

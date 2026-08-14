@@ -11,6 +11,11 @@
   --red-glow: 0 0 4px rgba(255,0,60,0.5);
   --yellow: #ffb000;
   --yellow-glow: 0 0 4px rgba(255,176,0,0.4);
+  --cyan: #00e5ff;
+  --cyan-glow: 0 0 6px rgba(0,229,255,0.6), 0 0 16px rgba(0,229,255,0.3);
+  --purple: #b967ff;
+  --blue: #4d9fff;
+  --orange: #ff9f00;
   --bg: #050805;
   --bg-card: #0a0f0a;
   --bg-hover: #0d140d;
