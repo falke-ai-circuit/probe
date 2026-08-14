@@ -42,7 +42,7 @@ func logInit() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.Lshortfile)
 }
 
-const appVersion = "v1.16.0"
+const appVersion = "v1.16.1"
 
 // configPath is the JSON config file path (flag: --config).
 // All connection parameters are read from this file instead of
