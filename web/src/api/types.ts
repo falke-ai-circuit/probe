@@ -210,6 +210,10 @@ export interface FlowStep {
   classify_as?: string
   signal?: string
   payload?: unknown
+  body?: FlowStep[]
+  interval_seconds?: number
+  max_iterations?: number
+  stop_condition?: string
 }
 
 export interface FlowTrigger {
@@ -241,6 +245,8 @@ export interface FlowRun {
   duration_ms?: number
   error?: string
   state?: Record<string, unknown>
+  node_status?: Record<string, string>
+  active_node?: string
 }
 
 export interface FlowTemplate {

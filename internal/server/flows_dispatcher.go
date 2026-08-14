@@ -116,6 +116,7 @@ func (fd *FlowDispatcher) runFlow(ctx context.Context, run *FlowRun, flow *Flow)
 			return
 		}
 
+		fd.markNode(run, step.ID, "running")
 		next, err := fd.executeStep(ctx, run, flow, step, state)
 		if err != nil {
 			switch step.OnError {
@@ -131,6 +132,7 @@ func (fd *FlowDispatcher) runFlow(ctx context.Context, run *FlowRun, flow *Flow)
 				return
 			}
 		}
+		fd.markNode(run, step.ID, "ok")
 		fd.auditStep(run, flow, step, "done", "")
 		// Auto-advance: if the step didn't specify a Next step, fall through
 		// to the next step in the ordered steps slice. This lets users write
@@ -170,6 +172,8 @@ func (fd *FlowDispatcher) executeStep(ctx context.Context, run *FlowRun, flow *F
 		return fd.execClassifyStep(step, state)
 	case FlowStepEmit:
 		return fd.execEmitStep(ctx, run, flow, step, state)
+	case FlowStepLoop:
+		return fd.execLoopStep(ctx, run, flow, step, state)
 	default:
 		return "", fmt.Errorf("unknown step type %q", step.Type)
 	}
@@ -522,4 +526,126 @@ func (fd *FlowDispatcher) auditStep(run *FlowRun, flow *Flow, step FlowStep, eve
 		extra["error"] = errMsg
 	}
 	fd.server.audit.LogFlow(flow.ID, step.ID, eventType, "flow.step", run.AgentID, "", extra)
+}
+
+// markNode records the live per-step status on the run so the canvas can
+// highlight the active node + finished states.
+func (fd *FlowDispatcher) markNode(run *FlowRun, id, status string) {
+	if run.NodeStatus == nil {
+		run.NodeStatus = map[string]string{}
+	}
+	run.NodeStatus[id] = status
+	if status == "running" {
+		run.ActiveNode = id
+	} else if run.ActiveNode == id {
+		run.ActiveNode = ""
+	}
+}
+
+// execLoopStep repeats a body of sub-steps at an interval until a stop
+// condition or max iterations. This is the "poll a sensor in a loop"
+// primitive: body = [poll, diff, emit], interval = poll cadence.
+func (fd *FlowDispatcher) execLoopStep(ctx context.Context, run *FlowRun, flow *Flow, step FlowStep, state map[string]json.RawMessage) (string, error) {
+	maxIter := step.MaxIterations
+	if maxIter <= 0 {
+		maxIter = 1000 // safety cap
+	}
+	if len(step.Body) == 0 {
+		return "", fmt.Errorf("loop step %s has no body steps", step.ID)
+	}
+	for i := 0; i < maxIter; i++ {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		default:
+		}
+		for _, sub := range step.Body {
+			fd.markNode(run, sub.ID, "running")
+			_, err := fd.executeStep(ctx, run, flow, sub, state)
+			if err != nil {
+				fd.markNode(run, sub.ID, "error")
+				if sub.OnError == "continue" {
+					continue
+				}
+				return "", err
+			}
+			fd.markNode(run, sub.ID, "ok")
+			fd.auditStep(run, flow, sub, "done", "")
+		}
+		if step.StopCondition != "" && fd.evalCondition(step.StopCondition, state) {
+			break
+		}
+		if step.IntervalSeconds > 0 {
+			select {
+			case <-time.After(time.Duration(step.IntervalSeconds) * time.Second):
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		}
+	}
+	return step.Next, nil
+}
+
+// evalCondition evaluates a stop-condition expression "{{state.key}} OP value"
+// where OP is one of ==, !=, >, <, >=, <=. Numeric when both parse as numbers,
+// otherwise string equality/inequality.
+func (fd *FlowDispatcher) evalCondition(expr string, state map[string]json.RawMessage) bool {
+	expr = strings.TrimSpace(expr)
+	ops := []string{">=", "<=", "==", "!=", ">", "<"}
+	var op string
+	idx := -1
+	for _, o := range ops {
+		if i := strings.Index(expr, o); i >= 0 {
+			op = o
+			idx = i
+			break
+		}
+	}
+	if op == "" {
+		return false
+	}
+	left := strings.TrimSpace(expr[:idx])
+	right := strings.Trim(strings.TrimSpace(expr[idx+len(op):]), "\"'")
+	key := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(left), "{{"), "}}"))
+	key = strings.TrimPrefix(key, "state.")
+	var lval string
+	if raw, ok := state[key]; ok {
+		var v any
+		if json.Unmarshal(raw, &v) == nil {
+			lval = fmt.Sprintf("%v", v)
+		}
+	}
+	if lf, err1 := parseFloat(lval); err1 == nil {
+		if rf, err2 := parseFloat(right); err2 == nil {
+			switch op {
+			case "==":
+				return lf == rf
+			case "!=":
+				return lf != rf
+			case ">":
+				return lf > rf
+			case "<":
+				return lf < rf
+			case ">=":
+				return lf >= rf
+			case "<=":
+				return lf <= rf
+			}
+		}
+	}
+	switch op {
+	case "==":
+		return lval == right
+	case "!=":
+		return lval != right
+	}
+	return false
+}
+
+func parseFloat(s string) (float64, error) {
+	var f float64
+	if _, err := fmt.Sscanf(strings.TrimSpace(s), "%f", &f); err != nil {
+		return 0, err
+	}
+	return f, nil
 }

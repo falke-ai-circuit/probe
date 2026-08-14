@@ -20,6 +20,7 @@ const (
 	FlowStepDiff       = "compute_diff"  // Server-side diff between two snapshots
 	FlowStepClassify   = "classify"   // Apply classification rules
 	FlowStepEmit       = "emit"       // Append FlowEvent to NDJSON store
+	FlowStepLoop       = "loop"       // Repeat a body of sub-steps at an interval until a stop condition
 )
 
 // Flow trigger types. Mirrors TaskManager schedule semantics.
@@ -84,6 +85,12 @@ type FlowStep struct {
 	// Type=emit
 	Signal  string          `json:"signal,omitempty"`  // survey signal name
 	Payload json.RawMessage `json:"payload,omitempty"` // state reference or literal
+
+	// Type=loop
+	Body            []FlowStep `json:"body,omitempty"`             // sub-steps to repeat
+	IntervalSeconds int        `json:"interval_seconds,omitempty"` // delay between iterations
+	MaxIterations   int        `json:"max_iterations,omitempty"`   // cap (0 = until stop condition, default safety cap)
+	StopCondition   string     `json:"stop_condition,omitempty"`   // "{{state.x}} == value"
 }
 
 // ClassifyRule matches an input value and emits a label.
@@ -118,6 +125,8 @@ type FlowRun struct {
 	DurationMs int64           `json:"duration_ms,omitempty"`
 	Error      string          `json:"error,omitempty"`
 	State      json.RawMessage `json:"state,omitempty"` // step state: {stepID: result}
+	NodeStatus map[string]string `json:"node_status,omitempty"` // step id -> "running" | "ok" | "error"
+	ActiveNode string            `json:"active_node,omitempty"` // step currently executing
 }
 
 // FlowManager stores flows and runs, persists to disk, and tracks state.

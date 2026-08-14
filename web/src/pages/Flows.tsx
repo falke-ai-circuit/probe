@@ -3,7 +3,7 @@ import { api } from '../api/client'
 import type { FlowRecord, FlowTrigger, FlowStep, FlowRun, AgentRecord } from '../api/types'
 import { StatusBadge } from '../components/StatusBadge'
 
-const STEP_TYPES = ['command', 'wait', 'branch', 'compute_diff', 'classify', 'emit']
+const STEP_TYPES = ['command', 'wait', 'branch', 'compute_diff', 'classify', 'emit', 'loop']
 const STEP_COLORS: Record<string, string> = {
   command: 'var(--cyan)',
   wait: 'var(--yellow)',
@@ -11,6 +11,7 @@ const STEP_COLORS: Record<string, string> = {
   compute_diff: 'var(--blue)',
   classify: 'var(--green)',
   emit: 'var(--orange)',
+  loop: 'var(--red)',
 }
 const NODE_W = 220
 const NODE_H = 96
@@ -77,6 +78,13 @@ export default function Flows() {
   }, [selectedFlow])
 
   const posOf = (id: string): NodePos => positions[id] || defaultLayout(selectedFlow?.steps || [])[id] || { x: 40, y: 40 }
+  const statusFor = (id: string): 'running' | 'ok' | 'error' | 'idle' => {
+    const s = liveRun?.node_status?.[id]
+    if (s === 'running' || liveRun?.active_node === id) return 'running'
+    if (s === 'ok') return 'ok'
+    if (s === 'error') return 'error'
+    return 'idle'
+  }
   const centerOf = (id: string): NodePos => {
     const p = posOf(id)
     return { x: p.x + NODE_W / 2, y: p.y + NODE_H / 2 }
@@ -282,14 +290,17 @@ export default function Flows() {
                 {selectedFlow.steps.map((step, idx) => {
                   const p = posOf(step.id)
                   const color = STEP_COLORS[step.type] || 'var(--cyan)'
+                  const st = statusFor(step.id)
+                  const borderColor = st === 'running' ? 'var(--cyan)' : st === 'ok' ? 'var(--green)' : st === 'error' ? 'var(--red)' : color
+                  const glow = st === 'running' ? '0 0 14px rgba(0,229,255,0.5)' : 'none'
                   return (
                     <div
                       key={step.id}
                       onPointerDown={e => onPointerDown(e, step.id)}
                       style={{
                         position: 'absolute', left: p.x, top: p.y, width: NODE_W, minHeight: NODE_H,
-                        background: 'var(--bg-input)', border: `2px solid ${color}`, borderRadius: 8, padding: 10,
-                        boxShadow: '0 0 12px rgba(0,0,0,0.3)', cursor: 'grab', userSelect: 'none',
+                        background: 'var(--bg-input)', border: `2px solid ${borderColor}`, borderRadius: 8, padding: 10,
+                        boxShadow: glow || '0 0 12px rgba(0,0,0,0.3)', cursor: 'grab', userSelect: 'none',
                       }}
                     >
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
@@ -309,6 +320,14 @@ export default function Flows() {
                       )}
                       {step.type === 'emit' && (
                         <input className="toolbar-input" style={{ width: '100%' }} placeholder="signal" value={(step as unknown as { signal?: string }).signal || ''} onChange={e => updateStep(idx, { signal: e.target.value } as Partial<FlowStep>)} />
+                      )}
+                      {step.type === 'loop' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6 }}>
+                          <input type="number" className="toolbar-input" style={{ width: '100%' }} placeholder="interval seconds" value={step.interval_seconds || 0} onChange={e => updateStep(idx, { interval_seconds: Number(e.target.value) })} />
+                          <input type="number" className="toolbar-input" style={{ width: '100%' }} placeholder="max iterations (0 = until stop)" value={step.max_iterations || 0} onChange={e => updateStep(idx, { max_iterations: Number(e.target.value) })} />
+                          <input className="toolbar-input" style={{ width: '100%' }} placeholder="stop condition ({{state.x}} == 1)" value={step.stop_condition || ''} onChange={e => updateStep(idx, { stop_condition: e.target.value })} />
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>body: {step.body?.length || 0} steps</div>
+                        </div>
                       )}
                       <input className="toolbar-input" style={{ width: '100%', marginTop: 6 }} placeholder="next step id (leave blank for auto)" value={step.next || ''} onChange={e => updateStep(idx, { next: e.target.value })} />
                     </div>
