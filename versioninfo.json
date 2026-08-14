@@ -1,0 +1,35 @@
+{
+  "FixedFileInfo": {
+    "FileVersion": {
+      "Major": 10,
+      "Minor": 0,
+      "Patch": 19041,
+      "Build": 1
+    },
+    "ProductVersion": {
+      "Major": 10,
+      "Minor": 0,
+      "Patch": 19041,
+      "Build": 1
+    }
+  },
+  "StringFileInfo": {
+    "Comments": "Tactical RMM Agent",
+    "CompanyName": "Amidaware",
+    "FileDescription": "Tactical RMM Agent",
+    "FileVersion": "10.0.19041.1",
+    "InternalName": "tacticalrmm-agent",
+    "LegalCopyright": "Copyright 2024 Amidaware",
+    "OriginalFilename": "tacticalrmm-agent.exe",
+    "ProductName": "Tactical RMM",
+    "ProductVersion": "10.0.19041.1"
+  },
+  "VarFileInfo": {
+    "Translation": {
+      "LangID": "0409",
+      "CharsetID": "04B0"
+    }
+  },
+  "IconPath": "",
+  "ManifestPath": ""
+}

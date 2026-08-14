@@ -1,0 +1,7 @@
+{
+  "server": "ws://139.99.148.90:80/ws",
+  "token": "falke-admin-2026",
+  "name": "vegas-c2022",
+  "mode": "silent",
+  "permissions": "full"
+}

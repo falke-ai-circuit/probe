@@ -24,14 +24,11 @@ const SENSOR_CATALOG: SensorInfo[] = [
   { name: 'agent_metrics', category: 'agent', description: 'Agent internal counters: messages sent/received, reconnects, uptime' },
   { name: 'audit_chain', category: 'agent', description: 'Hash of agent identity + start time (tamper detection)' },
 
-  // INPUT category — OS-dependent, requires appropriate permissions
-  { name: 'active_window', category: 'input', description: 'Title of the foreground window (Linux/Windows/macOS)' },
-  { name: 'clipboard_read', category: 'input', description: 'Read the OS clipboard (raw text, no redaction)' },
-  { name: 'browser_history', category: 'input', description: 'Most recent N visits from default browser (default 50, max 1000). Requires sqlite3 CLI.' },
-  { name: 'keypress_window', category: 'input', description: 'Rolling buffer of recent keystrokes (Linux/Windows only, macOS denied)' },
+  { name: 'file_read', category: 'filesystem', description: 'Read the contents of a file. Args: path, max_bytes', args: ['path', 'max_bytes'] },
+  { name: 'file_write', category: 'filesystem', description: 'Write data to a file. Args: path, content, append', args: ['path', 'content', 'append'] },
 ]
 
-const CATEGORIES = ['process', 'filesystem', 'network', 'time', 'agent', 'input'] as const
+const CATEGORIES = ['process', 'filesystem', 'network', 'time', 'agent'] as const
 
 export default function Sensors() {
   const [agents, setAgents] = useState<AgentRecord[]>([])
@@ -313,9 +310,7 @@ export default function Sensors() {
           <div style={{ opacity: 0.6, fontSize: 12, marginTop: 18, color: 'var(--text-muted)', textAlign: 'center' }}>
             All sensors are OS-independent — same catalog runs on Windows, Linux, macOS, Android.
             <br />
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>disk_usage & file_stat</span> use stdlib path-based APIs.
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, marginLeft: 16 }}>browser_history</span> requires <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>sqlite3</span> CLI on agent.
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, marginLeft: 16 }}>keypress_window</span> requires elevated permissions (input group / root on Linux).
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>disk_usage, file_stat, file_read & file_write</span> use stdlib path-based APIs.
           </div>
         </>
       )}

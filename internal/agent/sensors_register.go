@@ -12,6 +12,8 @@ func init() {
 		memoryStatsSensor{},
 		diskUsageSensor{},
 		fileStatSensor{},
+		fileReadSensor{},
+		fileWriteSensor{},
 		envVarsSensor{},
 
 		// Group 3: network
@@ -30,11 +32,6 @@ func init() {
 		agentMetricsSensor{},
 		auditChainSensor{},
 
-		// Group 6: input (OS-dependent, requires appropriate permissions)
-		activeWindowSensor{},
-		clipboardReadSensor{},
-		browserHistorySensor{},
-		keypressWindowSensor{},
 	} {
 		agentSensors.Register(s)
 	}
