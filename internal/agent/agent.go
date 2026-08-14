@@ -27,14 +27,6 @@ const (
 	maxTimeout      = 300
 )
 
-// RelayEndpoint defines a single relay server for failover.
-// When the direct server connection fails, the agent tries each
-// relay in order until one succeeds.
-type RelayEndpoint struct {
-	URL   string // wss://relay-host:port/ws
-	Token string // auth token for the relay
-}
-
 // Config holds agent configuration.
 type Config struct {
 	Mode     string // "outbound", "inbound", "dual"
@@ -69,11 +61,6 @@ type Config struct {
 	// ConfigPath is the path to the config file used to start this agent.
 	// Used by reconfigure to save updated config back to disk.
 	ConfigPath string
-	// Relays is an ordered list of relay endpoints for failover.
-	// When the direct server connection (URL) fails, the agent tries
-	// each relay in order. Empty = no relay failover (backward compat).
-	Relays []RelayEndpoint
-
 	// E2EEnabled enables AES-GCM end-to-end encryption of protocol payloads.
 	// When true, all messages between agent and server are encrypted with
 	// a key derived from the token (SHA-256). Relays see only encrypted bytes.
@@ -202,11 +189,8 @@ func (a *Agent) Run() error {
 
 func (a *Agent) runOutbound() error {
 	log.Printf("Connecting to %s (mode: outbound)", a.cfg.URL)
-	if len(a.cfg.Relays) > 0 {
-		log.Printf("Relay failover enabled: %d relay(s) configured", len(a.cfg.Relays))
-	}
 	for {
-		conn, err := a.dialWithFailover()
+		conn, err := protocol.Dial(a.cfg.URL, a.cfg.CertPath, a.cfg.ClientCertFile, a.cfg.ClientKeyFile, a.cfg.Token)
 		if err != nil {
 			a.backoffAttempt++
 			agentReconnects.Add(1)

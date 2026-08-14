@@ -45,12 +45,6 @@ type ServerConfig struct {
 	E2EEnabled      bool    `json:"e2e_enabled"` // Step 13: end-to-end encryption
 }
 
-// RelayEntryConfig is a single relay endpoint in the unified config.
-type RelayEntryConfig struct {
-	URL   string `json:"url"`
-	Token string `json:"token"`
-}
-
 // ClientConfig holds settings for connect mode.
 type ClientConfig struct {
 	Server      string   `json:"server"`
@@ -70,9 +64,6 @@ type ClientConfig struct {
 	KeyFile     string   `json:"keyFile"`
 	SandboxDir  string   `json:"sandbox_dir"`
 	Capabilities []string `json:"capabilities"`
-	// Relays is an ordered list of relay endpoints for failover.
-	// When the direct server connection fails, the agent tries each relay in order.
-	Relays []RelayEntryConfig `json:"relays,omitempty"`
 	E2EEnabled bool `json:"e2e_enabled,omitempty"` // Step 13: end-to-end encryption
 }
 
@@ -170,7 +161,6 @@ func flatToUnified(flat ConfigFile) *UnifiedConfig {
 			KeyFile:     flat.KeyFile,
 			SandboxDir:  flat.SandboxDir,
 			Capabilities: flat.Capabilities,
-			Relays:      flat.Relays,
 		}
 	}
 
@@ -322,17 +312,6 @@ func (uc *UnifiedConfig) ToAgentConfig() agent.Config {
 		E2EEnabled:      c.E2EEnabled,
 	}
 
-	// Convert relay endpoints from config format to agent format
-	for _, r := range c.Relays {
-		relayURL := r.URL
-		if relayURL != "" && !strings.Contains(relayURL, "/ws") {
-			relayURL = strings.TrimRight(relayURL, "/") + "/ws"
-		}
-		cfg.Relays = append(cfg.Relays, agent.RelayEndpoint{
-			URL:   relayURL,
-			Token: strings.Trim(r.Token, "\"'"),
-		})
-	}
 
 	return cfg
 }

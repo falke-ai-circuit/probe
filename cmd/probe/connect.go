@@ -42,7 +42,6 @@ type ConfigFile struct {
 	Permissions  string   `json:"permissions"`
 	SandboxDir   string   `json:"sandbox_dir"`
 	Capabilities []string `json:"capabilities"`
-	Relays       []RelayEntryConfig `json:"relays,omitempty"`
 }
 
 // runConnect starts the PROBE client/agent (leaf node).
@@ -51,7 +50,6 @@ func runConnect(args []string) {
 	fs := flag.NewFlagSet("connect", flag.ExitOnError)
 	configPath := fs.String("config", "probe-client.json", "Path to JSON config file")
 	showVersion := fs.Bool("version", false, "Print version and exit")
-	relayFlag := fs.String("relay", "", "Comma-separated relay URLs for failover (e.g. \"wss://relay1:7701/ws,wss://relay2:7701/ws\")")
 	fs.Parse(args)
 
 	if *showVersion {
@@ -149,34 +147,7 @@ func runConnect(args []string) {
 		ConfigPath:     *configPath,
 	}
 
-	// Convert relay endpoints from config to agent format
-	for _, r := range fcfg.Relays {
-		relayURL := r.URL
-		if relayURL != "" && !strings.Contains(relayURL, "/ws") {
-			relayURL = strings.TrimRight(relayURL, "/") + "/ws"
-		}
-		cfg.Relays = append(cfg.Relays, agent.RelayEndpoint{
-			URL:   relayURL,
-			Token: strings.Trim(r.Token, "\"'"),
-		})
-	}
 
-	// Append relay URLs from --relay flag (uses the same token as the server)
-	if *relayFlag != "" {
-		for _, rawURL := range strings.Split(*relayFlag, ",") {
-			rawURL = strings.TrimSpace(rawURL)
-			if rawURL == "" {
-				continue
-			}
-			if !strings.Contains(rawURL, "/ws") {
-				rawURL = strings.TrimRight(rawURL, "/") + "/ws"
-			}
-			cfg.Relays = append(cfg.Relays, agent.RelayEndpoint{
-				URL:   rawURL,
-				Token: tokenVal,
-			})
-		}
-	}
 
 	// Ensure the WebSocket URL includes the /ws path the server expects
 	if cfg.URL != "" && !strings.Contains(cfg.URL, "/ws") {
@@ -253,7 +224,6 @@ Config file fields:
 
 Flags:
   --config <path>  Path to JSON config file (default: probe-client.json)
-  --relay <urls>   Comma-separated relay URLs for failover (e.g. "wss://r1:7701/ws,wss://r2:7701/ws")
   --version        Print version and exit
 
 Example config (probe-client.json):
