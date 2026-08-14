@@ -92,8 +92,7 @@ export default function Flows() {
 
   const createFlow = async () => {
     setError('')
-    const name = prompt('Flow name:', 'user-activity-tracker')
-    if (!name) return
+    const name = 'flow-' + Date.now().toString(36)
     try {
       const flow = await api.createFlow({ name, trigger: { type: 'once' } as FlowTrigger, steps: [emptyStep()] })
       await load()
