@@ -14,7 +14,7 @@ const STEP_COLORS: Record<string, string> = {
   loop: 'var(--red)',
 }
 const NODE_W = 220
-const NODE_H = 96
+const NODE_H = 164
 
 interface NodePos { x: number; y: number }
 interface Edge { from: string; to: string; label?: string }
@@ -24,7 +24,7 @@ const emptyStep = (): FlowStep => ({ id: newStepId(), type: 'command', command_t
 
 function defaultLayout(steps: FlowStep[]): Record<string, NodePos> {
   const out: Record<string, NodePos> = {}
-  steps.forEach((s, i) => { out[s.id] = { x: 40, y: 40 + i * 140 } })
+  steps.forEach((s, i) => { out[s.id] = { x: 40, y: 40 + i * 220 } })
   return out
 }
 
@@ -89,6 +89,8 @@ export default function Flows() {
     const p = posOf(id)
     return { x: p.x + NODE_W / 2, y: p.y + NODE_H / 2 }
   }
+  const bottomOf = (id: string): NodePos => { const p = posOf(id); return { x: p.x + NODE_W / 2, y: p.y + NODE_H } }
+  const topOf = (id: string): NodePos => { const p = posOf(id); return { x: p.x + NODE_W / 2, y: p.y } }
 
   const createFlow = async () => {
     setError('')
@@ -274,8 +276,8 @@ export default function Flows() {
                 {/* SVG edges */}
                 <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
                   {edges.map((e, i) => {
-                    const a = centerOf(e.from)
-                    const b = centerOf(e.to)
+                    const a = bottomOf(e.from)
+                    const b = topOf(e.to)
                     const mx = (a.x + b.x) / 2
                     return (
                       <g key={i}>
