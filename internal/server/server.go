@@ -15,6 +15,7 @@ import (
 
 	cryptomanager "github.com/falke-ai-circuit/probe/internal/crypto"
 	"github.com/falke-ai-circuit/probe/internal/protocol"
+	"github.com/falke-ai-circuit/probe/internal/replicator"
 )
 
 // RateLimitConfig holds the rate-limiter settings supplied from the CLI /
@@ -44,15 +45,15 @@ type Server struct {
 	keyFile      string
 	clientCAFile string // optional CA for TLS mutual authentication (mTLS)
 
-	mu        sync.RWMutex
-	conns     map[string]Conn   // agentID -> conn (direct *websocket.Conn or relayed *virtualConn)
-	connWriteMu map[string]*sync.Mutex    // agentID -> write mutex (prevents parallel WS write corruption)
+	mu          sync.RWMutex
+	conns       map[string]Conn        // agentID -> conn (direct *websocket.Conn or relayed *virtualConn)
+	connWriteMu map[string]*sync.Mutex // agentID -> write mutex (prevents parallel WS write corruption)
 
 	// pendingRequests maps request IDs to response channels for request-response
 	// over WebSocket. When handleAgentExec sends a command to an agent, it creates
 	// a channel and waits on it. handleMessages delivers the response.
-	pendingMu    sync.Mutex
-	pendingReqs  map[string]chan protocol.Envelope // requestID -> response channel
+	pendingMu   sync.Mutex
+	pendingReqs map[string]chan protocol.Envelope // requestID -> response channel
 
 	// pendingUpdates tracks agents that received an agent_update command.
 	// When the new agent connects, we use this to kill the old process.
@@ -61,19 +62,19 @@ type Server struct {
 	// Tunnels: server-side TCP listeners that relay through WebSocket to the agent.
 	tunnelMu    sync.RWMutex
 	tunnels     map[string]*Tunnel // tunnelID -> Tunnel
-	tunnelCount int               // for generating unique tunnel IDs
+	tunnelCount int                // for generating unique tunnel IDs
 
 	// requireAPIAuth enforces bearer-token auth on HTTP API endpoints
 	// (/api/agents, /api/agent/*, /download/*). When false (default), requests
 	// without an Authorization header are allowed through with a warning log.
 	requireAPIAuth bool
 
-	tokenTTL    time.Duration                 // configured token TTL (0 = rotation disabled)
-	tokenExpiry map[string]time.Time          // agentID -> token expiry time
-	tokenMu       sync.Mutex                   // guards tokenExpiry + rotatedTokens
-	rotatedTokens map[string]string            // agentID -> last rotated token
-	tokenStop   chan struct{}                 // closes to stop rotation goroutine
-	tokenWG     sync.WaitGroup                // waits for rotation goroutine on shutdown
+	tokenTTL      time.Duration        // configured token TTL (0 = rotation disabled)
+	tokenExpiry   map[string]time.Time // agentID -> token expiry time
+	tokenMu       sync.Mutex           // guards tokenExpiry + rotatedTokens
+	rotatedTokens map[string]string    // agentID -> last rotated token
+	tokenStop     chan struct{}        // closes to stop rotation goroutine
+	tokenWG       sync.WaitGroup       // waits for rotation goroutine on shutdown
 
 	// Configurable reverse proxies (path prefix → target URL)
 	proxyMu sync.RWMutex
@@ -97,6 +98,9 @@ type Server struct {
 
 	// Build profiles: reusable build configuration templates.
 	profiles *ProfileManager
+
+	// Replicator: spawns and tracks detached child agent copies (replicator agents).
+	replicator *replicator.Replicator
 
 	// VirusTotal scanner: optional, for auto-scan after build and manual scan API.
 	vtScanner *VirusTotalScanner
@@ -133,8 +137,8 @@ type Server struct {
 	ipFilterActive bool
 
 	// IP blacklist: blocks specific IPs/CIDRs from ALL routes (including /ws).
-	blacklistMu       sync.RWMutex
-	blacklistedCIDRs  []*net.IPNet
+	blacklistMu      sync.RWMutex
+	blacklistedCIDRs []*net.IPNet
 
 	// Login rate limiting: per-IP brute-force protection for /api/v1/login.
 	loginLimiter *loginRateLimiter
@@ -448,6 +452,9 @@ func (s *Server) Start() error {
 		if s.flows != nil {
 			s.flows.Stop()
 		}
+		if s.replicator != nil {
+			s.replicator.StopAll()
+		}
 	})
 
 	log.Printf("[server] starting on %s", s.addr)
@@ -589,6 +596,12 @@ func (s *Server) SetProfilesPath(path string) {
 	s.profiles = NewProfileManager(path)
 }
 
+// SetReplicator sets the replicator used to spawn child agents. It is created
+// and loaded (restoring spawn records from disk) by the caller before Start.
+func (s *Server) SetReplicator(r *replicator.Replicator) {
+	s.replicator = r
+}
+
 // SetVTAPIKey configures the VirusTotal scanner with the given API key.
 // When set, builds are automatically scanned after completion and the
 // manual VT scan API endpoints are available. Must be called before
@@ -717,4 +730,3 @@ func (s *Server) checkOperatorAuth(r *http.Request, action string) (*Operator, b
 	s.operators.UpdateLastSeen(op.ID, time.Now().UTC())
 	return op, true
 }
-

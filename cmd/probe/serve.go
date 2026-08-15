@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falke-ai-circuit/probe/internal/replicator"
 	"github.com/falke-ai-circuit/probe/internal/server"
 )
 
@@ -37,6 +38,7 @@ func runServe(args []string) {
 	blacklistCIDR := fs.String("blacklist-cidr", "", "Comma-separated CIDR ranges to block from ALL routes including /ws (e.g., \"1.2.3.0/24,5.6.7.8/32\"). Blocks known-bad IPs from connecting.")
 	auditLogPath := fs.String("audit-log", "", "Path to audit log file (JSONL format). Logs every command, login, and access decision. Default: /tmp/probe-audit.jsonl")
 	flowsPath := fs.String("flows-path", "", "Path to flow definitions JSON file (persistent). Default: /data/runtime/flows.json. Created if missing.")
+	replicasPath := fs.String("replicas-db", "", "replicator spawn records file path (default: /data/runtime/replicas/replicas.json). Created if missing.")
 	adminPassword := fs.String("admin-password", "", "password for the default admin operator created on startup if no operators exist")
 	operatorPath := fs.String("operator-db", "", "operator database file path (default: PROBE_OPERATOR_DB env or /tmp/probe-operators.json)")
 	vtAPIKey := fs.String("vt-api-key", "", "VirusTotal API key for auto-scan after build and manual scan API (default: PROBE_VT_API_KEY env)")
@@ -161,6 +163,26 @@ func runServe(args []string) {
 	}
 	srv.SetFlowsPath(flowsPathValue)
 	log.Printf("Flows: %s", flowsPathValue)
+
+	// Replicator: spawns child agent copies with built-in settings. Spawn
+	// records are persisted so orphans are reconciled (marked orphaned/dead)
+	// on restart, and the child env is filtered so it never inherits the
+	// server's own PROBE_TOKEN identity.
+	replicasPathValue := *replicasPath
+	if replicasPathValue == "" {
+		replicasPathValue = "/data/runtime/replicas/replicas.json"
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		log.Printf("Replicator: os.Executable failed: %v", err)
+		exe = "/app/probe"
+	}
+	rep := replicator.New(exe, replicasPathValue)
+	if err := rep.Load(); err != nil {
+		log.Printf("Replicator: failed to load spawn records: %v", err)
+	}
+	srv.SetReplicator(rep)
+	log.Printf("Replicator: %s", replicasPathValue)
 
 	// Configure IP blacklist (blocks specific IPs from ALL routes).
 	if *blacklistCIDR != "" {
