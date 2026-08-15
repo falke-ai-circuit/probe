@@ -3,7 +3,7 @@ import { api } from '../api/client'
 import type { Profile } from '../api/types'
 
 const ALL_CAPS = ['exec', 'filesystem', 'process', 'tunnel', 'mitm', 'debug', 'capture', 'input', 'clipboard']
-const OS_OPTIONS = ['windows', 'linux', 'darwin']
+const OS_OPTIONS = ['windows', 'linux', 'darwin', 'android']
 const ARCH_OPTIONS = ['amd64', '386', 'arm64']
 const PERMISSIONS = ['read-only', 'standard', 'sandboxed', 'full']
 

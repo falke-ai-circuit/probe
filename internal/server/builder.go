@@ -89,6 +89,7 @@ var validBuildOS = map[string]bool{
 	"windows": true,
 	"linux":   true,
 	"darwin":  true,
+	"android": true, // android/arm64 — runs under Termux (pure-Go, CGO_ENABLED=0)
 }
 
 // validBuildArch is the set of target architectures supported for cross-compilation.

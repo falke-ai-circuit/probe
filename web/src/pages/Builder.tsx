@@ -16,7 +16,7 @@ const CAP_DESCRIPTIONS: Record<string, string> = {
   input: 'Send keyboard and mouse input to the remote system',
   clipboard: 'Read and write the remote system clipboard',
 }
-const OS_OPTIONS = ['windows', 'linux', 'darwin']
+const OS_OPTIONS = ['windows', 'linux', 'darwin', 'android']
 const ARCH_OPTIONS = ['amd64', '386', 'arm64']
 const PERMISSIONS = ['read-only', 'standard', 'sandboxed', 'full']
 
