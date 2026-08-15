@@ -2,7 +2,7 @@ import type {
   APIResponse, AgentRecord, HealthInfo, BuildConfig, Profile, Task,
   Operator, EnrollmentToken, AuditEntry, RevokedAgent, FileTransfer,
   SecurityStatus, LoginAttemptsStatus, FlowRecord, FlowRun, FlowTemplate, SurveyEvent,
-  SensorInfo, SensorAssignment, SensorState, ReplicaRecord,
+  SensorInfo, SensorAssignment, SensorState,
 } from './types'
 
 const BASE = '/api/v1'
@@ -64,16 +64,6 @@ export async function login(username: string, password: string): Promise<Operato
 export const api = {
   // Health
   getHealth: () => apiFetch<HealthInfo>('/health'),
-
-  // Replicator — spawn/list/kill child agents
-  replicateAgent: (req: { name: string; server: string; token: string; mode: string; permissions: string }) =>
-    apiFetch<ReplicaRecord>('/replicate', {
-      method: 'POST',
-      body: JSON.stringify(req),
-    }),
-  listReplicas: () => apiFetch<Record<string, ReplicaRecord>>('/replicas'),
-  killReplica: (name: string) =>
-    apiFetch<{ name: string; status: string }>(`/replicas/${encodeURIComponent(name)}`, { method: 'DELETE' }),
 
   // Agents
   listAgents: () => apiFetch<AgentRecord[]>('/agents'),
