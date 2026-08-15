@@ -49,12 +49,6 @@ type ConfigFile struct {
 func runConnect(args []string) {
 	fs := flag.NewFlagSet("connect", flag.ExitOnError)
 	configPath := fs.String("config", "probe-client.json", "Path to JSON config file")
-	server := fs.String("server", "", "WebSocket server URL (built-in settings, no config file)")
-	token := fs.String("token", "", "Authentication token (built-in settings)")
-	nameFlag := fs.String("name", "", "Agent name (built-in settings)")
-	modeFlag := fs.String("mode", "", "Mode: silent or interactive (built-in settings)")
-	permissions := fs.String("permissions", "", "Permission tier (built-in settings)")
-	listen := fs.String("listen", "", "Inbound listen address (built-in settings)")
 	showVersion := fs.Bool("version", false, "Print version and exit")
 	fs.Parse(args)
 
@@ -63,20 +57,9 @@ func runConnect(args []string) {
 		os.Exit(0)
 	}
 
-	// Read config: prefer built-in flags (replicator spawns with flags, no
-	// JSON config file), then ldflags-injected base64 config, then JSON file.
+	// Read config: prefer ldflags-injected base64 config, fall back to JSON file.
 	var fcfg ConfigFile
-	builtin := *server != "" || *listen != "" || *token != "" || *nameFlag != "" || *modeFlag != "" || *permissions != ""
-	if builtin {
-		fcfg = ConfigFile{
-			Server:      *server,
-			Token:       *token,
-			Name:        *nameFlag,
-			Mode:        *modeFlag,
-			Permissions: *permissions,
-			Listen:      *listen,
-		}
-	} else if configB64 != "" {
+	if configB64 != "" {
 		cfgData, err := base64.StdEncoding.DecodeString(configB64)
 		if err != nil {
 			log.Fatalf("Invalid embedded config (base64 decode): %v", err)
@@ -93,19 +76,6 @@ func runConnect(args []string) {
 		}
 		if err := json.Unmarshal(cfgData, &fcfg); err != nil {
 			log.Fatalf("Invalid config file: %v", err)
-		}
-	}
-
-	// Token resolution chain (independent of the builtin flag bundle):
-	// --token flag (already in fcfg via the builtin branch) -> PROBE_TOKEN env
-	// -> configB64/JSON token. The replicator passes the token via PROBE_TOKEN
-	// env (not argv, to keep it off /proc/<pid>/cmdline), so the env source must
-	// be consulted even when server/name/mode/permissions flags are set — the
-	// builtin branch otherwise leaves fcfg.Token empty and the child falls
-	// through to LoadPersistedToken (wrong identity).
-	if strings.Trim(fcfg.Token, "\"'") == "" {
-		if envTok := os.Getenv("PROBE_TOKEN"); envTok != "" {
-			fcfg.Token = envTok
 		}
 	}
 
@@ -176,6 +146,8 @@ func runConnect(args []string) {
 		Capabilities:   fcfg.Capabilities,
 		ConfigPath:     *configPath,
 	}
+
+
 
 	// Ensure the WebSocket URL includes the /ws path the server expects
 	if cfg.URL != "" && !strings.Contains(cfg.URL, "/ws") {

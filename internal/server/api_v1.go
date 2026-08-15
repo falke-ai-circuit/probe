@@ -249,11 +249,6 @@ func (s *Server) registerV1Routes() {
 	s.mux.HandleFunc("POST /api/v1/operators", s.handleV1CreateOperator)
 	s.mux.HandleFunc("DELETE /api/v1/operators/{id}", s.handleV1DeleteOperator)
 
-	// Replicator — spawn/list/kill child agents (spawn/kill are admin-only)
-	s.mux.HandleFunc("POST /api/v1/replicate", s.handleV1Replicate)
-	s.mux.HandleFunc("GET /api/v1/replicas", s.handleV1ListReplicas)
-	s.mux.HandleFunc("DELETE /api/v1/replicas/{name}", s.handleV1KillReplica)
-
 	// Agent endpoints — read
 	s.mux.HandleFunc("GET /api/v1/agents", s.handleV1ListAgents)
 	s.mux.HandleFunc("GET /api/v1/agents/{id}", s.handleV1GetAgent)
