@@ -375,9 +375,22 @@ func (bm *BuilderManager) buildCommand(build *BuildConfig, configB64 string) (*e
 	if ldflags != "" {
 		args = append(args, "-ldflags", ldflags)
 	}
-	args = append(args, "-o", outputPath, clientPkg)
+	// Resolve the module root (go.mod dir) and run go build from there, with
+	// the client package as a path relative to the module root. Otherwise go
+	// looks for go.mod from the server's CWD (/app) and fails.
+	moduleRoot := bm.SourceModuleRoot()
+	relPkg := clientPkg
+	if moduleRoot != "" && filepath.IsAbs(clientPkg) {
+		if r, err := filepath.Rel(moduleRoot, clientPkg); err == nil {
+			relPkg = "." + string(filepath.Separator) + r
+		}
+	}
+	args = append(args, "-o", outputPath, relPkg)
 
 	cmd := exec.Command(goBin, args...)
+	if moduleRoot != "" {
+		cmd.Dir = moduleRoot
+	}
 	cmd.Env = append(os.Environ(),
 		"GOTOOLCHAIN=local",
 		"CGO_ENABLED=0",
