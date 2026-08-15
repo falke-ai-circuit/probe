@@ -43,7 +43,7 @@ func zipDir(dir string, w io.Writer) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() && (info.Name() == ".git" || info.Name() == "dist") {
+		if info.IsDir() && (info.Name() == ".git" || info.Name() == "dist" || info.Name() == "build" || info.Name() == "node_modules" || info.Name() == "vendor" || info.Name() == "runtime" || info.Name() == "logs") {
 			return filepath.SkipDir
 		}
 		rel, err := filepath.Rel(base, path)
@@ -64,6 +64,10 @@ func zipDir(dir string, w io.Writer) error {
 			return err
 		}
 		if !info.Mode().IsRegular() {
+			return nil
+		}
+		// Skip binary artifacts (>5MB) — the weave only needs Go source + assets.
+		if info.Size() > 5*1024*1024 {
 			return nil
 		}
 		header.Method = zip.Deflate
