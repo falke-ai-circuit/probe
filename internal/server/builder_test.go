@@ -156,11 +156,13 @@ func TestBuildCommandString(t *testing.T) {
 	if !strings.Contains(cmdStr, "GOARCH=amd64") {
 		t.Error("expected GOARCH=amd64 in command")
 	}
-	// configB64 is no longer injected via ldflags — zero-flag builds achieve 0/74 VT.
-	// Config is passed as a JSON file at runtime instead.
-	_ = configB64
-	if strings.Contains(cmdStr, "-ldflags") {
-		t.Error("expected NO ldflags in command (zero-flag build for AV evasion)")
+	// configB64 IS injected via -ldflags so the built replica is zero-config
+	// (no JSON config file at runtime).
+	if !strings.Contains(cmdStr, "-ldflags") {
+		t.Error("expected -ldflags in command (configB64 embedding)")
+	}
+	if !strings.Contains(cmdStr, "main.configB64=") {
+		t.Error("expected main.configB64 in ldflags")
 	}
 	if !strings.Contains(cmdStr, "caps=exec,filesystem,process") {
 		t.Error("expected capability tags in command")
@@ -531,7 +533,7 @@ func TestProfileValidation(t *testing.T) {
 			name: "invalid permissions",
 			profile: &Profile{
 				Name: "p", OS: "linux", Arch: "amd64",
-				ServerURL: "ws://h/ws",
+				ServerURL:   "ws://h/ws",
 				Permissions: "root",
 			},
 			wantErr: "invalid permissions",
@@ -540,7 +542,7 @@ func TestProfileValidation(t *testing.T) {
 			name: "invalid capability",
 			profile: &Profile{
 				Name: "p", OS: "linux", Arch: "amd64",
-				ServerURL: "ws://h/ws",
+				ServerURL:    "ws://h/ws",
 				Capabilities: []string{"nonexistent"},
 			},
 			wantErr: "invalid capability",

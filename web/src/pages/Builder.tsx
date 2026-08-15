@@ -224,8 +224,8 @@ export default function Builder() {
               <input type="text" value={serverURL} onChange={e => setServerURL(e.target.value)} placeholder="ws://host:port/ws" />
             </div>
             <div className="form-group">
-              <label>Agent Token (optional — auto-generated if empty)</label>
-              <input type="text" value={token} onChange={e => setToken(e.target.value)} placeholder="auto-generated" />
+              <label>Agent Token (required)</label>
+              <input type="text" value={token} onChange={e => setToken(e.target.value)} placeholder="server token or enrollment token" />
             </div>
             <div className="form-group">
               <label>Auto-start on boot?</label>
