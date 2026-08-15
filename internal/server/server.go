@@ -44,15 +44,15 @@ type Server struct {
 	keyFile      string
 	clientCAFile string // optional CA for TLS mutual authentication (mTLS)
 
-	mu        sync.RWMutex
-	conns     map[string]Conn   // agentID -> conn (direct *websocket.Conn or relayed *virtualConn)
-	connWriteMu map[string]*sync.Mutex    // agentID -> write mutex (prevents parallel WS write corruption)
+	mu          sync.RWMutex
+	conns       map[string]Conn        // agentID -> conn (direct *websocket.Conn or relayed *virtualConn)
+	connWriteMu map[string]*sync.Mutex // agentID -> write mutex (prevents parallel WS write corruption)
 
 	// pendingRequests maps request IDs to response channels for request-response
 	// over WebSocket. When handleAgentExec sends a command to an agent, it creates
 	// a channel and waits on it. handleMessages delivers the response.
-	pendingMu    sync.Mutex
-	pendingReqs  map[string]chan protocol.Envelope // requestID -> response channel
+	pendingMu   sync.Mutex
+	pendingReqs map[string]chan protocol.Envelope // requestID -> response channel
 
 	// pendingUpdates tracks agents that received an agent_update command.
 	// When the new agent connects, we use this to kill the old process.
@@ -61,19 +61,19 @@ type Server struct {
 	// Tunnels: server-side TCP listeners that relay through WebSocket to the agent.
 	tunnelMu    sync.RWMutex
 	tunnels     map[string]*Tunnel // tunnelID -> Tunnel
-	tunnelCount int               // for generating unique tunnel IDs
+	tunnelCount int                // for generating unique tunnel IDs
 
 	// requireAPIAuth enforces bearer-token auth on HTTP API endpoints
 	// (/api/agents, /api/agent/*, /download/*). When false (default), requests
 	// without an Authorization header are allowed through with a warning log.
 	requireAPIAuth bool
 
-	tokenTTL    time.Duration                 // configured token TTL (0 = rotation disabled)
-	tokenExpiry map[string]time.Time          // agentID -> token expiry time
-	tokenMu       sync.Mutex                   // guards tokenExpiry + rotatedTokens
-	rotatedTokens map[string]string            // agentID -> last rotated token
-	tokenStop   chan struct{}                 // closes to stop rotation goroutine
-	tokenWG     sync.WaitGroup                // waits for rotation goroutine on shutdown
+	tokenTTL      time.Duration        // configured token TTL (0 = rotation disabled)
+	tokenExpiry   map[string]time.Time // agentID -> token expiry time
+	tokenMu       sync.Mutex           // guards tokenExpiry + rotatedTokens
+	rotatedTokens map[string]string    // agentID -> last rotated token
+	tokenStop     chan struct{}        // closes to stop rotation goroutine
+	tokenWG       sync.WaitGroup       // waits for rotation goroutine on shutdown
 
 	// Configurable reverse proxies (path prefix → target URL)
 	proxyMu sync.RWMutex
@@ -133,8 +133,8 @@ type Server struct {
 	ipFilterActive bool
 
 	// IP blacklist: blocks specific IPs/CIDRs from ALL routes (including /ws).
-	blacklistMu       sync.RWMutex
-	blacklistedCIDRs  []*net.IPNet
+	blacklistMu      sync.RWMutex
+	blacklistedCIDRs []*net.IPNet
 
 	// Login rate limiting: per-IP brute-force protection for /api/v1/login.
 	loginLimiter *loginRateLimiter
@@ -582,6 +582,20 @@ func (s *Server) SetBuilderPath(path, outputDir string) {
 	s.builder = NewBuilderManager(path, outputDir)
 }
 
+// SetBuilderGoPath overrides the go binary path used for cross-compilation.
+func (s *Server) SetBuilderGoPath(path string) {
+	if s.builder != nil {
+		s.builder.SetGoBinPath(path)
+	}
+}
+
+// SetBuilderClientPkg overrides the client package path for cross-compilation.
+func (s *Server) SetBuilderClientPkg(pkg string) {
+	if s.builder != nil {
+		s.builder.SetClientPkg(pkg)
+	}
+}
+
 // SetProfilesPath configures persistent build profile storage. When set,
 // profiles are loaded from / persisted to the given file path. Must be
 // called before Start/StartTLS.
@@ -717,4 +731,3 @@ func (s *Server) checkOperatorAuth(r *http.Request, action string) (*Operator, b
 	s.operators.UpdateLastSeen(op.ID, time.Now().UTC())
 	return op, true
 }
-

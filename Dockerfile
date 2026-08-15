@@ -32,6 +32,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=builder /probe /app/probe
+# Builder toolchain: go + source + module cache so the agent builder can
+# cross-compile replica binaries (windows/linux/darwin/android) at runtime.
+COPY --from=builder /usr/local/go /usr/local/go
+COPY --from=builder /build /src
+COPY --from=builder /go/pkg/mod /go/pkg/mod
+ENV GOROOT=/usr/local/go GOPATH=/go GOMODCACHE=/go/pkg/mod PATH="/usr/local/go/bin:$PATH"
 RUN mkdir -p /data/runtime /data/logs /data/builds /data/ca
 VOLUME /data
 EXPOSE 7701
@@ -48,6 +54,8 @@ CMD ["serve", \
      "--enrollment-db", "/data/runtime/enrollment.json", \
      "--builder-db", "/data/runtime/builds.json", \
      "--builder-output-dir", "/data/runtime/builds", \
+     "--builder-go", "/usr/local/go/bin/go", \
+     "--builder-source", "/src/cmd/probe-client/", \
      "--profiles-db", "/data/runtime/profiles.json", \
      "--ca-dir", "/data/runtime/ca", \
      "--audit-log", "/data/logs/audit.jsonl"]
