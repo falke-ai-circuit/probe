@@ -249,6 +249,9 @@ func (s *Server) registerV1Routes() {
 	s.mux.HandleFunc("POST /api/v1/operators", s.handleV1CreateOperator)
 	s.mux.HandleFunc("DELETE /api/v1/operators/{id}", s.handleV1DeleteOperator)
 
+	// Replicate — export the probe source as a zip (for MANTLE source_zip)
+	s.mux.HandleFunc("GET /api/v1/replicate/source", s.handleV1ReplicateSource)
+
 	// Agent endpoints — read
 	s.mux.HandleFunc("GET /api/v1/agents", s.handleV1ListAgents)
 	s.mux.HandleFunc("GET /api/v1/agents/{id}", s.handleV1GetAgent)
