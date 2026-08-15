@@ -5,6 +5,7 @@ import Agents from './pages/Agents'
 import AgentDetail from './pages/AgentDetail'
 import Builder from './pages/Builder'
 import Profiles from './pages/Profiles'
+import Replicate from './pages/Replicate'
 import Tasks from './pages/Tasks'
 import Transfers from './pages/Transfers'
 import Credentials from './pages/Credentials'
@@ -32,6 +33,7 @@ export default function App() {
           <Route path="/agents/:id" element={<AgentDetail />} />
           <Route path="/builds" element={<Builder />} />
           <Route path="/profiles" element={<Profiles />} />
+          <Route path="/replicate" element={<Replicate />} />
           <Route path="/tasks" element={<Tasks />} />
           <Route path="/transfers" element={<Transfers />} />
           <Route path="/credentials" element={<Credentials />} />

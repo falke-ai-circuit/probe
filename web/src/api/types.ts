@@ -37,6 +37,16 @@ export interface HealthInfo {
   uptime_seconds: number
 }
 
+export interface ReplicaRecord {
+  name: string
+  pid: number
+  server: string
+  mode: string
+  permissions: string
+  spawned_at: number
+  status: string // running | orphaned | dead
+}
+
 export interface BuildConfig {
   id?: string
   name: string
