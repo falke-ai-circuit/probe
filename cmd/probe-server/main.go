@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	appVersion = "v1.18.4"
+	appVersion = "v1.18.5"
 	appName    = "PROBE Server"
 )
 

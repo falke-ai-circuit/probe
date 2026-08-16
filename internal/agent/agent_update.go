@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/falke-ai-circuit/probe/internal/protocol"
@@ -46,6 +47,9 @@ func (a *Agent) handleAgentUpdate(env protocol.Envelope) protocol.Envelope {
 	// Use a temp path in the same directory as the current exe to ensure
 	// the rename works (rename fails across volumes).
 	currentExe, _ := os.Executable()
+	// Derive the canonical path: strip a stale ".next" suffix (Windows returns the
+	// load-time path after a self-promotion swap renames the running exe).
+	currentExe = strings.TrimSuffix(currentExe, ".next")
 	downloadDir := filepath.Dir(currentExe)
 	tmpPath := filepath.Join(downloadDir, params.Filename+".tmp")
 	log.Printf("[update] downloading from %s to %s", params.DownloadURL, tmpPath)
@@ -188,6 +192,9 @@ func (a *Agent) handleAgentUpdateFromWSPath(env protocol.Envelope, params protoc
 	// with a ".next" suffix so the canary can swap atomically into the canonical
 	// path after proving healthy.
 	currentExe, _ := os.Executable()
+	// Derive the canonical path: strip a stale ".next" suffix (Windows returns the
+	// load-time path after a self-promotion swap renames the running exe).
+	currentExe = strings.TrimSuffix(currentExe, ".next")
 	newExePath := currentExe + ".next"
 
 	// Step 2: Move staged binary into place (fall back to copy if rename fails)

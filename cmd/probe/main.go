@@ -14,7 +14,7 @@ import (
 	"github.com/falke-ai-circuit/probe/internal/relay"
 )
 
-const appVersion = "v1.18.4"
+const appVersion = "v1.18.5"
 
 func main() {
 	// No arguments → default supervisor mode with auto-detection from config
