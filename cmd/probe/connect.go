@@ -50,6 +50,8 @@ func runConnect(args []string) {
 	fs := flag.NewFlagSet("connect", flag.ExitOnError)
 	configPath := fs.String("config", "probe-client.json", "Path to JSON config file")
 	showVersion := fs.Bool("version", false, "Print version and exit")
+	canaryMode := fs.Bool("canary", false, "Canary mode: connect, prove healthy, then swap into canonical path and stop the old process")
+	canaryOldPID := fs.Int("canary-old-pid", 0, "PID of the old process to stop after a successful swap")
 	fs.Parse(args)
 
 	if *showVersion {
@@ -100,6 +102,11 @@ func runConnect(args []string) {
 	if name == "" {
 		name = "probe-client"
 	}
+	// A canary connects under a distinct name so it does not displace the
+	// still-running old agent until the swap succeeds.
+	if *canaryMode {
+		name = name + "-canary"
+	}
 
 	// Parse backoff durations
 	backoffMin, err := time.ParseDuration(fcfg.BackoffMin)
@@ -145,6 +152,8 @@ func runConnect(args []string) {
 		SandboxDir:     fcfg.SandboxDir,
 		Capabilities:   fcfg.Capabilities,
 		ConfigPath:     *configPath,
+		CanaryMode:     *canaryMode,
+		CanaryOldPID:   *canaryOldPID,
 	}
 
 

@@ -10,8 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
-	"strings"
+	"strconv"
 	"time"
 
 	"github.com/falke-ai-circuit/probe/internal/protocol"
@@ -96,13 +95,10 @@ func (a *Agent) handleAgentUpdate(env protocol.Envelope) protocol.Envelope {
 	// Step 3: Determine current executable path (already obtained above)
 	log.Printf("[update] current executable: %s", currentExe)
 
-	// Step 4: On Windows, we cannot rename a running .exe. Instead, we write
-	// the new binary to a clean .exe path next to the current one and start it from there.
-	// On Linux, we write it next to the current binary without the .exe suffix.
-	newExePath := filepath.Join(filepath.Dir(currentExe), params.Filename)
-	if runtime.GOOS == "windows" && !strings.HasSuffix(strings.ToLower(newExePath), ".exe") {
-		newExePath = newExePath + ".exe"
-	}
+	// Step 4: Stage the new binary next to the current one with a ".next" suffix.
+	// Same filesystem => atomic rename. The canary derives the canonical path by
+	// stripping ".next" when it swaps into place.
+	newExePath := currentExe + ".next"
 	// Remove any previous file at this path (ignore error — may be locked)
 	os.Remove(newExePath)
 	if err := os.Rename(tmpPath, newExePath); err != nil {
@@ -127,9 +123,11 @@ func (a *Agent) handleAgentUpdate(env protocol.Envelope) protocol.Envelope {
 	// Pass the config path that was used to start this process
 	configPath := getConfigPath()
 
-	// Try the new subcommand syntax first (connect --config), fall back to legacy (-config)
-	// This handles both old and new binary formats
-	args := []string{"connect", "--config", configPath}
+	// Start the new binary as a CANARY: it connects under a distinct name,
+	// proves it is healthy, then swaps itself into the canonical path and stops
+	// this (old) process. We pass our own PID so the canary knows what to stop.
+	oldPID := os.Getpid()
+	args := []string{"connect", "--config", configPath, "--canary", "--canary-old-pid", strconv.Itoa(oldPID)}
 
 	newCmd := exec.Command(newExePath, args...)
 	// Detach from this process so it survives our exit
@@ -144,7 +142,6 @@ func (a *Agent) handleAgentUpdate(env protocol.Envelope) protocol.Envelope {
 	}
 
 	newPID := newCmd.Process.Pid
-	oldPID := os.Getpid()
 
 	log.Printf("[update] new process started: PID=%d, old PID=%d", newPID, oldPID)
 
@@ -187,12 +184,11 @@ func (a *Agent) handleAgentUpdateFromWSPath(env protocol.Envelope, params protoc
 		log.Printf("[update] chmod warning: %v", err)
 	}
 
-	// Step 1: Determine target path on disk
+	// Step 1: Determine target path on disk — stage next to the current binary
+	// with a ".next" suffix so the canary can swap atomically into the canonical
+	// path after proving healthy.
 	currentExe, _ := os.Executable()
-	newExePath := filepath.Join(filepath.Dir(currentExe), params.Filename)
-	if !strings.HasSuffix(strings.ToLower(newExePath), ".exe") {
-		newExePath = newExePath + ".exe"
-	}
+	newExePath := currentExe + ".next"
 
 	// Step 2: Move staged binary into place (fall back to copy if rename fails)
 	os.Remove(newExePath)
@@ -203,9 +199,10 @@ func (a *Agent) handleAgentUpdateFromWSPath(env protocol.Envelope, params protoc
 	}
 	log.Printf("[update] staged binary moved to %s", newExePath)
 
-	// Step 3: Start new binary with same config
+	// Step 3: Start new binary as a canary (prove healthy → swap → stop old).
 	configPath := getConfigPath()
-	args := []string{"connect", "--config", configPath}
+	oldPID := os.Getpid()
+	args := []string{"connect", "--config", configPath, "--canary", "--canary-old-pid", strconv.Itoa(oldPID)}
 	newCmd := exec.Command(newExePath, args...)
 	newCmd.Stdin = nil
 	newCmd.Stdout = nil
@@ -218,7 +215,6 @@ func (a *Agent) handleAgentUpdateFromWSPath(env protocol.Envelope, params protoc
 	}
 
 	newPID := newCmd.Process.Pid
-	oldPID := os.Getpid()
 	log.Printf("[update] (WS) new process started: PID=%d, old PID=%d", newPID, oldPID)
 
 	result := protocol.AgentUpdateResult{

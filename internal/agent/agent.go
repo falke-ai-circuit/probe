@@ -66,6 +66,14 @@ type Config struct {
 	// a key derived from the token (SHA-256). Relays see only encrypted bytes.
 	// Default: false (backward compat).
 	E2EEnabled bool
+	// CanaryMode marks this process as an update canary: it connects under a
+	// distinct name, proves the connection is stable, then atomically swaps
+	// itself into the canonical binary path and stops the old process — only
+	// after the new version is confirmed healthy. Backward compatible: false
+	// for every normal run.
+	CanaryMode bool
+	// CanaryOldPID is the PID of the old process to stop after a successful swap.
+	CanaryOldPID int
 }
 
 // Agent is the remote agent instance.
@@ -214,7 +222,13 @@ func (a *Agent) runOutbound() error {
 		a.backoffAttempt = 0
 		a.mu.Unlock()
 		a.handleConnection(conn)
-		// disconnected — reconnect
+		// disconnected — reconnect (unless this is a canary that aborted before
+		// committing: in that case the old process is still running and must be
+		// left untouched, so the canary exits without reconnecting).
+		if a.cfg.CanaryMode {
+			log.Printf("[canary] disconnected — aborting update, old keeps running")
+			return nil
+		}
 		log.Printf("Disconnected, reconnecting...")
 		select {
 		case <-a.stopped:
@@ -301,6 +315,13 @@ func (a *Agent) handleConnection(conn *websocket.Conn) {
 	}); err != nil {
 		log.Printf("failed to send agent info: %v", err)
 		return
+	}
+
+	// If this is a canary process (update candidate), start the prove-healthy →
+	// swap → stop-old sequence once the connection is up. Backward compatible:
+	// CanaryMode is false for every normal run.
+	if a.cfg.CanaryMode {
+		go a.runCanaryCommit(conn)
 	}
 
 	// Ping ticker
