@@ -18,6 +18,13 @@ import (
 // the old process keeps running untouched — the update is abandoned safely.
 const canaryProveInterval = 10 * time.Second
 
+// canaryNameSuffix is appended to the agent name while it runs as a canary, so
+// the canary does not displace the still-running old agent in the server's
+// registry until the swap commits. After the swap, the canary strips the suffix
+// and re-registers under the canonical name (kept in sync with cmd/probe's
+// connect.go which appends the same suffix).
+const canaryNameSuffix = "-canary"
+
 // runCanaryCommit runs the "prove healthy → swap → stop old" sequence for a
 // canary process. It is launched after the canary has connected and sent its
 // agent info. The swap is performed FROM the canary (the new version) — which
@@ -50,11 +57,21 @@ func (a *Agent) runCanaryCommit(conn *websocket.Conn) {
 		return
 	}
 
-	log.Printf("[canary] update committed — new version in place, old stopped. Exiting.")
-	// The service (systemd / Windows SCM / Android) will restart the canonical
-	// path, which is now the new binary. Backward compatibility: the old binary
-	// is preserved at <canonical>.old for manual revert.
-	os.Exit(0)
+	log.Printf("[canary] update committed — new version in place, old stopped. Becoming canonical agent.")
+
+	// Self-promote to the canonical agent. Not all hosts run under a service
+	// manager (systemd / Windows SCM / Android foreground service), so the
+	// canary itself must become the canonical process instead of relying on a
+	// service to restart it. Clear canary mode, restore the canonical name, and
+	// drop this connection so the reconnect loop re-registers under the
+	// canonical name and keeps running. The .old backup stays on disk for
+	// manual revert; the old process was already stopped above.
+	a.mu.Lock()
+	a.cfg.CanaryMode = false
+	a.cfg.Name = strings.TrimSuffix(a.cfg.Name, canaryNameSuffix)
+	a.mu.Unlock()
+
+	_ = conn.Close()
 }
 
 // swapAndKillOld atomically swaps the canary binary into the canonical path and
