@@ -1,6 +1,8 @@
 package server
 
 import (
+	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -88,6 +90,40 @@ func TestRegistry_Unregister_NonExistent(t *testing.T) {
 	defer r.Stop()
 	// Should not panic
 	r.Unregister("no-such-agent")
+}
+
+// TestRegistry_Remove verifies Remove deletes the row from the map and from
+// the persisted file while leaving unrelated agents intact.
+func TestRegistry_Remove(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/registry.json"
+	r := NewRegistry(path)
+	defer r.Stop()
+
+	r.Register("agent-1", "gone", "0.1", "linux", "amd64", "outbound", nil)
+	r.Register("agent-2", "stays", "0.1", "linux", "amd64", "outbound", nil)
+
+	if ok := r.Remove("agent-1"); !ok {
+		t.Fatal("Remove returned false for an existing agent")
+	}
+	if ok := r.Remove("agent-1"); ok {
+		t.Error("Remove returned true for an already-removed agent")
+	}
+
+	agents := r.ListAgents()
+	if len(agents) != 1 || agents[0].AgentID != "agent-2" {
+		t.Fatalf("expected only agent-2 to survive, got %+v", agents)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read registry file: %v", err)
+	}
+	if strings.Contains(string(raw), "agent-1") {
+		t.Fatalf("registry file still contains agent-1:\n%s", raw)
+	}
+	if !strings.Contains(string(raw), "agent-2") {
+		t.Fatalf("registry file lost agent-2:\n%s", raw)
+	}
 }
 
 // TestRegistry_Heartbeat verifies that Heartbeat updates the last

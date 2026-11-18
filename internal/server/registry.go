@@ -192,7 +192,9 @@ func (r *Registry) UpdateCapabilities(agentID string, capabilities []string) {
 	r.save()
 }
 
-// Unregister marks an agent as inactive.
+// Unregister marks an agent as inactive. It keeps the row: disconnect
+// bookkeeping wants the agent to remain visible with its history. Callers
+// that mean "delete this row" must use Remove instead.
 func (r *Registry) Unregister(agentID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -204,6 +206,21 @@ func (r *Registry) Unregister(agentID string) {
 		rec.HealthScore = rec.computeHealthScore(now)
 		r.save()
 	}
+}
+
+// Remove deletes an agent from the in-memory map and from the persisted
+// registry, and reports whether a record existed. This is the operator
+// delete path — after Remove the id must not appear in ListAgents or in
+// the registry file. Unregister is not a substitute: it only flips status.
+func (r *Registry) Remove(agentID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.agents[agentID]; !ok {
+		return false
+	}
+	delete(r.agents, agentID)
+	r.save()
+	return true
 }
 
 // ListAgents returns a slice of all agent records with fresh uptime and

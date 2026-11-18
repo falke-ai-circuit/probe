@@ -488,13 +488,32 @@ func (s *Server) handleV1GetAgent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rec)
 }
 
-// handleV1DeleteAgent removes (unregisters) an agent in v1 format.
+// handleV1DeleteAgent deletes an agent from the registry in v1 format.
+// Unlike a disconnect (which calls Unregister and keeps the row as
+// "inactive"), an operator DELETE removes the row from memory and from
+// registry.json. A live connection is refused rather than silently
+// orphaned: the agent would keep running while its row disappeared.
 func (s *Server) handleV1DeleteAgent(w http.ResponseWriter, r *http.Request) {
 	agentID := r.PathValue("id")
 	if _, ok := s.v1CheckAuth(w, r, "exec"); !ok {
 		return
 	}
-	s.registry.Unregister(agentID)
+	if agentID == "" {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "agent id required")
+		return
+	}
+	s.mu.RLock()
+	_, connected := s.conns[agentID]
+	s.mu.RUnlock()
+	if connected {
+		writeError(w, http.StatusConflict, "AGENT_CONNECTED",
+			fmt.Sprintf("agent %s is connected; disconnect it before deleting", agentID))
+		return
+	}
+	if !s.registry.Remove(agentID) {
+		writeError(w, http.StatusNotFound, "NOT_FOUND", fmt.Sprintf("agent %s not found", agentID))
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"removed": agentID})
 }
 

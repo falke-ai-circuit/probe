@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -278,13 +279,9 @@ func TestV1_DeleteAgent(t *testing.T) {
 		t.Errorf("expected removed=agent-1, got %v", data["removed"])
 	}
 
-	// Verify the agent is now inactive.
-	agents := srv.registry.ListAgents()
-	if len(agents) != 1 {
-		t.Fatalf("expected 1 agent, got %d", len(agents))
-	}
-	if agents[0].Status != "inactive" {
-		t.Errorf("expected status inactive, got %q", agents[0].Status)
+	// Verify the row is gone entirely, not merely flipped to inactive.
+	if agents := srv.registry.ListAgents(); len(agents) != 0 {
+		t.Fatalf("expected 0 agents after delete, got %d (%+v)", len(agents), agents)
 	}
 }
 
@@ -1057,3 +1054,84 @@ func TestV1_FSDeleteAgentNotConnected(t *testing.T) {
 
 var _ = context.WithValue
 var _ = time.Now
+// ---------------------------------------------------------------------------
+// P6-04: DELETE /api/v1/agents/{id} must actually delete the row.
+// ---------------------------------------------------------------------------
+
+// TestV1_DeleteAgent_RemovesRowAndPersistedRegistry is the P6-04 regression:
+// before the fix Unregister only flipped status to "inactive", so the id
+// survived both in GET /api/v1/agents and in registry.json on disk.
+func TestV1_DeleteAgent_RemovesRowAndPersistedRegistry(t *testing.T) {
+	dir := t.TempDir()
+	regPath := dir + "/registry.json"
+
+	srv, cleanup := newV1TestServer(t)
+	defer cleanup()
+	srv.registry = NewRegistry(regPath)
+	defer srv.registry.Stop()
+
+	srv.registry.Register("agent-1", "keep-me-out", "1.0", "linux", "amd64", "outbound", nil)
+	srv.registry.Register("agent-2", "bystander", "1.0", "linux", "amd64", "outbound", nil)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("DELETE", "/api/v1/agents/agent-1", nil)
+	srv.mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	for _, a := range srv.registry.ListAgents() {
+		if a.AgentID == "agent-1" {
+			t.Fatalf("deleted agent agent-1 still present in registry list (status=%q)", a.Status)
+		}
+	}
+	if got := len(srv.registry.ListAgents()); got != 1 {
+		t.Fatalf("expected 1 surviving agent, got %d", got)
+	}
+
+	raw, err := os.ReadFile(regPath)
+	if err != nil {
+		t.Fatalf("read registry file: %v", err)
+	}
+	if strings.Contains(string(raw), "agent-1") {
+		t.Fatalf("registry.json still contains deleted agent id agent-1:\n%s", raw)
+	}
+	if !strings.Contains(string(raw), "agent-2") {
+		t.Fatalf("registry.json lost the unrelated agent agent-2:\n%s", raw)
+	}
+	t.Logf("registry.json after DELETE (%s): %s", regPath, raw)
+}
+
+// TestV1_DeleteAgent_ConnectedRefused verifies a live connection is not
+// silently orphaned: the endpoint refuses instead of deleting the row under
+// a running agent.
+func TestV1_DeleteAgent_ConnectedRefused(t *testing.T) {
+	srv, cleanup := newV1TestServer(t)
+	defer cleanup()
+
+	srv.registry.Register("agent-live", "live", "1.0", "linux", "amd64", "outbound", nil)
+	srv.mu.Lock()
+	srv.conns["agent-live"] = stubConn{}
+	srv.mu.Unlock()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("DELETE", "/api/v1/agents/agent-live", nil)
+	srv.mux.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusOK {
+		t.Fatalf("expected non-200 for connected agent, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", rec.Code)
+	}
+	if _, err := srv.registry.GetHealth("agent-live"); err != nil {
+		t.Fatalf("connected agent row must survive a refused delete: %v", err)
+	}
+}
+
+// stubConn is a no-op Conn for tests that only need connection presence.
+type stubConn struct{}
+
+func (stubConn) WriteJSON(interface{}) error          { return nil }
+func (stubConn) WriteMessage(int, []byte) error        { return nil }
+func (stubConn) Close() error                          { return nil }
