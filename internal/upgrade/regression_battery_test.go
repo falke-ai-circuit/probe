@@ -1,7 +1,14 @@
 package upgrade
 
-// P3-03 regression battery. Four properties, each written so that removing the
-// behaviour it names turns the test red:
+// P3-03 regression battery. Four properties, checked by structural anchors
+// inside the embedded script: removing an anchored step turns the test red.
+// Semantic rewrites that leave the anchors intact are out of scope, with two
+// named exceptions that are guarded explicitly, because each was a live way to
+// keep the anchors and lose the behaviour:
+//
+//	(a) InstanceOf: $OldSha is never assigned inside Invoke-Rollback, and the
+//	    restore check compares against $OldSha (not a copy of $restoredHash).
+//	(b) Reset: the park loop assigns $races exactly once, as `$races = $races + 1`.
 //
 //	R1 SW-00..SW-08 run end-to-end on the OLD client's five primitives only.
 //	R2 a failed post-rename check rolls back (quarantine, verify OLD_SHA256,
@@ -71,6 +78,31 @@ func requireOrder(t *testing.T, body, label string, anchors []string) {
 	}
 }
 
+// braceBlock returns the text from `open` to its matching closing brace, so a
+// mutation inside a loop body can be inspected on its own rather than through
+// the whole function. `open` must end at the construct's opening brace.
+func braceBlock(t *testing.T, body, open string) string {
+	t.Helper()
+	start := strings.Index(body, open)
+	if start < 0 {
+		t.Fatalf("no %q (the construct was removed or renamed)", open)
+	}
+	depth := 0
+	for i := start; i < len(body); i++ {
+		switch body[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return body[start : i+1]
+			}
+		}
+	}
+	t.Fatalf("%q body is unbalanced", open)
+	return ""
+}
+
 // ---------------------------------------------------------------------------
 // R1 - bootstrap on the OLD protocol
 // ---------------------------------------------------------------------------
@@ -79,6 +111,15 @@ func requireOrder(t *testing.T, body, label string, anchors []string) {
 // (P2-02 K1). A new primitive added to Transport must fail this test rather
 // than sneak through as "just another endpoint".
 var transportMethodCensus = []string{"Exec", "FsHash", "FsRead", "FsStat", "FsWrite"}
+
+// callName maps a Transport method onto the label recordingTransport records,
+// so the allowed set is derived from the census rather than restated.
+func callName(method string) string {
+	if strings.HasPrefix(method, "Fs") {
+		return "fs-" + strings.ToLower(method[2:])
+	}
+	return strings.ToLower(method)
+}
 
 // recordingTransport is an OLD client double: it implements the five primitives
 // and nothing else, and records which of them each step reached for.
@@ -220,8 +261,12 @@ func TestBootstrapOldProtocolSequences(t *testing.T) {
 		t.Fatalf("SW-08 returned commit_pid %d", launch.CommitPID)
 	}
 
-	// Every call the sequence made must be one of the five primitives.
-	allowed := map[string]bool{"exec": true, "fs-write": true, "fs-hash": true, "fs-stat": true, "fs-read": true}
+	// Every call the sequence made must be one of the five primitives. The set
+	// is derived from the census so a sixth primitive cannot drift the two.
+	allowed := map[string]bool{}
+	for _, method := range transportMethodCensus {
+		allowed[callName(method)] = true
+	}
 	used := map[string]bool{}
 	for _, call := range tr.order {
 		if !allowed[call] {
@@ -320,6 +365,20 @@ func TestRollbackAfterPostRenameMismatch(t *testing.T) {
 		"if ($restoredHash -eq '' -or $restoredHash -ne $OldSha) {",
 		"'ROLLBACK_HASH_BAD'",
 	})
+	// R-E5 must not be made vacuous. $OldSha is a parameter, so the body may
+	// never assign it: inserting `$OldSha = $restoredHash` before the gate keeps
+	// every anchor above intact while turning the comparison into a tautology.
+	if assign := regexp.MustCompile(`\$OldSha\s*=`).FindString(rb); assign != "" {
+		t.Fatalf("Invoke-Rollback assigns %q; $OldSha is a parameter and the restore check must compare against it", assign)
+	}
+	operand := regexp.MustCompile(`\$restoredHash\s*-ne\s*(\$[A-Za-z_][A-Za-z0-9_]*)`).FindStringSubmatch(rb)
+	if operand == nil {
+		t.Fatalf("the restore check never compares $restoredHash against a variable")
+	}
+	if operand[1] != "$OldSha" {
+		t.Fatalf("the restore check compares against %s; expected $OldSha", operand[1])
+	}
+
 	// The failed verification must end the rollback, not continue to ROLLED_BACK.
 	hashBlock := scriptRegion(t, rb, "# R-E5 / R-L4:", "if ($late) {")
 	requireAll(t, hashBlock, "rollback hash block", []string{
@@ -501,6 +560,17 @@ func TestRenameOldRaceLadderIsBounded(t *testing.T) {
 	bound, err := strconv.Atoi(m[1])
 	if err != nil || bound < 1 || bound > 5 {
 		t.Fatalf("retry bound is %q; expected 1..5", m[1])
+	}
+	// The bound must be reachable: $races is assigned exactly once inside the
+	// loop, as $races = $races + 1. A reset (`$races = 0`) before the comparison
+	// leaves the literal and the regex intact while never tripping the bound.
+	loop := braceBlock(t, park, "while ($true) {")
+	assigns := regexp.MustCompile(`\$races\s*=\s*([^\r\n;]*)`).FindAllStringSubmatch(loop, -1)
+	if len(assigns) != 1 {
+		t.Fatalf("the park loop assigns $races %d times; exactly one `$races = $races + 1` keeps the bound reachable", len(assigns))
+	}
+	if rhs := strings.TrimSpace(assigns[0][1]); rhs != "$races + 1" {
+		t.Fatalf("the park loop assigns `$races = %s`; a reset makes the bound unreachable", rhs)
 	}
 	idxBound := strings.Index(park, m[0])
 	idxQuarantine := strings.Index(park, "New-QuarantinePath")
