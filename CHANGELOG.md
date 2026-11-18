@@ -3,6 +3,65 @@
 All notable changes to PROBE are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [Semantic Versioning](https://semver.org/).
 
+## [v1.18.6] — 2026-11-18
+
+### Added — Bootstrap + swap package (`internal/upgrade`)
+
+- **`internal/upgrade/sequence.go`** — SW-00..SW-20 bootstrap/swap sequence: discover → resolve canonical
+  path → stage payload → preflight → launch successor → post-rename verification, with a typed step-error
+  surface (`stepErr(step, code, err)`) and a journal of every transition.
+- **`internal/upgrade/manifest.go`** — manifest schema with digest/size, required-key validation, and
+  canonical JSON hashing.
+- **`internal/upgrade/journal.go`** — journal parse/classify (`Analyze`), mapping emitted event ids to
+  `OutcomeSwapped` / `OutcomeRolledBack` / `OutcomeRollbackFailed` with a reason.
+- **`internal/upgrade/transport.go` + `httptransport.go`** — the five-primitive transport census
+  (exec, fs-write, fs-hash, fs-stat, fs-read) and its HTTP implementation over the pre-existing v1 API.
+- **`internal/upgrade/canonical.go`, `winpath.go`, `argv.go`, `scripts/p2boot.ps1`, `scripts/p2discover.ps1`** —
+  embedded PowerShell bootstrap, Windows path normalisation, and successor-argv derivation that refuses to
+  reproduce the `connect`/`--canary` flag-termination defect.
+
+### Fixed — P3-02 hardening (A1/A3/A4/A5)
+
+- **A1 exec quoting:** `internal/platform/shellargv.go` keeps `["/c", command]` for quote-free commands and
+  switches to `["/s","/c","\"<cmd>\""]` when the command carries quotes, so embedded quotes reach cmd.exe
+  unchanged (`-replace "a","b"` no longer arrives escaped). `platform_windows.go` passes the line through
+  `SysProcAttr.CmdLine`. The destructive-command gate is unchanged — only transport changed.
+- **A4 write verification:** `writeVerified` (sequence.go) treats fs-write's own `Written` report as
+  non-evidence (the handler returns `len(data)` and no digest), reads the bytes back, hashes them and
+  compares; mismatch is `SW-05 / CodeDigestMismatch`. Boot script and manifest both go through it; SW-15
+  still covers the post-rename bytes.
+- **A3 fs deadlines:** `boundedFS` puts 30 s deadlines on fs-list/fs-read/fs-hash, returns
+  `ErrFSDeadline`, and maps it to `protocol.ErrTimeout` for the caller instead of blocking on a stalled
+  volume.
+- **A5 ranged reads:** `readFileRange` uses `io.ReaderAt.ReadAt` into a sized buffer on both the generic and
+  Windows paths — no full-file `os.ReadFile` for a bounded window. Wire contract unchanged.
+
+### Tests
+
+- **Regression battery** (`internal/upgrade/regression_battery_test.go`, 601 lines): old-protocol caller
+  sequence through a recording transport, reflection census of the transport interface, pinned exec command
+  strings, rollback anchor checks (SW-15 post-rename comparison, restore gate non-tautology, late-restart
+  ordering), and the 183 rename-retry ladder. Anti-tautology guards for the restore gate and the 183 bound.
+- Suite for this release: **128 passed / 0 failed** — upgrade 55, agent 51, platform 5, protocol 17
+  (`go test ./internal/upgrade/ ./internal/agent/ ./internal/platform/ ./internal/protocol/ -count=1`).
+
+### Known limits (from the P4-01 independent audit — not covered by this release)
+
+- **A1 wire unproven:** the old-client proof is at the interface level. `HTTPTransport` has no `httptest`
+  coverage; base64 body encoding, the `{ok,data,error}` envelope, the Authorization header, agent-id path
+  escaping and every non-2xx branch of `normalizeAgentError` are read-compatible only. Mutation M4 (fs-write
+  wire key `data` → `payload`) survives the whole suite.
+- **A2 identity unenforced:** `Manifest.Name` exists but is optional, unread by `p2boot.ps1`, and never
+  compared to `Discovered.Name`. Identity rests on both processes reading the same `--config` path, not on a
+  check. Mutation M3 (`different-agent`) survives.
+- **A3 structural/classifier only:** rollback is proven by forced-failure anchors in the script text and by
+  running the journal classifier on literals. `p2boot.ps1` has never executed — no PowerShell on the build
+  host, no Windows runner. Rename/retry/quarantine/restore file ops, `Wait-ProcessGone`, and the late-restart
+  branch are unrun; journal emission is anchored textually, not observed.
+- Also unmeasured: real TLS/proxy/auth path, chunked fs-write seek behaviour on a real volume, Windows
+  sharing-violation codes 5/32/33/183, PS 5.1 under host GPO/ExecutionPolicy, sandbox-dir containment per
+  host, sustained-session detection, EDR reaction, and per-deployment RBAC for exec/fs-write/fs-stat/fs-hash.
+
 ## [v1.15.1] — 2026-08-13
 
 ### Fixed — Adversarial audit (2026-08-13)
