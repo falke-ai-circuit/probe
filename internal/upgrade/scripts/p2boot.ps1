@@ -325,6 +325,41 @@ function Invoke-RenameWithRetry {
 # successor spawn (P2-02 section 2.4 - argv rule)
 # ---------------------------------------------------------------------------
 
+function New-QuarantinePath {
+    param([string]$Path)
+    $stamp = (Get-EpochSeconds).ToString()
+    $candidate = $Path + '.' + $stamp
+    $n = 1
+    while (Test-Path -LiteralPath $candidate) {
+        $candidate = $Path + '.' + $stamp + '.' + $n
+        $n = $n + 1
+    }
+    return $candidate
+}
+
+# SW-13 code 183 (P2-02 section 2.3): the .old path that SW-11 cleared was
+# re-created mid-run (a third party, not the peer). Park the intruder under a
+# new name and retry the same rename unit; bounded so a genuine race loop ends
+# in RENAME1_FAIL rather than spinning.
+function Invoke-ParkCanonical {
+    param([string]$Canonical, [string]$Backup)
+    $races = 0
+    while ($true) {
+        $code = Invoke-RenameWithRetry -From $Canonical -To $Backup
+        if ($code -ne 183) { return $code }
+        $races = $races + 1
+        Write-Journal 'OLD_RACE' ('attempt=' + $races + ' backup=' + (ConvertTo-DetailValue $Backup))
+        if ($races -gt 3) { return $code }
+        $quarantine = New-QuarantinePath -Path $Backup
+        $q = Invoke-RenameWithRetry -From $Backup -To $quarantine
+        if ($q -ne 0) {
+            Write-Journal 'OLD_RACE_QUARANTINE_FAIL' ('code=' + $q)
+            return $code
+        }
+        Write-Journal 'OLD_RACE_REQUARANTINED' ('to=' + (ConvertTo-DetailValue $quarantine))
+    }
+}
+
 function Start-ClientProcess {
     param([string]$Path, [string]$ConfigPath, [string]$WorkDir)
     if ($ConfigPath -ne '') {
@@ -349,8 +384,10 @@ function Invoke-Preflight {
         old_path_matches   = $false
         config_path_ok     = $true
         backup_state       = 'none'
+        old_hash           = $false
     }
     $oldPid = 0
+    $oldShort = ''
     $ok = $false
     $exitCode = $ExitStaging
 
@@ -393,6 +430,23 @@ function Invoke-Preflight {
         }
         $checks.size_match = $true
 
+        # (5) SW-07 OLD_SHA256 observable: the canonical image must exist and be
+        # readable before the boundary, and its digest is journaled here so an
+        # absent/unreadable <C> is refused pre-boundary with nothing moved.
+        if (-not (Test-Path -LiteralPath $canonical)) {
+            $exitCode = $ExitRefused
+            throw 'canonical_missing'
+        }
+        $oldHash = ''
+        try { $oldHash = Get-Sha256Hex -Path $canonical } catch { $oldHash = '' }
+        if ($oldHash -eq '') {
+            $exitCode = $ExitRefused
+            throw 'canonical_unreadable'
+        }
+        $checks.old_hash = $true
+        if ($oldHash.Length -ge 16) { $oldShort = $oldHash.Substring(0, 16) } else { $oldShort = $oldHash }
+        Write-Journal 'OLD_SHA256' ('source=preflight sha256=' + $oldShort)
+
         # (4) backup state.
         $backup = $canonical + '.old'
         if (Test-Path -LiteralPath $backup) { $checks.backup_state = 'present' } else { $checks.backup_state = 'absent' }
@@ -420,7 +474,7 @@ function Invoke-Preflight {
         $reason = [string]$_.Exception.Message
         if ($reason -eq 'payload_hash_mismatch' -or $reason -eq 'payload_size_mismatch' -or $reason -eq 'staged_missing' -or $reason -eq 'manifest_missing') {
             $exitCode = $ExitStaging
-        } elseif ($reason -eq 'config_path_relative' -or $reason -eq 'canonical_not_absolute') {
+        } elseif ($reason -eq 'config_path_relative' -or $reason -eq 'canonical_not_absolute' -or $reason -eq 'canonical_missing' -or $reason -eq 'canonical_unreadable') {
             $exitCode = $ExitRefused
         }
         Write-Journal 'PREFLIGHT_REFUSED' ('reason=' + (ConvertTo-DetailValue $reason))
@@ -428,10 +482,11 @@ function Invoke-Preflight {
 
     Write-Journal 'PREFLIGHT' ('ok=' + $ok.ToString().ToLower() + ' old_pid=' + $oldPid)
     $payload = [ordered]@{
-        phase   = 'PREFLIGHT'
-        ok      = $ok
-        checks  = $checks
-        old_pid = $oldPid
+        phase      = 'PREFLIGHT'
+        ok         = $ok
+        checks     = $checks
+        old_pid    = $oldPid
+        old_sha256 = $oldShort
     }
     Write-Output ($payload | ConvertTo-Json -Compress -Depth 4)
     return $exitCode
@@ -472,7 +527,7 @@ function Invoke-SwapPair {
     )
     $state = @{ ok = $false; killed = $false; code = 0; broken = $false }
 
-    $code = Invoke-RenameWithRetry -From $Canonical -To $Backup
+    $code = Invoke-ParkCanonical -Canonical $Canonical -Backup $Backup
     if ($code -eq 0) {
         Write-Journal 'PARKED' ''
     } else {
@@ -493,7 +548,7 @@ function Invoke-SwapPair {
             }
             Write-Journal 'OLD_KILLED' ('pid=' + $OldPid + ' mode=killfirst')
             $state.killed = $true
-            $code = Invoke-RenameWithRetry -From $Canonical -To $Backup
+            $code = Invoke-ParkCanonical -Canonical $Canonical -Backup $Backup
             if ($code -ne 0) {
                 Write-Journal 'RENAME1_FAIL' ('code=' + $code + ' mode=killfirst')
                 $state.code = $code
