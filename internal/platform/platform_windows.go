@@ -170,17 +170,20 @@ func (p *windowsPlatform) FileStat(path string) (protocol.FSStatResult, error) {
 }
 
 func (p *windowsPlatform) ReadFile(path string, offset int, limit int) (protocol.FSReadResult, error) {
-	raw, err := os.ReadFile(path)
+	// A5: the range is applied at read time. readFileRange seeks and reads only
+	// the requested window, so a 4 KB request no longer buffers the whole file.
+	f, err := os.Open(path)
 	if err != nil {
 		return protocol.FSReadResult{}, err
 	}
-	if offset > 0 && offset < len(raw) {
-		raw = raw[offset:]
-	} else if offset >= len(raw) {
-		raw = nil
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return protocol.FSReadResult{}, err
 	}
-	if limit > 0 && limit < len(raw) {
-		raw = raw[:limit]
+	raw, err := readFileRange(f, info.Size(), offset, limit)
+	if err != nil {
+		return protocol.FSReadResult{}, err
 	}
 	size := int64(len(raw))
 	return protocol.FSReadResult{Data: base64Encode(raw), Size: size, Encoding: "base64"}, nil
@@ -234,7 +237,18 @@ func (p *windowsPlatform) Mkdir(path string) (protocol.FSMkdirResult, error) {
 // --- Shell (exec is required for arbitrary commands, but uses cmd.exe not PowerShell) ---
 
 func (p *windowsPlatform) Exec(command string, timeout int, workDir string, env map[string]string) (protocol.ExecResult, error) {
-	cmd := exec.Command(obfs.Str("\x39\x37\x3e"), obfs.Str("\x75\x39"), command)
+	// A1: the whole command is one string field. shellArgv keeps the argv form
+	// when nothing needs quoting and switches to `cmd /s /c "<command>"` as a
+	// raw command line when it does, so embedded quotes are not re-escaped by
+	// os/exec and then re-parsed by cmd.exe.
+	shell := obfs.Str("\x39\x37\x3e")
+	args, rawLine := shellArgv(command)
+	cmd := exec.Command(shell, args...)
+	if rawLine {
+		cmd.SysProcAttr = &syscall.SysProcAttr{CmdLine: shellCmdLine(shell, args)}
+	} else {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
 	if workDir != "" {
 		cmd.Dir = workDir
 	}
@@ -244,7 +258,8 @@ func (p *windowsPlatform) Exec(command string, timeout int, workDir string, env 
 			cmd.Env = append(cmd.Env, k+"="+v)
 		}
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{}
+	// SysProcAttr was set above: re-assigning it here would drop CmdLine and
+	// put the quoted command back through argv escaping (A1).
 
 	start := time.Now()
 	done := make(chan error, 1)

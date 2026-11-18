@@ -582,3 +582,18 @@ func TestIsAllowed_AllTiers_AllCommandTypes(t *testing.T) {
 		}
 	}
 }
+// T2 (A1): the exec quoting fix changes only how the command is passed. A
+// quoted destructive command is still refused by the gate, which inspects the
+// command string before any spawn happens.
+func TestIsDestructiveCommand_QuotedPowerShell(t *testing.T) {
+	cases := []string{
+		`powershell -NoProfile -Command "Remove-Item C:\Windows\System32\drivers\etc\hosts"`,
+		`powershell -Command "Stop-Process -Name probe-client"`,
+		`cmd /c "del C:\Windows\System32\drivers\etc\hosts"`,
+	}
+	for _, cmd := range cases {
+		if !isDestructiveCommand(cmd) {
+			t.Errorf("expected destructive through quoting: %q", cmd)
+		}
+	}
+}

@@ -214,21 +214,36 @@ func (r *Runner) StagePayload(ctx context.Context, req StageRequest) (StageResul
 	}
 
 	// SW-05: arm the commit script and the manifest beside the payload.
+	//
+	// Integrity map for every write this sequence performs (A4 — fs-write
+	// returns Written = len(data) it was handed, never a digest, so a write's
+	// own report is not evidence):
+	//   payload chunks   -> SW-03: fs-hash vs the caller's digest, replay once
+	//   boot script      -> writeVerified here, then SW-06 re-hashes it against
+	//                       SHA256Boot (V1), the authority the commit script
+	//                       will also check at SW-10
+	//   manifest         -> writeVerified here; the proven digest is recorded as V4
+	//   post-rename file -> SW-15 inside p2boot.ps1: the only check of the bytes
+	//                       actually in place. Not repeated here.
+	// SW-07 executes the script only after SW-06 has read it back from the host,
+	// so nothing is executed that was not verified after landing.
 	bootPath := JoinWinPath(dir, BootScriptFile)
 	manifestPath := JoinWinPath(dir, ManifestFile)
-	if _, err := r.T.FsWrite(ctx, WriteRequest{Path: bootPath, Data: BootScript(), Mode: "0644"}); err != nil {
-		return out, stepErr("SW-05", CodeWriteFailed, err)
+	if _, err := r.writeVerified(ctx, "SW-05", bootPath, BootScript(), "0644"); err != nil {
+		return out, err
 	}
 	manifestBytes, err := manifest.Marshal()
 	if err != nil {
 		return out, err
 	}
-	if _, err := r.T.FsWrite(ctx, WriteRequest{Path: manifestPath, Data: manifestBytes, Mode: "0644"}); err != nil {
-		return out, stepErr("SW-05", CodeWriteFailed, err)
+	manifestDigest, err := r.writeVerified(ctx, "SW-05", manifestPath, manifestBytes, "0644")
+	if err != nil {
+		return out, err
 	}
 
 	// SW-06: V1 for the script, V4 for the manifest (the manifest cannot carry
-	// its own digest).
+	// its own digest). The boot script is re-hashed under the same step because
+	// SHA256Boot is the value SW-10 compares against on the host.
 	bootHash, err := r.T.FsHash(ctx, bootPath)
 	if err != nil {
 		return out, stepErr("SW-06", CodeWriteFailed, err)
@@ -236,10 +251,6 @@ func (r *Runner) StagePayload(ctx context.Context, req StageRequest) (StageResul
 	if !strings.EqualFold(bootHash.SHA256, bootDigest) {
 		return out, stepErr("SW-06", CodeDigestMismatch,
 			fmt.Errorf("sha256_boot expected %s actual %s", ShortDigest(bootDigest), ShortDigest(bootHash.SHA256)))
-	}
-	manifestHash, err := r.T.FsHash(ctx, manifestPath)
-	if err != nil {
-		return out, stepErr("SW-06", CodeWriteFailed, err)
 	}
 
 	out = StageResult{
@@ -249,10 +260,37 @@ func (r *Runner) StagePayload(ctx context.Context, req StageRequest) (StageResul
 		ManifestPath:   manifestPath,
 		PayloadSHA256:  payloadDigest,
 		BootSHA256:     bootDigest,
-		ManifestSHA256: manifestHash.SHA256,
+		ManifestSHA256: manifestDigest,
 		Chunks:         chunks,
 	}
 	return out, nil
+}
+
+// writeVerified performs one fs-write and proves the bytes that landed: the
+// file is hashed back and compared to the digest of the bytes passed in. A4
+// makes the write's own result insufficient — Written is len(data) it was
+// handed, not what reached the disk — so every artefact this sequence arms goes
+// through here. The post-rename image is the one write this sequence does not
+// verify itself: SW-15 covers it inside the commit script.
+func (r *Runner) writeVerified(ctx context.Context, step, path string, data []byte, mode string) (string, error) {
+	want := SHA256Hex(data)
+	res, err := r.T.FsWrite(ctx, WriteRequest{Path: path, Data: data, Mode: mode})
+	if err != nil {
+		return "", stepErr(step, CodeWriteFailed, err)
+	}
+	if res.Written != len(data) {
+		return "", stepErr(step, CodeWriteFailed,
+			fmt.Errorf("%s: wrote %d of %d bytes", path, res.Written, len(data)))
+	}
+	got, err := r.T.FsHash(ctx, path)
+	if err != nil {
+		return "", stepErr(step, CodeWriteFailed, err)
+	}
+	if !strings.EqualFold(got.SHA256, want) {
+		return "", stepErr(step, CodeDigestMismatch,
+			fmt.Errorf("%s: expected %s actual %s", path, ShortDigest(want), ShortDigest(got.SHA256)))
+	}
+	return want, nil
 }
 
 func (r *Runner) writePayload(ctx context.Context, path string, payload []byte) (int, error) {

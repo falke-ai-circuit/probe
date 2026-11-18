@@ -3,6 +3,7 @@ package platform
 import (
 	"encoding/base64"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -10,6 +11,35 @@ import (
 
 	"github.com/falke-ai-circuit/probe/internal/protocol"
 )
+
+// readFileRange returns the bytes in [offset, offset+limit) of r, reading only
+// that window (A5). Both platform ReadFile implementations use it so the range
+// is applied at read time: the old path called os.ReadFile and sliced
+// afterwards, which made a 1.5 MB file resident to answer a 4 KB request.
+//
+// Semantics are unchanged, so the wire contract does not move: a negative
+// offset reads from the start, an offset at or past EOF returns no bytes, and
+// limit <= 0 means "to the end of the file".
+func readFileRange(r io.ReaderAt, size int64, offset, limit int) ([]byte, error) {
+	if offset < 0 {
+		offset = 0
+	}
+	if int64(offset) >= size {
+		return nil, nil
+	}
+	n := size - int64(offset)
+	if limit > 0 && int64(limit) < n {
+		n = int64(limit)
+	}
+	if n <= 0 {
+		return nil, nil
+	}
+	buf := make([]byte, n)
+	if _, err := r.ReadAt(buf, int64(offset)); err != nil && err != io.EOF {
+		return nil, err
+	}
+	return buf, nil
+}
 
 // Platform defines platform-specific operations.
 type Platform interface {
@@ -185,19 +215,19 @@ func (p *genericPlatform) FileStat(path string) (protocol.FSStatResult, error) {
 }
 
 func (p *genericPlatform) ReadFile(path string, offset int, limit int) (protocol.FSReadResult, error) {
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return protocol.FSReadResult{}, err
 	}
-	if offset > 0 {
-		if offset >= len(data) {
-			data = nil
-		} else {
-			data = data[offset:]
-		}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return protocol.FSReadResult{}, err
 	}
-	if limit > 0 && limit < len(data) {
-		data = data[:limit]
+	// A5: the same windowed read as the Windows path — no full-file buffer.
+	data, err := readFileRange(f, info.Size(), offset, limit)
+	if err != nil {
+		return protocol.FSReadResult{}, err
 	}
 	size := int64(len(data))
 	return protocol.FSReadResult{

@@ -3,6 +3,7 @@ package agent
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -26,6 +27,48 @@ const (
 	defaultTimeout  = 60
 	maxTimeout      = 300
 )
+
+// A3: agent-side deadlines for the fs-* surface. The server's forward wall for
+// these calls is 120 s (server_api.go forwardToAgentWithTimeout); the caller in
+// the field saw 300 s. A stalled volume — offline share, spun-down disk — is a
+// normal Windows condition, not a crash, so the agent answers first with a
+// typed error and the caller learns the cause instead of blocking.
+//
+// These are vars, not consts, so tests can shorten them; they are read once per
+// call and never mutated at runtime.
+var (
+	fsListDeadline = 30 * time.Second
+	fsReadDeadline = 30 * time.Second
+	fsHashDeadline = 30 * time.Second
+)
+
+// ErrFSDeadline marks an fs-* call that did not return inside its deadline.
+// The underlying syscall cannot be cancelled: the goroutine stays parked on the
+// stalled volume, which is why the answer is a typed error rather than silence.
+var ErrFSDeadline = errors.New("filesystem operation exceeded its deadline")
+
+// boundedFS runs fn under a deadline. It is the only place the fs-* handlers
+// wait for the disk, so the bound cannot be forgotten on a new handler.
+func boundedFS[T any](d time.Duration, op string, fn func() (T, error)) (T, error) {
+	type outcome struct {
+		v   T
+		err error
+	}
+	ch := make(chan outcome, 1)
+	go func() {
+		v, err := fn()
+		ch <- outcome{v: v, err: err}
+	}()
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case o := <-ch:
+		return o.v, o.err
+	case <-timer.C:
+		var zero T
+		return zero, fmt.Errorf("%s: %w after %s", op, ErrFSDeadline, d)
+	}
+}
 
 // Config holds agent configuration.
 type Config struct {
@@ -553,8 +596,15 @@ func (a *Agent) handleFSList(env protocol.Envelope) protocol.Envelope {
 	if err != nil {
 		return protocol.NewError(env.ID, protocol.ErrInvalidParams, err.Error())
 	}
-	entries, err := a.plat.ListDir(params.Path)
+	// A3: a directory on an offline share never returns from ReadDir. The
+	// deadline turns that into a typed TIMEOUT for the caller.
+	entries, err := boundedFS(fsListDeadline, "fs-list", func() ([]protocol.FSEntry, error) {
+		return a.plat.ListDir(params.Path)
+	})
 	if err != nil {
+		if errors.Is(err, ErrFSDeadline) {
+			return protocol.NewError(env.ID, protocol.ErrTimeout, err.Error())
+		}
 		return protocol.NewError(env.ID, protocol.ErrInternal, err.Error())
 	}
 	return protocol.NewResult(env.ID, protocol.TypeFSListResult, protocol.FSListResult{Entries: entries})
@@ -577,8 +627,13 @@ func (a *Agent) handleFSRead(env protocol.Envelope) protocol.Envelope {
 	if err != nil {
 		return protocol.NewError(env.ID, protocol.ErrInvalidParams, err.Error())
 	}
-	result, err := a.plat.ReadFile(params.Path, params.Offset, params.Limit)
+	result, err := boundedFS(fsReadDeadline, "fs-read", func() (protocol.FSReadResult, error) {
+		return a.plat.ReadFile(params.Path, params.Offset, params.Limit)
+	})
 	if err != nil {
+		if errors.Is(err, ErrFSDeadline) {
+			return protocol.NewError(env.ID, protocol.ErrTimeout, err.Error())
+		}
 		return protocol.NewError(env.ID, protocol.ErrNotFound, err.Error())
 	}
 	return protocol.NewResult(env.ID, protocol.TypeFSReadResult, result)
@@ -671,20 +726,38 @@ func (a *Agent) handleFSHash(env protocol.Envelope) protocol.Envelope {
 	if err != nil {
 		return protocol.NewError(env.ID, protocol.ErrInvalidParams, err.Error())
 	}
-	f, err := os.Open(params.Path)
+	// A3: hashing a large file on a stalled volume blocks exactly like
+	// fs-list. The handle is opened *and closed* inside the bounded call: a
+	// deadline that returned while another goroutine still reads would close
+	// the file under it.
+	result, err := boundedFS(fsHashDeadline, "fs-hash", func() (protocol.FSHashResult, error) {
+		f, err := os.Open(params.Path)
+		if err != nil {
+			return protocol.FSHashResult{}, err
+		}
+		defer f.Close()
+		info, err := f.Stat()
+		if err != nil {
+			return protocol.FSHashResult{}, err
+		}
+		h := sha256.New()
+		if _, err := io.Copy(h, f); err != nil {
+			return protocol.FSHashResult{}, err
+		}
+		return protocol.FSHashResult{
+			Path: params.Path,
+			Hash: fmt.Sprintf("%x", h.Sum(nil)),
+			Size: info.Size(),
+		}, nil
+	})
 	if err != nil {
-		return protocol.NewError(env.ID, protocol.ErrNotFound, err.Error())
-	}
-	defer f.Close()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
+		if errors.Is(err, ErrFSDeadline) {
+			return protocol.NewError(env.ID, protocol.ErrTimeout, err.Error())
+		}
+		if os.IsNotExist(err) {
+			return protocol.NewError(env.ID, protocol.ErrNotFound, err.Error())
+		}
 		return protocol.NewError(env.ID, protocol.ErrInternal, err.Error())
-	}
-	stat, _ := f.Stat()
-	result := protocol.FSHashResult{
-		Path: params.Path,
-		Hash: fmt.Sprintf("%x", h.Sum(nil)),
-		Size: stat.Size(),
 	}
 	return protocol.NewResult(env.ID, protocol.TypeFSHashResult, result)
 }

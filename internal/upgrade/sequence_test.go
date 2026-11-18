@@ -20,6 +20,10 @@ type fakeTransport struct {
 	writeHook  func(call int, req WriteRequest) ([]byte, error)
 	execFn     func(ExecRequest) (ExecResult, error)
 	statFn     func(string) (StatResult, error)
+	// shortWritePath, when set, makes FsWrite report 0 bytes written for a path
+	// with this suffix while still landing the bytes: A4's "Written is not
+	// evidence" case, where only the read-back hash can tell.
+	shortWritePath string
 }
 
 func newFake() *fakeTransport {
@@ -61,7 +65,11 @@ func (f *fakeTransport) FsWrite(_ context.Context, req WriteRequest) (WriteResul
 		f.files[req.Path] = cur
 	}
 	// The agent reports len(data) it was handed, not what landed (A4).
-	return WriteResult{Written: len(req.Data), Path: req.Path}, nil
+	written := len(req.Data)
+	if f.shortWritePath != "" && strings.HasSuffix(req.Path, f.shortWritePath) {
+		written = 0
+	}
+	return WriteResult{Written: written, Path: req.Path}, nil
 }
 
 func (f *fakeTransport) FsHash(_ context.Context, path string) (HashResult, error) {
