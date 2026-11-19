@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/falke-ai-circuit/probe/internal/agent"
+	"github.com/falke-ai-circuit/probe/internal/version"
 	_ "github.com/falke-ai-circuit/probe/internal/server"
 )
 
@@ -135,6 +136,7 @@ func runConnect(args []string) {
 
 	cfg := agent.Config{
 		Mode:           "outbound",
+		Version:         version.Display(),
 		URL:            fcfg.Server,
 		Addr:           fcfg.Listen,
 		Token:          tokenVal,

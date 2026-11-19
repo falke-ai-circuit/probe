@@ -12,9 +12,12 @@ import (
 	"github.com/falke-ai-circuit/probe/internal/agent"
 	"github.com/falke-ai-circuit/probe/internal/modes"
 	"github.com/falke-ai-circuit/probe/internal/relay"
+	"github.com/falke-ai-circuit/probe/internal/version"
 )
 
-const appVersion = "v1.18.6"
+// appVersion is the single build version shared by every surface of the
+// unified binary; see internal/version.
+var appVersion = version.Display()
 
 func main() {
 	// No arguments → default supervisor mode with auto-detection from config
@@ -384,6 +387,7 @@ func registerFactories(mgr *modes.Manager) {
 		}
 		ac := agent.Config{
 			Mode:        "outbound",
+			Version:     version.Display(),
 			URL:         url,
 			Token:       strings.Trim(c.Token, "\"'"),
 			Name:        name,

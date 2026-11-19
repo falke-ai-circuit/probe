@@ -18,6 +18,7 @@ import (
 	cryptomanager "github.com/falke-ai-circuit/probe/internal/crypto"
 	"github.com/falke-ai-circuit/probe/internal/platform"
 	"github.com/falke-ai-circuit/probe/internal/protocol"
+	"github.com/falke-ai-circuit/probe/internal/version"
 	"github.com/gorilla/websocket"
 )
 
@@ -117,6 +118,29 @@ type Config struct {
 	CanaryMode bool
 	// CanaryOldPID is the PID of the old process to stop after a successful swap.
 	CanaryOldPID int
+	// Version is the build version this agent reports to the server as
+	// agent_info.Version. Callers pass the same string their banner prints
+	// (typically version.Display()); it is normalised to the bare wire form
+	// by VersionForInfo. Empty means "use the package default" (Version),
+	// which keeps Config literals that predate this field compiling and
+	// reporting a real version.
+	Version string
+}
+
+// Version is the wire form of the version this build reports when Config.Version
+// is not set. It is derived from internal/version — the single source of truth —
+// so it is not an independent literal and cannot drift from the client banner.
+var Version = version.Wire()
+
+// VersionForInfo returns the version string to report in agent_info for cfg.
+// It is the only place the reported version is decided: the configured build
+// version wins when present (normalised to the wire form), otherwise the
+// package default is used.
+func VersionForInfo(cfg Config) string {
+	if strings.TrimSpace(cfg.Version) != "" {
+		return version.Normalize(cfg.Version)
+	}
+	return Version
 }
 
 // Agent is the remote agent instance.
@@ -344,7 +368,7 @@ func (a *Agent) handleConnection(conn *websocket.Conn) {
 	// Send agent info
 	info := protocol.AgentInfo{
 		Name:            a.cfg.Name,
-		Version:         Version,
+		Version:         VersionForInfo(a.cfg),
 		OS:              getOS(),
 		Arch:            getArch(),
 		Mode:            a.cfg.Mode,
@@ -1027,9 +1051,6 @@ func (a *Agent) SendPrompt(prompt string) {
 		log.Printf("send prompt error: %v", err)
 	}
 }
-
-// Version is the agent version.
-const Version = "1.18.6"
 
 func getOS() string   { return runtime.GOOS }
 func getArch() string { return runtime.GOARCH }

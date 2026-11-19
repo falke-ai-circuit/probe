@@ -10,6 +10,7 @@ import (
 
 	"github.com/falke-ai-circuit/probe/internal/agent"
 	"github.com/falke-ai-circuit/probe/internal/relay"
+	"github.com/falke-ai-circuit/probe/internal/version"
 )
 
 // UnifiedConfig is the Phase 4 config format with optional sections for
@@ -293,6 +294,7 @@ func (uc *UnifiedConfig) ToAgentConfig() agent.Config {
 
 	cfg := agent.Config{
 		Mode:           mode,
+		Version:         version.Display(),
 		URL:            c.Server,
 		Addr:           c.Listen,
 		Token:          tokenVal,

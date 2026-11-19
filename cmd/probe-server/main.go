@@ -9,10 +9,12 @@ import (
 	"time"
 
 	"github.com/falke-ai-circuit/probe/internal/server"
+	"github.com/falke-ai-circuit/probe/internal/version"
 )
 
-const (
-	appVersion = "v1.18.6"
+var (
+	// appVersion is derived from internal/version, the single source of truth.
+	appVersion = version.Display()
 	appName    = "PROBE Server"
 )
 

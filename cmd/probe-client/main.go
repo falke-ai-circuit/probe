@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/falke-ai-circuit/probe/internal/agent"
+	"github.com/falke-ai-circuit/probe/internal/version"
 )
 
 
@@ -42,7 +43,12 @@ func logInit() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.Lshortfile)
 }
 
-const appVersion = "v1.18.6"
+// appVersion is what the user sees in the banner and usage text. It is derived
+// from internal/version (the single source of truth) and the very same value is
+// handed to agent.Config.Version below, so the printed version and the version
+// reported to the server are guaranteed to agree. Bump version.Semver (or pass
+// -X github.com/falke-ai-circuit/probe/internal/version.Semver=...) once.
+var appVersion = version.Display()
 
 // clientFlags holds the parsed command line for the probe-client entrypoint.
 type clientFlags struct {
@@ -277,6 +283,7 @@ func runClient() {
 
 	cfg := agent.Config{
 		Mode:           "outbound",
+		Version:         appVersion,
 		URL:            fcfg.Server,
 		Addr:           fcfg.Listen,
 		Token:          tokenVal,
