@@ -8,9 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -131,23 +129,13 @@ func (a *Agent) handleAgentUpdate(env protocol.Envelope) protocol.Envelope {
 	// proves it is healthy, then swaps itself into the canonical path and stops
 	// this (old) process. We pass our own PID so the canary knows what to stop.
 	oldPID := os.Getpid()
-	args := []string{"connect", "--config", configPath, "--canary", "--canary-old-pid", strconv.Itoa(oldPID)}
-
-	newCmd := exec.Command(newExePath, args...)
-	// Detach from this process so it survives our exit
-	newCmd.Stdin = nil
-	newCmd.Stdout = nil
-	newCmd.Stderr = nil
-	newCmd.SysProcAttr = getSysProcAttr()
-
-	if err := newCmd.Start(); err != nil {
+	newPID, canaryLog, err := StartCanary(newExePath, currentExe, configPath, oldPID)
+	if err != nil {
 		os.Remove(newExePath)
-		return protocol.NewError(env.ID, protocol.ErrInternal, fmt.Sprintf("start new process failed: %v", err))
+		return canaryStartError(env.ID, err, canaryLog)
 	}
 
-	newPID := newCmd.Process.Pid
-
-	log.Printf("[update] new process started: PID=%d, old PID=%d", newPID, oldPID)
+	log.Printf("[update] new process started: PID=%d, old PID=%d, canary log=%s", newPID, oldPID, canaryLog)
 
 	// Step 6: Report back to server
 	result := protocol.AgentUpdateResult{
@@ -209,20 +197,13 @@ func (a *Agent) handleAgentUpdateFromWSPath(env protocol.Envelope, params protoc
 	// Step 3: Start new binary as a canary (prove healthy → swap → stop old).
 	configPath := getConfigPath()
 	oldPID := os.Getpid()
-	args := []string{"connect", "--config", configPath, "--canary", "--canary-old-pid", strconv.Itoa(oldPID)}
-	newCmd := exec.Command(newExePath, args...)
-	newCmd.Stdin = nil
-	newCmd.Stdout = nil
-	newCmd.Stderr = nil
-	newCmd.SysProcAttr = getSysProcAttr()
-
-	if err := newCmd.Start(); err != nil {
+	newPID, canaryLog, err := StartCanary(newExePath, currentExe, configPath, oldPID)
+	if err != nil {
 		os.Remove(newExePath)
-		return protocol.NewError(env.ID, protocol.ErrInternal, fmt.Sprintf("start new process failed: %v", err))
+		return canaryStartError(env.ID, err, canaryLog)
 	}
 
-	newPID := newCmd.Process.Pid
-	log.Printf("[update] (WS) new process started: PID=%d, old PID=%d", newPID, oldPID)
+	log.Printf("[update] (WS) new process started: PID=%d, old PID=%d, canary log=%s", newPID, oldPID, canaryLog)
 
 	result := protocol.AgentUpdateResult{
 		Success: true,

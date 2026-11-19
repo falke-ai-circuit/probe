@@ -44,11 +44,47 @@ func logInit() {
 
 const appVersion = "v1.18.6"
 
-// configPath is the JSON config file path (flag: --config).
-// All connection parameters are read from this file instead of
-// individual CLI flags, which keeps the command line clean and
-// unremarkable.
-var configPath = flag.String("config", "probe-client.json", "Path to JSON config file")
+// clientFlags holds the parsed command line for the probe-client entrypoint.
+type clientFlags struct {
+	configPath   string
+	canary       bool
+	canaryOldPID int
+}
+
+// parseClientArgs parses the argv of the probe-client entrypoint. It is the
+// receiving half of the update launch contract: internal/agent.CanaryArgs emits
+// ["connect", "--config", p, "--canary", "--canary-old-pid", pid] and this
+// function must accept exactly that. Unknown flags are an error (never silently
+// ignored), so a drift between the launcher and this parser fails loudly in the
+// anti-tautology test instead of producing a canary that prints usage and exits.
+func parseClientArgs(argv []string) (clientFlags, error) {
+	var out clientFlags
+	fs := newClientFlagSet(&out)
+	// Both entrypoints accept an optional "connect" subcommand so the updater
+	// can launch either binary with the same argv.
+	if len(argv) > 0 && argv[0] == "connect" {
+		argv = argv[1:]
+	}
+	if err := fs.Parse(argv); err != nil {
+		return out, err
+	}
+	if fs.NArg() > 0 {
+		return out, fmt.Errorf("unexpected arguments: %v", fs.Args())
+	}
+	return out, nil
+}
+
+// newClientFlagSet registers the flags the probe-client entrypoint accepts.
+// Kept separate from parseClientArgs so tests can assert the registered flag set
+// against the argv the updater actually launches (see main_test.go).
+func newClientFlagSet(out *clientFlags) *flag.FlagSet {
+	fs := flag.NewFlagSet("probe-client", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&out.configPath, "config", "probe-client.json", "Path to JSON config file")
+	fs.BoolVar(&out.canary, "canary", false, "Canary mode: connect, prove healthy, then swap into canonical path and stop the old process")
+	fs.IntVar(&out.canaryOldPID, "canary-old-pid", 0, "PID of the old process to stop after a successful swap")
+	return fs
+}
 
 // configB64 is injected at build time via -ldflags "-X main.configB64=...".
 // When non-empty, the agent decodes this base64-encoded JSON config instead
@@ -141,9 +177,26 @@ func main() {
 // runClient is the shared startup logic. Returns when SIGINT/SIGTERM is
 // received or the agent terminates.
 func runClient() {
-	flag.Usage = printUsage
 	logInit()
-	flag.Parse()
+
+	// Crash recovery FIRST: if a previous update died between
+	// rename(canonical -> .old) and rename(.next -> canonical), the canonical
+	// path no longer exists but <canonical>.old does. Put the backup back before
+	// touching anything else so the host is never left with an unrunnable path.
+	if exe, err := os.Executable(); err == nil {
+		canonical := strings.TrimSuffix(exe, ".next")
+		if _, recErr := agent.RecoverCanonicalBinary(canonical); recErr != nil {
+			log.Printf("[recovery] canonical binary restore failed: %v", recErr)
+		}
+	}
+
+	opts, err := parseClientArgs(os.Args[1:])
+	if err != nil {
+		printUsage()
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	configPath := opts.configPath
 
 	// Read config: prefer ldflags-injected base64 config, fall back to JSON file.
 	var fcfg ConfigFile
@@ -158,10 +211,10 @@ func runClient() {
 		}
 	} else {
 		// Fall back to JSON config file (backward compat).
-		cfgData, err := os.ReadFile(*configPath)
+		cfgData, err := os.ReadFile(configPath)
 		if err != nil {
 			printUsage()
-			fmt.Fprintf(os.Stderr, "Error: could not read config file: %s\n", *configPath)
+			fmt.Fprintf(os.Stderr, "Error: could not read config file: %s\n", configPath)
 			os.Exit(1)
 		}
 		if err := json.Unmarshal(cfgData, &fcfg); err != nil {
@@ -189,6 +242,12 @@ func runClient() {
 	name := fcfg.Name
 	if name == "" {
 		name = "probe-client"
+	}
+	// A canary connects under a distinct name so it does not displace the
+	// still-running old agent until the swap commits. runCanaryCommit strips
+	// this suffix before re-registering under the canonical name.
+	if opts.canary {
+		name = name + "-canary"
 	}
 
 	// Parse backoff durations
@@ -234,6 +293,9 @@ func runClient() {
 		Permissions:     fcfg.Permissions,
 		SandboxDir:      fcfg.SandboxDir,
 		Capabilities:    fcfg.Capabilities,
+		ConfigPath:      configPath,
+		CanaryMode:      opts.canary,
+		CanaryOldPID:    opts.canaryOldPID,
 	}
 
 	// Ensure the WebSocket URL includes the /ws path the server expects
@@ -247,7 +309,7 @@ func runClient() {
 
 	// Startup logging
 	fmt.Fprintf(os.Stderr, "PROBE Client %s\n", appVersion)
-	fmt.Fprintf(os.Stderr, "Config: %s\n", *configPath)
+	fmt.Fprintf(os.Stderr, "Config: %s\n", configPath)
 
 	ag := agent.New(cfg)
 
