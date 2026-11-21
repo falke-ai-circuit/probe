@@ -11,6 +11,7 @@ import (
 
 	"github.com/falke-ai-circuit/probe/internal/agent"
 	"github.com/falke-ai-circuit/probe/internal/modes"
+	"github.com/falke-ai-circuit/probe/internal/platform"
 	"github.com/falke-ai-circuit/probe/internal/relay"
 )
 
@@ -172,7 +173,7 @@ func runSupervisor(args []string) {
 }
 
 // runDefaultSupervisor starts PROBE in supervisor mode with auto-detection.
-// It reads a config file (default: probe.json, or PROBE_CONFIG env var) and
+// It reads a config file (default: <executable>.json, or PROBE_CONFIG env var) and
 // auto-starts modes based on the config contents:
 //   - client.server present → supervisor + connect
 //   - no client.server      → supervisor + serve (default)
@@ -181,7 +182,7 @@ func runDefaultSupervisor() {
 	configPath := os.Getenv("PROBE_CONFIG")
 	if configPath == "" {
 		// Try common config file names
-		for _, name := range []string{"probe.json", "probe-client.json"} {
+		for _, name := range []string{platform.DefaultConfigName(), "config.json"} {
 			if _, err := os.Stat(name); err == nil {
 				configPath = name
 				break
@@ -372,7 +373,7 @@ func registerFactories(mgr *modes.Manager) {
 		}
 		name := c.Name
 		if name == "" {
-			name = "probe-client"
+			name = platform.DefaultAgentName()
 		}
 		perms := c.Permissions
 		if perms == "" {

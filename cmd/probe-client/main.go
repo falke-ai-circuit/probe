@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/falke-ai-circuit/probe/internal/agent"
+	"github.com/falke-ai-circuit/probe/internal/platform"
 )
 
 
@@ -48,7 +49,7 @@ const appVersion = "v1.18.6"
 // All connection parameters are read from this file instead of
 // individual CLI flags, which keeps the command line clean and
 // unremarkable.
-var configPath = flag.String("config", "probe-client.json", "Path to JSON config file")
+var configPath = flag.String("config", platform.DefaultConfigName(), "Path to JSON config file")
 
 // configB64 is injected at build time via -ldflags "-X main.configB64=...".
 // When non-empty, the agent decodes this base64-encoded JSON config instead
@@ -80,21 +81,23 @@ type ConfigFile struct {
 
 // printUsage writes a clean help/usage banner to stderr.
 func printUsage() {
+	cfgName := platform.DefaultConfigName()
+	agentName := platform.DefaultAgentName()
 	fmt.Fprintf(os.Stderr, `PROBE Client %s
 A remote assistant tool for the Hermes AI ecosystem
 
 Usage:
-  ProbeClient.exe [--config probe-client.json]
+  ProbeClient.exe [--config %s]
 
 Configuration:
-  All settings are read from a JSON config file (default: probe-client.json).
-  Use --config <path> to specify an alternate file.
+  All settings are read from a JSON config file (default: %s,
+  beside the executable). Use --config <path> to specify an alternate file.
 
 Config file fields:
 
   server       string  WebSocket server URL (e.g. "host:7700" (websocket))
   token        string  Authentication token for the server
-  name         string  Display name for this agent (default: "probe-client")
+  name         string  Display name for this agent (default: "%s")
   mode         string  "silent" (daemon) or "interactive" (CLI prompt) (default: "silent")
   listen       string  Address to listen on for inbound connections (e.g. ":7700")
   maxRetries   int     Max reconnect attempts; 0 = infinite (default: 0)
@@ -117,7 +120,7 @@ Config file fields:
   sandbox_dir  string  Restrict all filesystem operations to this directory (empty = no restriction)
                          In "sandboxed" mode, if empty, auto-uses the agent's startup directory
 
-Example config (probe-client.json):
+Example config (%s):
 
   {
     "server": "your-server:7700",
@@ -129,7 +132,7 @@ Example config (probe-client.json):
     "backoffMax": "60s"
   }
 
-`, appVersion)
+`, appVersion, cfgName, cfgName, agentName, cfgName)
 }
 
 // main starts the PROBE client. The startup logic lives in runClient so
@@ -188,7 +191,7 @@ func runClient() {
 
 	name := fcfg.Name
 	if name == "" {
-		name = "probe-client"
+		name = platform.DefaultAgentName()
 	}
 
 	// Parse backoff durations

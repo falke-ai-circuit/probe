@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/falke-ai-circuit/probe/internal/agent"
+	"github.com/falke-ai-circuit/probe/internal/platform"
 	_ "github.com/falke-ai-circuit/probe/internal/server"
 )
 
@@ -48,7 +49,7 @@ type ConfigFile struct {
 // All flags are the same as the old cmd/probe-client.
 func runConnect(args []string) {
 	fs := flag.NewFlagSet("connect", flag.ExitOnError)
-	configPath := fs.String("config", "probe-client.json", "Path to JSON config file")
+	configPath := fs.String("config", platform.DefaultConfigName(), "Path to JSON config file")
 	showVersion := fs.Bool("version", false, "Print version and exit")
 	canaryMode := fs.Bool("canary", false, "Canary mode: connect, prove healthy, then swap into canonical path and stop the old process")
 	canaryOldPID := fs.Int("canary-old-pid", 0, "PID of the old process to stop after a successful swap")
@@ -100,7 +101,7 @@ func runConnect(args []string) {
 
 	name := fcfg.Name
 	if name == "" {
-		name = "probe-client"
+		name = platform.DefaultAgentName()
 	}
 	// A canary connects under a distinct name so it does not displace the
 	// still-running old agent until the swap succeeds.
@@ -200,21 +201,23 @@ func runConnect(args []string) {
 }
 
 func printConnectUsage() {
+	cfgName := platform.DefaultConfigName()
+	agentName := platform.DefaultAgentName()
 	fmt.Fprintf(os.Stderr, `PROBE Client %s
 A remote assistant tool for the Hermes AI ecosystem
 
 Usage:
-  probe connect [--config probe-client.json]
+  probe connect [--config %s]
 
 Configuration:
-  All settings are read from a JSON config file (default: probe-client.json).
-  Use --config <path> to specify an alternate file.
+  All settings are read from a JSON config file (default: %s,
+  beside the executable). Use --config <path> to specify an alternate file.
 
 Config file fields:
 
   server       string  WebSocket server URL (e.g. "ws://host:7700" or "wss://host:7700")
   token        string  Authentication token for the server
-  name         string  Display name for this agent (default: "probe-client")
+  name         string  Display name for this agent (default: "%s")
   mode         string  "silent" (daemon) or "interactive" (CLI prompt) (default: "silent")
   listen       string  Address to listen on for inbound connections (e.g. ":7700")
   maxRetries   int     Max reconnect attempts; 0 = infinite (default: 0)
@@ -232,10 +235,10 @@ Config file fields:
   relays       array   Relay endpoints for failover: [{"url":"wss://relay:7701/ws","token":"..."}]
 
 Flags:
-  --config <path>  Path to JSON config file (default: probe-client.json)
+  --config <path>  Path to JSON config file (default: %s)
   --version        Print version and exit
 
-Example config (probe-client.json):
+Example config (%s):
 
   {
     "server": "ws://your-server:7700",
@@ -247,7 +250,7 @@ Example config (probe-client.json):
     "backoffMax": "60s"
   }
 
-`, appVersion)
+`, appVersion, cfgName, cfgName, agentName, cfgName, cfgName)
 }
 
 func runInteractive(ag *agent.Agent) {

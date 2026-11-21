@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falke-ai-circuit/probe/internal/platform"
 	"github.com/falke-ai-circuit/probe/internal/protocol"
 )
 
@@ -248,7 +249,7 @@ func hashFile(path string) (string, error) {
 }
 
 // getConfigPath extracts the -config flag value from os.Args.
-// Falls back to "probe-client.json" if not found.
+// Falls back to the build-derived default config name if not found.
 func getConfigPath() string {
 	for i, arg := range os.Args {
 		if arg == "-config" || arg == "--config" {
@@ -263,7 +264,7 @@ func getConfigPath() string {
 			return arg[9:]
 		}
 	}
-	return "probe-client.json"
+	return platform.DefaultConfigName()
 }
 
 // getSysProcAttr is defined in sysprocattr_windows.go / sysprocattr_other.go

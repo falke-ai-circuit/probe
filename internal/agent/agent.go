@@ -1206,7 +1206,7 @@ func (a *Agent) handleReconfigure(env protocol.Envelope) protocol.Envelope {
 	}
 	if savePath == "" {
 		// Try common config file names in working directory
-		for _, name := range []string{"probe.json", "probe-client.json"} {
+		for _, name := range []string{platform.DefaultConfigName(), "probe.json"} {
 			if _, err := os.Stat(name); err == nil {
 				savePath = name
 				break

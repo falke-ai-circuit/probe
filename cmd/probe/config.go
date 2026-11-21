@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/falke-ai-circuit/probe/internal/agent"
+	"github.com/falke-ai-circuit/probe/internal/platform"
 	"github.com/falke-ai-circuit/probe/internal/relay"
 )
 
@@ -181,7 +182,7 @@ func (uc *UnifiedConfig) applyDefaults() {
 			uc.Client.Name = uc.Name
 		}
 		if uc.Client.Name == "" {
-			uc.Client.Name = "probe-client"
+			uc.Client.Name = platform.DefaultAgentName()
 		}
 		if uc.Client.Permissions == "" {
 			uc.Client.Permissions = "full"
