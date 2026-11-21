@@ -265,6 +265,32 @@ func (s *Server) handleAgentFSWrite(w http.ResponseWriter, r *http.Request, agen
 	}
 	defer r.Body.Close()
 
+	// Contract check: the write payload lives in the "data" field (base64).
+	// Unknown keys are ignored by encoding/json, so without this check a caller
+	// sending {"path","content"} produces an empty Data string, the agent writes
+	// 0 bytes, and the request is answered ok:true/written:0 — a failure that
+	// looks like a legitimate empty write. An absent data key is an error; an
+	// explicit "data":"" is a valid zero-byte write and falls through.
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		http.Error(w, fmt.Sprintf("invalid JSON: %v", err), http.StatusBadRequest)
+		return
+	}
+	rawData, hasData := fields["data"]
+	if !hasData {
+		http.Error(w, `missing required field "data" (base64-encoded file content); "content" is not part of the fs-write contract`, http.StatusBadRequest)
+		return
+	}
+	var dataAny interface{}
+	if err := json.Unmarshal(rawData, &dataAny); err != nil {
+		http.Error(w, `field "data" must be a base64-encoded string`, http.StatusBadRequest)
+		return
+	}
+	if _, ok := dataAny.(string); !ok {
+		http.Error(w, `field "data" must be a base64-encoded string`, http.StatusBadRequest)
+		return
+	}
+
 	var params protocol.FSParams
 	if err := json.Unmarshal(body, &params); err != nil {
 		http.Error(w, fmt.Sprintf("invalid JSON: %v", err), http.StatusBadRequest)
