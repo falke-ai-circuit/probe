@@ -177,6 +177,13 @@ Example config (probe-client.json):
 // main starts the PROBE client. The startup logic lives in runClient so
 // that future entry-point variants (e.g. service mode) can reuse it.
 func main() {
+	// P8-04: detached-job guardian. Every client build must answer this
+	// subcommand — the field binary (probe-client) is spawned by itself as
+	// `guardian --job-dir <dir>` and is the only executor of on_death.
+	if len(os.Args) > 1 && os.Args[1] == "guardian" {
+		runGuardian(os.Args[2:])
+		return
+	}
 	runClient()
 }
 

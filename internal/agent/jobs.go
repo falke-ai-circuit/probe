@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -214,6 +215,9 @@ func (a *Agent) handleExecDetached(env protocol.Envelope, params protocol.ExecPa
 	}
 
 	if err := a.spawnGuardian(dir); err != nil {
+		if errors.Is(err, ErrGuardianUnsupported) {
+			return protocol.NewError(env.ID, protocol.ErrGuardianUnavailable, err.Error())
+		}
 		return protocol.NewError(env.ID, protocol.ErrInternal, "guardian: "+err.Error())
 	}
 

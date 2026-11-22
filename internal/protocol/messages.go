@@ -185,6 +185,9 @@ const (
 	ErrFSWriteEmpty          = "FS_WRITE_EMPTY"
 	ErrFSWriteSizeMismatch   = "FS_WRITE_SIZE_MISMATCH"
 	ErrFSWriteDigestMismatch = "FS_WRITE_DIGEST_MISMATCH"
+	// P8-04: the launching binary has no guardian entry point, so a detached
+	// job would have no executor and no cleanup. Refused at launch.
+	ErrGuardianUnavailable = "GUARDIAN_UNAVAILABLE"
 )
 
 // Envelope is the top-level message wrapper.
