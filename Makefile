@@ -1,4 +1,4 @@
-.PHONY: build vet test cross clean windows
+.PHONY: build vet test cross clean windows check-build-matrix
 
 GOCMD=/opt/data/go/bin/go1.23.12
 GO123=/opt/data/go/bin/go1.23.12
@@ -29,3 +29,18 @@ clean:
 
 windows:
 	GOTOOLCHAIN=local GOOS=windows GOARCH=amd64 $(GO123) build -o ./build/ProbeClient.exe ./cmd/probe-client/
+
+# check-build-matrix compiles every client entrypoint for every target the fleet
+# ships to. P8-04 shipped a guardian that only built on linux (undefined itoa in
+# jobs_windows.go), so "compiles for windows" is a check here, not a hope.
+check-build-matrix:
+	@set -e; mkdir -p ./build/matrix; \
+	for os in windows linux darwin; do \
+	  for pkg in ./cmd/probe-client/ ./cmd/probe/; do \
+	    name=$$(basename $$pkg); \
+	    echo "GOOS=$$os GOARCH=amd64 $$pkg"; \
+	    GOFLAGS=-mod=vendor GOOS=$$os GOARCH=amd64 $(GOBUILD) -trimpath \
+	      -o ./build/matrix/$$name-$$os-amd64 $$pkg; \
+	  done; \
+	done; \
+	echo "build matrix OK (windows/linux/darwin amd64 x probe-client/probe)"

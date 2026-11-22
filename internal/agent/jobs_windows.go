@@ -4,6 +4,7 @@ package agent
 
 import (
 	"os/exec"
+	"strconv"
 	"syscall"
 )
 
@@ -45,7 +46,7 @@ func killJobGroup(pid int) {
 	if pid <= 0 {
 		return
 	}
-	_ = exec.Command("taskkill", "/PID", itoa(pid), "/T", "/F").Run()
+	_ = exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F").Run()
 }
 
 // shellCommand builds the job command with the platform shell.
