@@ -54,6 +54,12 @@ type Server struct {
 	pendingMu   sync.Mutex
 	pendingReqs map[string]chan protocol.Envelope // requestID -> response channel
 
+	// P8-04: witness records for detached jobs (job_id -> record). The
+	// server cannot execute cleanup on a dead host; it only remembers what
+	// it launched and escalates records that stop reporting.
+	jobMu sync.Mutex
+	jobs  map[string]*ServerJob
+
 	// pendingUpdates tracks agents that received an agent_update command.
 	// When the new agent connects, we use this to kill the old process.
 	pendingUpdates map[string]*pendingUpdate
@@ -171,6 +177,7 @@ func NewServer(addr string, token string, registryPath string) *Server {
 		conns:           make(map[string]Conn),
 		connWriteMu:     make(map[string]*sync.Mutex),
 		pendingReqs:     make(map[string]chan protocol.Envelope),
+		jobs:            make(map[string]*ServerJob),
 		pendingUpdates:  make(map[string]*pendingUpdate),
 		relays:          make(map[string]*relaySession),
 		forwardPolicies: make(map[string]string),

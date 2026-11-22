@@ -134,6 +134,14 @@ const (
 	TypeSysInfo       = "sysinfo"
 	TypeSysInfoResult = "sysinfo_result"
 
+	// P8-04: detached jobs. A detached exec returns a launch handle at once;
+	// job_status and job_log are served from the on-disk spool, so they keep
+	// working after the launching agent has died and been restarted.
+	TypeJobStatus       = "job_status"
+	TypeJobStatusResult = "job_status_result"
+	TypeJobLog          = "job_log"
+	TypeJobLogResult    = "job_log_result"
+
 	// Results (Agent → Server)
 	TypeExecResult          = "exec_result"
 	TypeFSListResult       = "fs_list_result"
@@ -212,6 +220,68 @@ type ExecParams struct {
 	Timeout int               `json:"timeout,omitempty"` // seconds, default 60
 	WorkDir string            `json:"workdir,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
+
+	// P8-04: detached execution. Detach=true returns immediately with a job
+	// handle and runs the command outside the per-call deadline, under a
+	// guardian process that outlives this agent. OnDeath is a command the
+	// guardian runs when the job fails, is killed, or the agent dies before
+	// the job finished. JobTimeoutS bounds the detached job itself (0 =
+	// the caller's Timeout, or defaultTimeout when that is also 0).
+	Detach      bool   `json:"detach,omitempty"`
+	OnDeath     string `json:"on_death,omitempty"`
+	JobTimeoutS int    `json:"job_timeout_s,omitempty"`
+}
+
+// JobLaunch is what a detached exec returns: no output, just the handle.
+type JobLaunch struct {
+	JobID          string `json:"job_id"`
+	PID            int    `json:"pid"`
+	GuardianPID    int    `json:"guardian_pid,omitempty"`
+	StartedAtUTC   string `json:"started_at_utc"`
+	StartedAtLocal string `json:"started_at_local"`
+	TZ             string `json:"tz"`
+}
+
+// JobStatusParams identifies one detached job.
+type JobStatusParams struct {
+	JobID string `json:"job_id"`
+}
+
+// JobStatusResult is read from the spool file, never from live memory, so it
+// is answerable after the guardian has taken over or the agent restarted.
+type JobStatusResult struct {
+	JobID          string `json:"job_id"`
+	Alive          bool   `json:"alive"`
+	Phase          string `json:"phase"`
+	PID            int    `json:"pid"`
+	ExitCode       *int   `json:"exit_code,omitempty"`
+	Signal         int    `json:"signal,omitempty"`
+	LastLine       string `json:"last_line"`
+	AgeS           int64  `json:"age_s"`
+	StartedAtUTC   string `json:"started_at_utc"`
+	StartedAtLocal string `json:"started_at_local"`
+	TZ             string `json:"tz"`
+	EndedAtUTC     string `json:"ended_at_utc,omitempty"`
+	AgentLost      bool   `json:"agent_lost"`
+	OnDeathRan    bool   `json:"on_death_ran"`
+	OnDeathExit   *int   `json:"on_death_exit,omitempty"`
+	OnDeathAtUTC  string `json:"on_death_at_utc,omitempty"`
+	LogBytes      int64  `json:"log_bytes"`
+}
+
+// JobLogParams asks for the incremental tail of a job's output file.
+type JobLogParams struct {
+	JobID       string `json:"job_id"`
+	SinceOffset int64  `json:"since_offset,omitempty"`
+}
+
+// JobLogResult carries the bytes after SinceOffset plus the next offset.
+type JobLogResult struct {
+	JobID      string `json:"job_id"`
+	Offset     int64  `json:"offset"`
+	NextOffset int64  `json:"next_offset"`
+	Data       string `json:"data"`
+	Closed     bool   `json:"closed"`
 }
 
 type ExecResult struct {

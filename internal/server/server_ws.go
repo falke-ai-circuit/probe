@@ -136,6 +136,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	// Handle messages
 	go s.handleMessages(agentID, conn)
+	// P8-04: on reconnect, ask the agent for the spool state of jobs this
+	// server still holds open, so a guardian report resolves the record.
+	go s.reconcileAgentJobs(agentID)
 }
 
 
@@ -159,6 +162,10 @@ func (s *Server) handleMessages(agentID string, conn *websocket.Conn) {
 			s.registry.Unregister(agentID)
 			s.sessions.RemoveSession(agentID)
 			s.ClearTokenExpiry(agentID)
+			// P8-04: an agent dropped with a detached job open cannot be the
+			// executor of its cleanup. Arm the 120s recovery escalation; the
+			// guardian on the host is still the one that runs on_death.
+			s.agentJobsDisconnected(agentID)
 		}
 		log.Printf("[server] agent disconnected: %s", agentID)
 	}()

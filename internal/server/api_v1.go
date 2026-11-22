@@ -281,6 +281,10 @@ func (s *Server) registerV1Routes() {
 	// Agent endpoints — commands (all POST)
 	s.mux.HandleFunc("POST /api/v1/agents/{id}/exec",
 		s.v1WrapAgentHandler("exec", s.handleAgentExec))
+	// P8-04: detached job queries and the server's witness records.
+	s.mux.HandleFunc("POST /api/v1/agents/{id}/job-status", s.handleV1JobStatus())
+	s.mux.HandleFunc("POST /api/v1/agents/{id}/job-log", s.handleV1JobLog())
+	s.mux.HandleFunc("GET /api/v1/agents/{id}/jobs", s.handleV1AgentJobs())
 	s.mux.HandleFunc("POST /api/v1/agents/{id}/fs-list",
 		s.v1Forward("fs-list", protocol.TypeFSList, true))
 	s.mux.HandleFunc("POST /api/v1/agents/{id}/fs-read",

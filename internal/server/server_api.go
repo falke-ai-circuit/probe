@@ -220,6 +220,9 @@ func (s *Server) handleAgentExec(w http.ResponseWriter, r *http.Request, agentID
 	}
 
 	s.sessions.AddMemory(agentID, "last_exec", params.Command)
+	// P8-04: remember a detached launch as a witness record. Foreground exec
+	// responses carry no job_id and are ignored.
+	s.recordDetachedJob(agentID, resp)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }

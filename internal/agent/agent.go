@@ -152,6 +152,11 @@ type Config struct {
 	// ConfigPath is the path to the config file used to start this agent.
 	// Used by reconfigure to save updated config back to disk.
 	ConfigPath string
+	// StateDir is where durable agent state lives — for P8-04, detached job
+	// spools. Empty resolves to PROBE_STATE_DIR, then <ConfigPath dir>/state,
+	// then ./probe-state. It must be stable across restarts: job_status is
+	// answered from this directory after the agent has been replaced.
+	StateDir string
 	// E2EEnabled enables AES-GCM end-to-end encryption of protocol payloads.
 	// When true, all messages between agent and server are encrypted with
 	// a key derived from the token (SHA-256). Relays see only encrypted bytes.
@@ -573,6 +578,9 @@ var cmdTable = map[string]func(*Agent, protocol.Envelope) protocol.Envelope{
 	protocol.TypeModeControl: (*Agent).handleModeControl,
 	protocol.TypeForwardPolicy: (*Agent).handleForwardPolicy,
 	protocol.TypeReconfigure: (*Agent).handleReconfigure,
+	// P8-04: detached job queries, answered from the spool file.
+	protocol.TypeJobStatus: (*Agent).handleJobStatus,
+	protocol.TypeJobLog:    (*Agent).handleJobLog,
 }
 
 func (a *Agent) handleCommand(conn *websocket.Conn, env protocol.Envelope) {
@@ -640,6 +648,12 @@ func (a *Agent) handleExec(env protocol.Envelope) protocol.Envelope {
 	params, err := protocol.ParseCommand[protocol.ExecParams](env)
 	if err != nil {
 		return protocol.NewError(env.ID, protocol.ErrInvalidParams, err.Error())
+	}
+	// P8-04: a detached exec bypasses the per-call deadline entirely — that
+	// deadline is what killed the runner between `shutdown` and
+	// `no shutdown`. It returns a handle and the guardian owns completion.
+	if params.Detach {
+		return a.handleExecDetached(env, params)
 	}
 	if params.Timeout <= 0 {
 		params.Timeout = defaultTimeout

@@ -46,6 +46,9 @@ func main() {
 		runRelay(args)
 	case "supervisor":
 		runSupervisor(args)
+	case "guardian":
+		// Internal subcommand: detached-job cleanup executor (P8-04).
+		runGuardian(args)
 	case "--version", "-version", "version":
 		fmt.Printf("PROBE %s\n", appVersion)
 	case "--help", "-h", "help":
