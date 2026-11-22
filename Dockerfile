@@ -2,10 +2,15 @@
 # PROBE — Platform for Remote Operations & Bridge Environment
 # Multi-stage build: React frontend → Go binary (with embedded frontend) → minimal runtime.
 #
-# Deploy:
-#   docker compose up -d --build
-# Or standalone:
-#   docker build -t falke-probe . && docker run -d -p 7701:7701 falke-probe
+# This image is built by CI, not on the host: .github/workflows/docker.yml
+# pushes ghcr.io/falke-ai-circuit/probe:<sha|version> for linux/amd64.
+# Deploy pulls that image:
+#   docker compose pull && docker compose up -d
+# The host compose must reference the image tag, not `build:`.
+#
+# Everything baked into /src comes from this build context (i.e. the CI
+# checkout of one commit). No pre-built tree or committed binary is copied in:
+# see .dockerignore.
 
 # ── Stage 1: Frontend ──────────────────────────────────────────
 FROM node:22-slim AS frontend
@@ -17,6 +22,9 @@ RUN npm run build
 
 # ── Stage 2: Go binary ─────────────────────────────────────────
 FROM golang:1.23-bookworm AS builder
+# Provenance of the checkout this image was built from (set by CI).
+ARG GIT_SHA=unknown
+ARG VERSION=dev
 WORKDIR /build
 COPY go.mod go.sum ./
 RUN go mod download
@@ -27,6 +35,11 @@ RUN go build -trimpath -o /probe ./cmd/probe/
 
 # ── Stage 3: Runtime ───────────────────────────────────────────
 FROM debian:bookworm-slim
+ARG GIT_SHA=unknown
+ARG VERSION=dev
+LABEL org.opencontainers.image.source="https://github.com/falke-ai-circuit/probe" \
+      org.opencontainers.image.revision="$GIT_SHA" \
+      org.opencontainers.image.version="$VERSION"
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -35,8 +48,11 @@ COPY --from=builder /probe /app/probe
 # Builder toolchain: go + source + module cache so the agent builder can
 # cross-compile replica binaries (windows/linux/darwin/android) at runtime.
 COPY --from=builder /usr/local/go /usr/local/go
+# /src = the single CI checkout this image was built from (source only; the
+# runtime builder compiles agents from it). Provenance is stamped beside it.
 COPY --from=builder /build /src
 COPY --from=builder /go/pkg/mod /go/pkg/mod
+RUN printf 'commit=%s\nversion=%s\nbuilt=image\n' "$GIT_SHA" "$VERSION" > /src/BUILD_INFO
 ENV GOROOT=/usr/local/go GOPATH=/go GOMODCACHE=/go/pkg/mod PATH="/usr/local/go/bin:$PATH"
 RUN mkdir -p /data/runtime /data/logs /data/builds /data/ca
 VOLUME /data

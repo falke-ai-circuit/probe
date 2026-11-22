@@ -11,3 +11,14 @@ web/dist/
 probe-client-vegas.json
 probe-vegas-README.md
 .git/
+
+# Committed build artefacts in the repo root: excluded so the image's baked
+# /src is source only, never a hand-copied or pre-built binary tree.
+probe
+probe-server
+probe-server.old
+probe-client
+probe-client-linux
+hermes-remote-server-v*
+HermesRemote_linux_v*
+*.old
