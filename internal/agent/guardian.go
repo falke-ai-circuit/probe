@@ -48,18 +48,28 @@ func RunGuardian(jobDir string) int {
 	now := time.Now().UTC()
 	st.GuardianPID = os.Getpid()
 	st.GuardianVersion = 1
-	agentLost := st.AgentLost || !pidAlive(sp.AgentPID)
+	agentLost := st.AgentLost || !agentReachable(sp.AgentPID)
+
+	// F3: a second guardian must never rewrite a terminal record. The spool is
+	// the only truth after the job is gone, so re-read before any write and
+	// leave a closed record exactly as it stands.
+	if cur, rerr := readState(jobDir); rerr == nil && cur.Phase == jobPhaseClosed {
+		return 0
+	}
 
 	// Guardian restart with a published pid: the job is either still running
 	// or it died with its previous guardian. Reconcile before doing anything.
 	if st.PID > 0 && !pidAlive(st.PID) {
+		// F2: the previous guardian died with the job, so the exit status is
+		// unknown. Unknown is treated as failure (the comment always said so;
+		// the guard did not): cleanup must run.
 		code := -1
 		st.ExitCode = &code
 		st.Phase = jobPhaseClosed
 		st.EndedAtUTC = now.Format(time.RFC3339Nano)
 		st.LastLine = jobLastLine(jobDir)
 		st.AgentLost = agentLost
-		if agentLost || st.TimedOut {
+		if agentLost || st.TimedOut || st.ExitCode == nil || *st.ExitCode != 0 {
 			runOnDeathOnce(jobDir, st, logf)
 		}
 		_ = writeStateAtomic(filepath.Join(jobDir, "state.json"), st)
@@ -108,6 +118,21 @@ func RunGuardian(jobDir string) int {
 		_ = writeStateAtomic(filepath.Join(jobDir, "state.json"), st)
 	}
 
+	// F1: the agent may already be gone when this guardian starts — the
+	// spawn-then-die window the guardian exists to cover. A pre-existing
+	// agentLost never entered the poll loop's `if !agentLost && ...` branch,
+	// so the job ran forever with phase=running and cleanup never fired.
+	// Treat it exactly like a mid-run loss: mark, kill the group, and let the
+	// wait path finalize with cleanup.
+	if agentLost {
+		st.AgentLost = true
+		if st.AgentLostAtUTC == "" {
+			st.AgentLostAtUTC = time.Now().UTC().Format(time.RFC3339Nano)
+		}
+		_ = writeStateAtomic(filepath.Join(jobDir, "state.json"), st)
+		killJobGroup(st.PID)
+	}
+
 	startedAt := now
 	if t, err := time.Parse(time.RFC3339Nano, st.StartedAtUTC); err == nil {
 		startedAt = t
@@ -133,7 +158,7 @@ func RunGuardian(jobDir string) int {
 			}
 		}
 
-		if !agentLost && !pidAlive(sp.AgentPID) {
+		if !agentLost && !agentReachable(sp.AgentPID) {
 			// The agent is gone and the job is still open. Its per-call
 			// deadline died with it; the guardian is now the only executor
 			// left, so it stops the job and runs the cleanup.

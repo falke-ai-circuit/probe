@@ -98,6 +98,12 @@ func boundedFS[T any](d time.Duration, op, path string, fn func() (T, error)) (T
 	}
 }
 
+// fileDigestResult carries the verified size and digest of a file.
+type fileDigestResult struct {
+	Size int64
+	Sum  string
+}
+
 // fileDigest reads the file back from disk and returns its size and lowercase
 // hex SHA256. Verification always goes through here: the digest of what the
 // request claimed to send is not evidence that those bytes reached the disk.
@@ -766,12 +772,23 @@ func (a *Agent) handleFSWrite(env protocol.Envelope) protocol.Envelope {
 		return protocol.NewError(env.ID, protocol.ErrFSWriteEmpty,
 			fmt.Sprintf("fs-write %s: wrote 0 of %d bytes", params.Path, len(data)))
 	}
-	// Verify against the bytes on disk, never against the request.
-	size, sum, statErr := fileDigest(params.Path)
+	// F5: verification has its own bound. The write call returned first, so the
+	// whole-file read-back and the expectation comparisons below used to run
+	// with no deadline at all — a volume that stalls on read-back after
+	// accepting the write blocked the handler with no TIMEOUT, which is the
+	// exact condition the deadline exists for.
+	dig, statErr := boundedFS(fsDeadline(params, fsWriteDeadline), "fs-write-verify", params.Path, func() (fileDigestResult, error) {
+		size, sum, err := fileDigest(params.Path)
+		return fileDigestResult{Size: size, Sum: sum}, err
+	})
 	if statErr != nil {
+		if errors.Is(statErr, ErrFSDeadline) {
+			return protocol.NewError(env.ID, protocol.ErrTimeout, statErr.Error())
+		}
 		return protocol.NewError(env.ID, protocol.ErrInternal,
 			fmt.Sprintf("fs-write %s: post-write verification failed: %v", params.Path, statErr))
 	}
+	size, sum := dig.Size, dig.Sum
 	result.Size = size
 	result.Sha256 = sum
 	result.Verified = true

@@ -41,6 +41,10 @@ func pidAlive(pid int) bool {
 	return true
 }
 
+// agentReachable is the guardian's test for the AGENT pid. Windows has no
+// signal-0 equivalent; a handle we can open is the strongest available check.
+func agentReachable(pid int) bool { return pidAlive(pid) }
+
 // killJobGroup stops the job and its children.
 func killJobGroup(pid int) {
 	if pid <= 0 {

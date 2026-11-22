@@ -236,10 +236,20 @@ func (s *Server) v1Forward(action, msgType string, readBody bool) http.HandlerFu
 			return
 		}
 		// forwardToAgent returns a map with "error" key when the agent
-		// reports an error — surface that as a v1 error.
+		// reports an error — surface that as a v1 error. F4: the agent's
+		// typed code travels with it, so TIMEOUT is 504 TIMEOUT for every
+		// fs op instead of collapsing into 503 AGENT_ERROR.
 		if m, ok := resp.(map[string]interface{}); ok {
 			if errMsg, hasErr := m["error"]; hasErr {
-				writeError(w, http.StatusServiceUnavailable, "AGENT_ERROR", fmt.Sprintf("%v", errMsg))
+				code := "AGENT_ERROR"
+				if c, ok := m["code"].(string); ok && c != "" {
+					code = c
+				}
+				status := http.StatusServiceUnavailable
+				if code == protocol.ErrTimeout {
+					status = http.StatusGatewayTimeout
+				}
+				writeError(w, status, code, fmt.Sprintf("%v", errMsg))
 				return
 			}
 		}

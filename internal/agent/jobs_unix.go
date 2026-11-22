@@ -29,6 +29,17 @@ func pidAlive(pid int) bool {
 	return err == nil || err == syscall.EPERM
 }
 
+// agentReachable is the stricter test the guardian uses for the AGENT pid: a
+// process we cannot signal (EPERM) cannot be relied on to exist for our
+// purposes, so it is treated as lost. F1 requires "gone or cannot be
+// signalled" to take the same path as a mid-run death.
+func agentReachable(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	return syscall.Kill(pid, 0) == nil
+}
+
 // killJobGroup kills the job's process group.
 func killJobGroup(pid int) {
 	if pid <= 0 {
