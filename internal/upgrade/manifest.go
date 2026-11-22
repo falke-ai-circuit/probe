@@ -33,6 +33,14 @@ const (
 	// ChunkSize is the raw payload bytes per fs-write call (O1; unmeasured
 	// server body limit, chosen six times under the only frame-size datum).
 	ChunkSize = 262144
+
+	// DefaultChunkSize is the bounded carrier chunk used by P8-11. Measured
+	// on the v1.18.6 harness: 11,059,052 B in 8 calls of 1,500,000 B, best
+	// call 0.20 s, sha equal on both sides. A single 8 MB body is what
+	// crashed the server, so the bound is a hard default, not a suggestion.
+	DefaultChunkSize = 1500000
+	// MaxChunkSize caps a caller-supplied chunk size.
+	MaxChunkSize = 4000000
 	// PreflightTimeoutS / LaunchTimeoutS are the exec timeouts from P2-02 2.4.
 	PreflightTimeoutS = 60
 	LaunchTimeoutS    = 15
@@ -52,6 +60,10 @@ type Manifest struct {
 
 	// OldPID is the discovered agent PID (A4). Preflight refuses without it.
 	OldPID int `json:"old_pid,omitempty"`
+	// Version is the semver the artifact must self-report before the swap.
+	// It comes from the ARTIFACT (`--version`), never from the build label:
+	// SW-04B refuses to arm the swap when the two disagree.
+	Version string `json:"version,omitempty"`
 	// Name is the agent name the successor must register under.
 	Name string `json:"name,omitempty"`
 	// ConfigPath is the absolute --config path when the old process was a

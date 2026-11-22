@@ -177,6 +177,16 @@ Example config (probe-client.json):
 // main starts the PROBE client. The startup logic lives in runClient so
 // that future entry-point variants (e.g. service mode) can reuse it.
 func main() {
+	// P8-11: `--version` is an API for the updater, not a banner. It prints
+	// exactly the bare semver on one line and exits 0, so the version can be
+	// read from the artifact that was just written — before it is swapped in.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "--version", "-version", "version":
+			fmt.Println(version.Wire())
+			return
+		}
+	}
 	// P8-04: detached-job guardian. Every client build must answer this
 	// subcommand — the field binary (probe-client) is spawned by itself as
 	// `guardian --job-dir <dir>` and is the only executor of on_death.

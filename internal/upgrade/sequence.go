@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -22,6 +23,14 @@ type Runner struct {
 	T Transport
 	// Logf is optional instrumentation; it is never used for control flow.
 	Logf func(format string, args ...any)
+	// ChunkSize bounds one fs-write body. Zero means DefaultChunkSize; the
+	// value is clamped to MaxChunkSize, so a caller cannot reintroduce the
+	// single 8 MB body that crashed the server.
+	ChunkSize int
+	// NoResume disables resuming at the last chunk boundary after a dropped
+	// call. Resume is the default: a restart from zero re-uploads the whole
+	// artifact for one failed chunk.
+	NoResume bool
 }
 
 // NewRunner returns a Runner over t.
@@ -165,17 +174,22 @@ func (r *Runner) StagePayload(ctx context.Context, req StageRequest) (StageResul
 	staged := canonical + StagedSuffix
 
 	// SW-02: sequential chunked write. Ordering is part of correctness - the
-	// offset>0 branch seeks an existing file.
-	chunks, err := r.writePayload(ctx, staged, req.Payload)
+	// offset>0 branch seeks an existing file. A dropped call resumes at the
+	// last whole-chunk boundary; a proven-bad chunk is a refusal.
+	chunks, err := r.writePayload(ctx, staged, req.Payload, true)
 	if err != nil {
 		if IsPermissionDenied(err) {
 			return out, stepErr("SW-02", CodeSandboxRefused, err)
 		}
-		// No delete primitive exists: a replay rewrites from offset 0, which
-		// truncates. One replay only (F3).
+		// One replay from offset 0: a dropped call is repaired by resuming,
+		// but a chunk whose read-back lied is only trusted after a full
+		// rewrite proves the carrier can carry it.
 		r.logf("SW-02: write failed (%v), replaying from offset 0", err)
-		chunks, err = r.writePayload(ctx, staged, req.Payload)
+		chunks, err = r.writePayload(ctx, staged, req.Payload, false)
 		if err != nil {
+			if errors.Is(err, ErrChunkDigestMismatch) {
+				return out, stepErr("SW-02", CodeDigestMismatch, err)
+			}
 			return out, stepErr("SW-02", CodeWriteFailed, err)
 		}
 	}
@@ -187,7 +201,7 @@ func (r *Runner) StagePayload(ctx context.Context, req StageRequest) (StageResul
 	}
 	if !strings.EqualFold(hash.SHA256, payloadDigest) {
 		r.logf("SW-03: digest mismatch (%s), replaying from offset 0", ShortDigest(hash.SHA256))
-		if _, rerr := r.writePayload(ctx, staged, req.Payload); rerr != nil {
+		if _, rerr := r.writePayload(ctx, staged, req.Payload, false); rerr != nil {
 			return out, stepErr("SW-03", CodeWriteFailed, rerr)
 		}
 		hash, err = r.T.FsHash(ctx, staged)
@@ -211,6 +225,19 @@ func (r *Runner) StagePayload(ctx context.Context, req StageRequest) (StageResul
 	if st.Size != int64(len(req.Payload)) {
 		return out, stepErr("SW-04", CodeSizeMismatch,
 			fmt.Errorf("expected %d bytes, stat reports %d", len(req.Payload), st.Size))
+	}
+
+	// SW-04B: the version comes from the artifact, never from the build label.
+	// The staged binary is already digest-proven and executable, so this read
+	// answers for exactly the bytes that would be swapped in. A mismatch stops
+	// the sequence before any script or manifest is armed.
+	if manifest.Version != "" {
+		// Only probed when the manifest states the expected version. Callers
+		// that predate the version field keep their exact primitive budget;
+		// a caller that pins a version gets the refusal.
+		if _, verr := r.VerifyArtifactVersion(ctx, staged, manifest.Version); verr != nil {
+			return out, verr
+		}
 	}
 
 	// SW-05: arm the commit script and the manifest beside the payload.
@@ -293,16 +320,33 @@ func (r *Runner) writeVerified(ctx context.Context, step, path string, data []by
 	return want, nil
 }
 
-func (r *Runner) writePayload(ctx context.Context, path string, payload []byte) (int, error) {
+func (r *Runner) writePayload(ctx context.Context, path string, payload []byte, resume bool) (int, error) {
+	cs := r.chunkSize()
+	offset := 0
+	if resume && !r.NoResume {
+		// Resume rule: the file's size, floored to a chunk boundary, is the
+		// last offset whose write was fully acknowledged. A fragment past
+		// the boundary is discarded by rewriting that chunk.
+		if st, err := r.T.FsStat(ctx, path); err == nil && st.Exists && !st.IsDir &&
+			st.Size > 0 && st.Size < int64(len(payload)) {
+			offset = int(st.Size/int64(cs)) * cs
+			if offset > 0 {
+				r.logf("SW-02: resuming at offset %d (%d bytes already on disk)", offset, st.Size)
+			}
+		}
+	}
 	chunks := 0
-	for offset := 0; offset < len(payload); offset += ChunkSize {
-		end := offset + ChunkSize
+	stalls := 0
+	for offset < len(payload) {
+		end := offset + cs
 		if end > len(payload) {
 			end = len(payload)
 		}
 		mode := "0644"
 		if offset == 0 {
-			mode = "create"
+			// The staged artifact must be runnable for the SW-04B
+			// self-reported version read; on Windows the mode is ignored.
+			mode = "0755"
 		}
 		res, err := r.T.FsWrite(ctx, WriteRequest{
 			Path:   path,
@@ -310,15 +354,60 @@ func (r *Runner) writePayload(ctx context.Context, path string, payload []byte) 
 			Offset: offset,
 			Mode:   mode,
 		})
-		if err != nil {
-			return chunks, err
+		if err != nil || res.Written != end-offset {
+			if err == nil {
+				err = fmt.Errorf("chunk at offset %d: wrote %d of %d bytes", offset, res.Written, end-offset)
+			}
+			// One resume attempt per stall: continue at the last whole-chunk
+			// boundary rather than restarting the artifact from zero.
+			stalls++
+			if r.NoResume || stalls > 2 {
+				return chunks, err
+			}
+			st, serr := r.T.FsStat(ctx, path)
+			if serr != nil || !st.Exists {
+				return chunks, err
+			}
+			next := int(st.Size/int64(cs)) * cs
+			if next > len(payload) {
+				next = len(payload)
+			}
+			r.logf("SW-02: write failed (%v), resuming at offset %d", err, next)
+			offset = next
+			continue
 		}
-		if res.Written != end-offset {
-			return chunks, fmt.Errorf("chunk at offset %d: wrote %d of %d bytes", offset, res.Written, end-offset)
+		stalls = 0
+		// Every chunk is verified by offset: read the range back and compare
+		// its digest with the bytes that were handed to the agent.
+		back, rerr := r.T.FsRead(ctx, ReadRequest{Path: path, Offset: offset, Limit: end - offset})
+		if rerr != nil {
+			return chunks, rerr
+		}
+		if !strings.EqualFold(SHA256Hex(back.Data), SHA256Hex(payload[offset:end])) {
+			return chunks, fmt.Errorf("%w: chunk at offset %d failed read-back verification (%d bytes)",
+				ErrChunkDigestMismatch, offset, len(back.Data))
 		}
 		chunks++
+		offset = end
 	}
 	return chunks, nil
+}
+
+// ErrChunkDigestMismatch marks a chunk whose read-back bytes do not match what
+// was sent. It is a refusal (the carrier lied), not a dropped call, so the
+// sequence must not quietly resume past it.
+var ErrChunkDigestMismatch = errors.New("chunk digest mismatch")
+
+// chunkSize resolves the bounded carrier chunk.
+func (r *Runner) chunkSize() int {
+	cs := r.ChunkSize
+	if cs <= 0 {
+		cs = DefaultChunkSize
+	}
+	if cs > MaxChunkSize {
+		cs = MaxChunkSize
+	}
+	return cs
 }
 
 // PreflightReport is the JSON line p2boot.ps1 -Preflight prints.

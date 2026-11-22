@@ -17,6 +17,10 @@ const (
 	CodePreflightRefused    = "PREFLIGHT_REFUSED"
 	CodeLaunchFailed        = "LAUNCH_FAILED"
 	CodeJournalUnreadable   = "JOURNAL_UNREADABLE"
+	// CodeVersionMismatch: the artifact's own --version does not match the
+	// manifest. The sequence refuses to swap (P8-11 gap 2).
+	CodeVersionMismatch = "VERSION_MISMATCH"
+	CodeRollbackFailed  = "ROLLBACK_FAILED"
 )
 
 // CanonicalSource records which input the canonical path came from.

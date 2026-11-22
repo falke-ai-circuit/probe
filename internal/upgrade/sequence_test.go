@@ -92,13 +92,27 @@ func (f *fakeTransport) FsStat(_ context.Context, path string) (StatResult, erro
 }
 
 func (f *fakeTransport) FsRead(_ context.Context, req ReadRequest) (ReadResult, error) {
-	if data, ok := f.reads[req.Path]; ok {
-		return ReadResult{Data: data, Size: int64(len(data))}, nil
+	data, ok := f.reads[req.Path]
+	if !ok {
+		data, ok = f.files[req.Path]
 	}
-	if data, ok := f.files[req.Path]; ok {
-		return ReadResult{Data: data, Size: int64(len(data))}, nil
+	if !ok {
+		return ReadResult{}, fmt.Errorf("fs-read: %s: not found", req.Path)
 	}
-	return ReadResult{}, fmt.Errorf("fs-read: %s: not found", req.Path)
+	// P8-11: honour offset/limit so per-chunk read-back verification is
+	// modelled the way the agent implements it (P8-05 fs-read window).
+	if req.Offset > 0 || req.Limit > 0 {
+		start := req.Offset
+		if start > len(data) {
+			start = len(data)
+		}
+		end := len(data)
+		if req.Limit > 0 && start+req.Limit < end {
+			end = start + req.Limit
+		}
+		data = data[start:end]
+	}
+	return ReadResult{Data: data, Size: int64(len(data))}, nil
 }
 
 func stageRequest(payload []byte) StageRequest {
@@ -119,6 +133,9 @@ func TestStagePayloadChunksAndArms(t *testing.T) {
 	payload := bytes.Repeat([]byte{0xA5}, 2*ChunkSize+10)
 	fake := newFake()
 	runner := NewRunner(fake)
+	// Chunking semantics are pinned at the legacy 256 KiB size; the carrier's
+	// 1.5 MB default is exercised in TestCarrierDefaultsToBoundedChunk.
+	runner.ChunkSize = ChunkSize
 
 	res, err := runner.StagePayload(context.Background(), stageRequest(payload))
 	if err != nil {
@@ -140,8 +157,8 @@ func TestStagePayloadChunksAndArms(t *testing.T) {
 			t.Errorf("write %d path = %q", i, w.Path)
 		}
 	}
-	if fake.writes[0].Mode != "create" {
-		t.Errorf("first chunk mode = %q, want create", fake.writes[0].Mode)
+	if fake.writes[0].Mode != "0755" {
+		t.Errorf("first chunk mode = %q, want 0755 (artifact must be runnable for --version)", fake.writes[0].Mode)
 	}
 	if fake.writes[1].Mode != "0644" {
 		t.Errorf("subsequent chunk mode = %q, want 0644", fake.writes[1].Mode)
@@ -206,6 +223,8 @@ func TestStagePayloadPermissionDeniedOnWrite(t *testing.T) {
 func TestStagePayloadReplaysCorruptChunk(t *testing.T) {
 	payload := bytes.Repeat([]byte{0x5A}, ChunkSize+100)
 	fake := newFake()
+	runner := NewRunner(fake)
+	runner.ChunkSize = ChunkSize
 	// First chunk lands with a flipped byte: {written=N} looks healthy (F2).
 	fake.writeHook = func(call int, req WriteRequest) ([]byte, error) {
 		if call == 1 {
@@ -215,22 +234,23 @@ func TestStagePayloadReplaysCorruptChunk(t *testing.T) {
 		}
 		return nil, nil
 	}
-	res, err := NewRunner(fake).StagePayload(context.Background(), stageRequest(payload))
+	res, err := runner.StagePayload(context.Background(), stageRequest(payload))
 	if err != nil {
 		t.Fatalf("stage should recover by replaying from offset 0: %v", err)
 	}
 	if !bytes.Equal(fake.files[res.StagedPath], payload) {
 		t.Fatal("replay did not repair the staged file")
 	}
-	// 2 chunks, then a full replay of 2 chunks, then SW-05's two arming writes.
+	// P8-11: the corrupted chunk is caught by its own read-back, so only one
+	// write lands before the replay: 1 bad chunk, then a 2-chunk rewrite.
 	stagedWrites := 0
 	for _, w := range fake.writes {
 		if w.Path == res.StagedPath {
 			stagedWrites++
 		}
 	}
-	if stagedWrites != 4 {
-		t.Fatalf("staged writes = %d, want 4 (2 chunks + replay)", stagedWrites)
+	if stagedWrites != 3 {
+		t.Fatalf("staged writes = %d, want 3 (1 rejected chunk + 2-chunk replay)", stagedWrites)
 	}
 	var replay []WriteRequest
 	for _, w := range fake.writes {
@@ -238,8 +258,8 @@ func TestStagePayloadReplaysCorruptChunk(t *testing.T) {
 			replay = append(replay, w)
 		}
 	}
-	if replay[2].Offset != 0 || replay[2].Mode != "create" {
-		t.Fatalf("replay must restart at offset 0 with create: %+v", replay[2])
+	if replay[1].Offset != 0 || replay[1].Mode != "0755" {
+		t.Fatalf("replay must restart at offset 0 with an executable mode: %+v", replay[1])
 	}
 }
 
@@ -255,7 +275,9 @@ func TestStagePayloadSecondDigestMismatchAborts(t *testing.T) {
 	if !errors.As(err, &se) || se.Code != CodeDigestMismatch {
 		t.Fatalf("expected DIGEST_MISMATCH, got %v", err)
 	}
-	if se.Step != "SW-03" {
+	// P8-11: the refusal moved earlier — the chunk that lied is caught by its
+	// own read-back, so the step is SW-02 rather than the whole-file SW-03.
+	if se.Step != "SW-02" {
 		t.Fatalf("step = %s", se.Step)
 	}
 }

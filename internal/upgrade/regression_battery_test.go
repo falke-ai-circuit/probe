@@ -126,6 +126,7 @@ func callName(method string) string {
 type recordingTransport struct {
 	*fakeTransport
 	order []string
+	reads []ReadRequest
 }
 
 func (r *recordingTransport) Exec(ctx context.Context, req ExecRequest) (ExecResult, error) {
@@ -150,6 +151,7 @@ func (r *recordingTransport) FsStat(ctx context.Context, path string) (StatResul
 
 func (r *recordingTransport) FsRead(ctx context.Context, req ReadRequest) (ReadResult, error) {
 	r.order = append(r.order, "fs-read")
+	r.reads = append(r.reads, req)
 	return r.fakeTransport.FsRead(ctx, req)
 }
 
@@ -211,6 +213,9 @@ func TestBootstrapOldProtocolSequences(t *testing.T) {
 
 	tr := &recordingTransport{fakeTransport: fake}
 	runner := NewRunner(tr)
+	// Chunk boundaries are pinned at the legacy size so the census sees the
+	// multi-chunk path; the carrier default is covered separately.
+	runner.ChunkSize = ChunkSize
 	ctx := context.Background()
 
 	// A4 discovery is the prerequisite SW-00 consumes.
@@ -279,9 +284,13 @@ func TestBootstrapOldProtocolSequences(t *testing.T) {
 			t.Errorf("SW-00..SW-08 never used %q; the sequence is not exercising the real path", want)
 		}
 	}
-	// Before the boundary nothing reads files: fs-read is a post-swap primitive.
-	if used["fs-read"] {
-		t.Errorf("fs-read was used before the boundary: %v", tr.order)
+	// Before the boundary nothing reads whole files: fs-read is a post-swap
+	// primitive. P8-11 allows exactly one pre-boundary use — the bounded
+	// window that proves each chunk landed at its offset (Limit > 0).
+	for _, rr := range tr.reads {
+		if rr.Limit <= 0 {
+			t.Errorf("pre-boundary fs-read of a whole file: %+v", rr)
+		}
 	}
 
 	// The only commands allowed to run are the three pinned script invocations.
