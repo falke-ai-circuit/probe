@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -39,6 +40,23 @@ func readFileRange(r io.ReaderAt, size int64, offset, limit int) ([]byte, error)
 		return nil, err
 	}
 	return buf, nil
+}
+
+// fsReadResult assembles the read result for a window: the digest covers the
+// bytes returned, totalSize is the file's size on disk, and truncated says
+// whether the window ends before the end of the file. Every platform funnels
+// through here so a partial read can never look like a complete one.
+func fsReadResult(data []byte, totalSize int64, offset int) protocol.FSReadResult {
+	sum := sha256.Sum256(data)
+	return protocol.FSReadResult{
+		Data:      base64Encode(data),
+		Size:      int64(len(data)),
+		TotalSize: totalSize,
+		Offset:    offset,
+		Truncated: int64(offset)+int64(len(data)) < totalSize,
+		Sha256:    fmt.Sprintf("%x", sum),
+		Encoding:  "base64",
+	}
 }
 
 // Platform defines platform-specific operations.
@@ -229,12 +247,10 @@ func (p *genericPlatform) ReadFile(path string, offset int, limit int) (protocol
 	if err != nil {
 		return protocol.FSReadResult{}, err
 	}
-	size := int64(len(data))
-	return protocol.FSReadResult{
-		Data:     base64Encode(data),
-		Size:     size,
-		Encoding: "base64",
-	}, nil
+	if offset < 0 {
+		offset = 0
+	}
+	return fsReadResult(data, info.Size(), offset), nil
 }
 
 func (p *genericPlatform) WriteFile(path string, data []byte, mode string) (protocol.FSWriteResult, error) {

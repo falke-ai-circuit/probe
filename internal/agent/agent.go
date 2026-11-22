@@ -38,10 +38,33 @@ const (
 // These are vars, not consts, so tests can shorten them; they are read once per
 // call and never mutated at runtime.
 var (
-	fsListDeadline = 30 * time.Second
-	fsReadDeadline = 30 * time.Second
-	fsHashDeadline = 30 * time.Second
+	fsListDeadline  = 30 * time.Second
+	fsReadDeadline  = 30 * time.Second
+	fsHashDeadline  = 30 * time.Second
+	fsWriteDeadline = 30 * time.Second
+	fsStatDeadline  = 30 * time.Second
+	fsMetaDeadline  = 30 * time.Second
 )
+
+// P8-05: per-request deadline bounds. deadline_ms is capped so a caller cannot
+// ask for an unbounded fs operation; no fs-* handler is left outside boundedFS.
+const (
+	fsDefaultDeadlineMs = 30000
+	fsMaxDeadlineMs     = 120000
+)
+
+// fsDeadline resolves the deadline for one call: deadline_ms when supplied,
+// capped at 120 s, otherwise the op's default.
+func fsDeadline(params protocol.FSParams, def time.Duration) time.Duration {
+	d := def
+	if params.DeadlineMs > 0 {
+		d = time.Duration(params.DeadlineMs) * time.Millisecond
+	}
+	if d > fsMaxDeadlineMs*time.Millisecond {
+		d = fsMaxDeadlineMs * time.Millisecond
+	}
+	return d
+}
 
 // ErrFSDeadline marks an fs-* call that did not return inside its deadline.
 // The underlying syscall cannot be cancelled: the goroutine stays parked on the
@@ -49,13 +72,16 @@ var (
 var ErrFSDeadline = errors.New("filesystem operation exceeded its deadline")
 
 // boundedFS runs fn under a deadline. It is the only place the fs-* handlers
-// wait for the disk, so the bound cannot be forgotten on a new handler.
-func boundedFS[T any](d time.Duration, op string, fn func() (T, error)) (T, error) {
+// wait for the disk, so the bound cannot be forgotten on a new handler. The
+// timeout error names the operation, the path and the elapsed time, so the
+// caller learns what stalled without a second round trip.
+func boundedFS[T any](d time.Duration, op, path string, fn func() (T, error)) (T, error) {
 	type outcome struct {
 		v   T
 		err error
 	}
 	ch := make(chan outcome, 1)
+	start := time.Now()
 	go func() {
 		v, err := fn()
 		ch <- outcome{v: v, err: err}
@@ -67,8 +93,29 @@ func boundedFS[T any](d time.Duration, op string, fn func() (T, error)) (T, erro
 		return o.v, o.err
 	case <-timer.C:
 		var zero T
-		return zero, fmt.Errorf("%s: %w after %s", op, ErrFSDeadline, d)
+		elapsed := time.Since(start).Milliseconds()
+		return zero, fmt.Errorf("%s %s: %w (elapsed %d ms, deadline %d ms)", op, path, ErrFSDeadline, elapsed, d.Milliseconds())
 	}
+}
+
+// fileDigest reads the file back from disk and returns its size and lowercase
+// hex SHA256. Verification always goes through here: the digest of what the
+// request claimed to send is not evidence that those bytes reached the disk.
+func fileDigest(path string) (int64, string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, "", err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return 0, "", err
+	}
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return 0, "", err
+	}
+	return info.Size(), fmt.Sprintf("%x", h.Sum(nil)), nil
 }
 
 // Config holds agent configuration.
@@ -622,7 +669,7 @@ func (a *Agent) handleFSList(env protocol.Envelope) protocol.Envelope {
 	}
 	// A3: a directory on an offline share never returns from ReadDir. The
 	// deadline turns that into a typed TIMEOUT for the caller.
-	entries, err := boundedFS(fsListDeadline, "fs-list", func() ([]protocol.FSEntry, error) {
+	entries, err := boundedFS(fsDeadline(params, fsListDeadline), "fs-list", params.Path, func() ([]protocol.FSEntry, error) {
 		return a.plat.ListDir(params.Path)
 	})
 	if err != nil {
@@ -631,7 +678,10 @@ func (a *Agent) handleFSList(env protocol.Envelope) protocol.Envelope {
 		}
 		return protocol.NewError(env.ID, protocol.ErrInternal, err.Error())
 	}
-	return protocol.NewResult(env.ID, protocol.TypeFSListResult, protocol.FSListResult{Entries: entries})
+	return protocol.NewResult(env.ID, protocol.TypeFSListResult, protocol.FSListResult{
+		Entries: entries,
+		Count:   len(entries),
+	})
 }
 
 func (a *Agent) handleFSStat(env protocol.Envelope) protocol.Envelope {
@@ -639,8 +689,13 @@ func (a *Agent) handleFSStat(env protocol.Envelope) protocol.Envelope {
 	if err != nil {
 		return protocol.NewError(env.ID, protocol.ErrInvalidParams, err.Error())
 	}
-	result, err := a.plat.FileStat(params.Path)
+	result, err := boundedFS(fsDeadline(params, fsStatDeadline), "fs-stat", params.Path, func() (protocol.FSStatResult, error) {
+		return a.plat.FileStat(params.Path)
+	})
 	if err != nil {
+		if errors.Is(err, ErrFSDeadline) {
+			return protocol.NewError(env.ID, protocol.ErrTimeout, err.Error())
+		}
 		return protocol.NewError(env.ID, protocol.ErrInternal, err.Error())
 	}
 	return protocol.NewResult(env.ID, protocol.TypeFSStatResult, result)
@@ -651,7 +706,7 @@ func (a *Agent) handleFSRead(env protocol.Envelope) protocol.Envelope {
 	if err != nil {
 		return protocol.NewError(env.ID, protocol.ErrInvalidParams, err.Error())
 	}
-	result, err := boundedFS(fsReadDeadline, "fs-read", func() (protocol.FSReadResult, error) {
+	result, err := boundedFS(fsDeadline(params, fsReadDeadline), "fs-read", params.Path, func() (protocol.FSReadResult, error) {
 		return a.plat.ReadFile(params.Path, params.Offset, params.Limit)
 	})
 	if err != nil {
@@ -672,11 +727,56 @@ func (a *Agent) handleFSWrite(env protocol.Envelope) protocol.Envelope {
 	if err != nil {
 		return protocol.NewError(env.ID, protocol.ErrInvalidParams, "invalid base64 data")
 	}
-	// Resumable chunked write:
-	// - offset=0, mode="create": truncate/create file, write from beginning (first chunk)
-	// - offset>0: open existing file (no truncate), seek to offset, write (subsequent chunk)
-	// - offset=0, mode!="create": overwrite from beginning without truncate (retransmit first chunk)
-	var result protocol.FSWriteResult
+	// P8-05: a 0-byte write is never an "ok". Creating an empty file is still
+	// possible, but only as an explicit request: expected_size=0.
+	if len(data) == 0 {
+		if params.ExpectedSize == nil {
+			return protocol.NewError(env.ID, protocol.ErrFSWriteEmptyData,
+				fmt.Sprintf("fs-write %s: refusing 0-byte write (no expected_size supplied)", params.Path))
+		}
+		if *params.ExpectedSize != 0 {
+			return protocol.NewError(env.ID, protocol.ErrFSWriteSizeMismatch,
+				fmt.Sprintf("fs-write %s: empty data contradicts expected_size=%d", params.Path, *params.ExpectedSize))
+		}
+	}
+	result, err := boundedFS(fsDeadline(params, fsWriteDeadline), "fs-write", params.Path, func() (protocol.FSWriteResult, error) {
+		return a.writeFileChunk(params, data)
+	})
+	if err != nil {
+		if errors.Is(err, ErrFSDeadline) {
+			return protocol.NewError(env.ID, protocol.ErrTimeout, err.Error())
+		}
+		return protocol.NewError(env.ID, protocol.ErrInternal, err.Error())
+	}
+	if len(data) > 0 && result.Written == 0 {
+		return protocol.NewError(env.ID, protocol.ErrFSWriteEmpty,
+			fmt.Sprintf("fs-write %s: wrote 0 of %d bytes", params.Path, len(data)))
+	}
+	// Verify against the bytes on disk, never against the request.
+	size, sum, statErr := fileDigest(params.Path)
+	if statErr != nil {
+		return protocol.NewError(env.ID, protocol.ErrInternal,
+			fmt.Sprintf("fs-write %s: post-write verification failed: %v", params.Path, statErr))
+	}
+	result.Size = size
+	result.Sha256 = sum
+	result.Verified = true
+	if params.ExpectedSize != nil && size != *params.ExpectedSize {
+		return protocol.NewError(env.ID, protocol.ErrFSWriteSizeMismatch,
+			fmt.Sprintf("fs-write %s: expected %d bytes, %d on disk", params.Path, *params.ExpectedSize, size))
+	}
+	if params.ExpectedSHA256 != "" && !strings.EqualFold(params.ExpectedSHA256, sum) {
+		return protocol.NewError(env.ID, protocol.ErrFSWriteDigestMismatch,
+			fmt.Sprintf("fs-write %s: expected sha256 %s, %s on disk", params.Path, params.ExpectedSHA256, sum))
+	}
+	return protocol.NewResult(env.ID, protocol.TypeFileSaveResult, result)
+}
+
+// writeFileChunk performs the actual write. Resumable chunked write:
+// - offset=0, mode="create": truncate/create file, write from beginning (first chunk)
+// - offset>0: open existing file (no truncate), seek to offset, write (subsequent chunk)
+// - offset=0, mode!="create": overwrite from beginning without truncate (retransmit first chunk)
+func (a *Agent) writeFileChunk(params protocol.FSParams, data []byte) (protocol.FSWriteResult, error) {
 	if params.Offset > 0 || (params.Offset == 0 && params.Mode != "" && params.Mode != "create") {
 		// Subsequent chunk: open existing file without truncating
 		f, err := os.OpenFile(params.Path, os.O_WRONLY, 0644)
@@ -684,27 +784,20 @@ func (a *Agent) handleFSWrite(env protocol.Envelope) protocol.Envelope {
 			// File doesn't exist yet — create it
 			f, err = os.OpenFile(params.Path, os.O_WRONLY|os.O_CREATE, 0644)
 			if err != nil {
-				return protocol.NewError(env.ID, protocol.ErrInternal, err.Error())
+				return protocol.FSWriteResult{}, err
 			}
 		}
 		defer f.Close()
-		_, err = f.Seek(int64(params.Offset), 0)
-		if err != nil {
-			return protocol.NewError(env.ID, protocol.ErrInternal, err.Error())
+		if _, err = f.Seek(int64(params.Offset), 0); err != nil {
+			return protocol.FSWriteResult{}, err
 		}
-		_, err = f.Write(data)
-		if err != nil {
-			return protocol.NewError(env.ID, protocol.ErrInternal, err.Error())
+		if _, err = f.Write(data); err != nil {
+			return protocol.FSWriteResult{}, err
 		}
-		result = protocol.FSWriteResult{Path: params.Path, Written: len(data)}
-	} else {
-		// First chunk (offset=0, no mode or mode="create"): create/truncate and write
-		result, err = a.plat.WriteFile(params.Path, data, params.Mode)
-		if err != nil {
-			return protocol.NewError(env.ID, protocol.ErrInternal, err.Error())
-		}
+		return protocol.FSWriteResult{Path: params.Path, Written: len(data)}, nil
 	}
-	return protocol.NewResult(env.ID, protocol.TypeFileSaveResult, result)
+	// First chunk (offset=0, no mode or mode="create"): create/truncate and write
+	return a.plat.WriteFile(params.Path, data, params.Mode)
 }
 
 func (a *Agent) handleFSDelete(env protocol.Envelope) protocol.Envelope {
@@ -712,8 +805,13 @@ func (a *Agent) handleFSDelete(env protocol.Envelope) protocol.Envelope {
 	if err != nil {
 		return protocol.NewError(env.ID, protocol.ErrInvalidParams, err.Error())
 	}
-	result, err := a.plat.DeleteFile(params.Path)
+	result, err := boundedFS(fsDeadline(params, fsMetaDeadline), "fs-delete", params.Path, func() (protocol.FSDeleteResult, error) {
+		return a.plat.DeleteFile(params.Path)
+	})
 	if err != nil {
+		if errors.Is(err, ErrFSDeadline) {
+			return protocol.NewError(env.ID, protocol.ErrTimeout, err.Error())
+		}
 		return protocol.NewError(env.ID, protocol.ErrInternal, err.Error())
 	}
 	return protocol.NewResult(env.ID, protocol.TypeFileRemoveResult, result)
@@ -724,8 +822,13 @@ func (a *Agent) handleFSMove(env protocol.Envelope) protocol.Envelope {
 	if err != nil {
 		return protocol.NewError(env.ID, protocol.ErrInvalidParams, err.Error())
 	}
-	result, err := a.plat.MoveFile(params.From, params.To)
+	result, err := boundedFS(fsDeadline(params, fsMetaDeadline), "fs-move", params.From+" -> "+params.To, func() (protocol.FSMoveResult, error) {
+		return a.plat.MoveFile(params.From, params.To)
+	})
 	if err != nil {
+		if errors.Is(err, ErrFSDeadline) {
+			return protocol.NewError(env.ID, protocol.ErrTimeout, err.Error())
+		}
 		return protocol.NewError(env.ID, protocol.ErrInternal, err.Error())
 	}
 	return protocol.NewResult(env.ID, protocol.TypeFSMoveResult, result)
@@ -736,8 +839,13 @@ func (a *Agent) handleFSMkdir(env protocol.Envelope) protocol.Envelope {
 	if err != nil {
 		return protocol.NewError(env.ID, protocol.ErrInvalidParams, err.Error())
 	}
-	result, err := a.plat.Mkdir(params.Path)
+	result, err := boundedFS(fsDeadline(params, fsMetaDeadline), "fs-mkdir", params.Path, func() (protocol.FSMkdirResult, error) {
+		return a.plat.Mkdir(params.Path)
+	})
 	if err != nil {
+		if errors.Is(err, ErrFSDeadline) {
+			return protocol.NewError(env.ID, protocol.ErrTimeout, err.Error())
+		}
 		return protocol.NewError(env.ID, protocol.ErrInternal, err.Error())
 	}
 	return protocol.NewResult(env.ID, protocol.TypeFSMkdirResult, result)
@@ -754,7 +862,7 @@ func (a *Agent) handleFSHash(env protocol.Envelope) protocol.Envelope {
 	// fs-list. The handle is opened *and closed* inside the bounded call: a
 	// deadline that returned while another goroutine still reads would close
 	// the file under it.
-	result, err := boundedFS(fsHashDeadline, "fs-hash", func() (protocol.FSHashResult, error) {
+	result, err := boundedFS(fsDeadline(params, fsHashDeadline), "fs-hash", params.Path, func() (protocol.FSHashResult, error) {
 		f, err := os.Open(params.Path)
 		if err != nil {
 			return protocol.FSHashResult{}, err

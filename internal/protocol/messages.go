@@ -172,6 +172,11 @@ const (
 	ErrInvalidParams     = "INVALID_PARAMS"
 	ErrPlatformNotSupported = "PLATFORM_NOT_SUPPORTED"
 	ErrInternal          = "INTERNAL_ERROR"
+	// P8-05: fs-write refusals. A zero-byte or short write is never an "ok".
+	ErrFSWriteEmptyData      = "FS_WRITE_EMPTY_DATA"
+	ErrFSWriteEmpty          = "FS_WRITE_EMPTY"
+	ErrFSWriteSizeMismatch   = "FS_WRITE_SIZE_MISMATCH"
+	ErrFSWriteDigestMismatch = "FS_WRITE_DIGEST_MISMATCH"
 )
 
 // Envelope is the top-level message wrapper.
@@ -225,6 +230,15 @@ type FSParams struct {
 	Mode   string `json:"mode,omitempty"`   // octal string for writes
 	From   string `json:"from,omitempty"`   // for moves
 	To     string `json:"to,omitempty"`     // for moves
+
+	// P8-05 integrity contract — all optional, additive; callers that do not
+	// set them see the same behaviour they saw before.
+	// ExpectedSize is a pointer so "not supplied" is distinguishable from an
+	// explicit expected_size=0 (creating an empty file on purpose).
+	ExpectedSize   *int64 `json:"expected_size,omitempty"`
+	ExpectedSHA256 string `json:"expected_sha256,omitempty"`
+	// DeadlineMs bounds the fs-* call on the agent (default 30000, cap 120000).
+	DeadlineMs int `json:"deadline_ms,omitempty"`
 }
 
 type FSEntry struct {
@@ -237,6 +251,9 @@ type FSEntry struct {
 
 type FSListResult struct {
 	Entries []FSEntry `json:"entries"`
+	// Count is len(Entries): a caller must not have to trust the array it
+	// received as proof the listing was complete.
+	Count int `json:"count"`
 }
 
 type FSStatResult struct {
@@ -247,15 +264,27 @@ type FSStatResult struct {
 	Exists  bool   `json:"exists"`
 }
 
+// FSReadResult carries the integrity of the window that was actually returned.
+// Size is the returned window length; TotalSize is the file's size on disk, so
+// a caller can tell a full read from a truncated one without guessing.
 type FSReadResult struct {
-	Data     string `json:"data"` // base64
-	Size     int64  `json:"size"`
-	Encoding string `json:"encoding"`
+	Data      string `json:"data"` // base64
+	Size      int64  `json:"size"`
+	TotalSize int64  `json:"total_size"`
+	Offset    int    `json:"offset"`
+	Truncated bool   `json:"truncated"`
+	Sha256    string `json:"sha256"` // lowercase hex of the returned window
+	Encoding  string `json:"encoding"`
 }
 
+// FSWriteResult carries the post-write proof: size and digest are read back
+// from disk after the write, never copied from the request.
 type FSWriteResult struct {
-	Written int    `json:"written"`
-	Path    string `json:"path"`
+	Written  int    `json:"written"`
+	Path     string `json:"path"`
+	Size     int64  `json:"size"`
+	Sha256   string `json:"sha256"`
+	Verified bool   `json:"verified"`
 }
 
 type FSDeleteResult struct {

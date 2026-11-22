@@ -1,6 +1,8 @@
 package testutil
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -130,12 +132,21 @@ func (m *MockPlatform) ReadFile(path string, offset int, limit int) (protocol.FS
 	if limit > 0 && limit < len(data) {
 		data = data[:limit]
 	}
-	// Use base64 encoding
-	encoded := base64Encode(data)
+	// P8-05: the window carries total_size/truncated/digest so a caller can
+	// tell a partial read from a complete one.
+	total := int64(len(content))
+	if offset < 0 {
+		offset = 0
+	}
+	sum := sha256.Sum256(data)
 	return protocol.FSReadResult{
-		Data:     encoded,
-		Size:     int64(len(data)),
-		Encoding: "base64",
+		Data:      base64.StdEncoding.EncodeToString(data),
+		Size:      int64(len(data)),
+		TotalSize: total,
+		Offset:    offset,
+		Truncated: int64(offset)+int64(len(data)) < total,
+		Sha256:    fmt.Sprintf("%x", sum),
+		Encoding:  "base64",
 	}, nil
 }
 

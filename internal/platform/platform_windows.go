@@ -185,8 +185,10 @@ func (p *windowsPlatform) ReadFile(path string, offset int, limit int) (protocol
 	if err != nil {
 		return protocol.FSReadResult{}, err
 	}
-	size := int64(len(raw))
-	return protocol.FSReadResult{Data: base64Encode(raw), Size: size, Encoding: "base64"}, nil
+	if offset < 0 {
+		offset = 0
+	}
+	return fsReadResult(raw, info.Size(), offset), nil
 }
 
 func (p *windowsPlatform) WriteFile(path string, data []byte, mode string) (protocol.FSWriteResult, error) {

@@ -100,7 +100,7 @@ func TestFSReadReturnsTypedTimeout(t *testing.T) {
 
 // boundedFS wraps the sentinel, so a caller can branch on the cause.
 func TestBoundedFSErrorIsMatchable(t *testing.T) {
-	_, err := boundedFS(10*time.Millisecond, "fs-read", func() (int, error) {
+	_, err := boundedFS(10*time.Millisecond, "fs-read", "/tmp/x", func() (int, error) {
 		time.Sleep(200 * time.Millisecond)
 		return 1, nil
 	})

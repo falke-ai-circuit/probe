@@ -287,11 +287,36 @@ func (s *Server) handleAgentFSWrite(w http.ResponseWriter, r *http.Request, agen
 		http.Error(w, lastErr.Error(), http.StatusServiceUnavailable)
 		return
 	}
+	// P8-05: an agent refusal is a refusal, not a 200 with a message inside.
+	// The typed code is preserved so the caller can branch on it.
+	if m, ok := resp.(map[string]interface{}); ok {
+		if errMsg, hasErr := m["error"]; hasErr {
+			code, _ := m["code"].(string)
+			status := http.StatusUnprocessableEntity
+			switch code {
+			case protocol.ErrFSWriteEmptyData, protocol.ErrFSWriteEmpty:
+				status = http.StatusBadRequest
+			case protocol.ErrTimeout:
+				status = http.StatusGatewayTimeout
+			case "":
+				code = protocol.ErrInternal
+			}
+			writeTypedError(w, status, code, fmt.Sprintf("%v", errMsg))
+			return
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
 
-// handleAgentFSStat returns file stat (size, mode, modtime, is_dir, exists) from the remote agent.
+// writeTypedError writes a body carrying both the human message and the typed
+// agent error code, so reformatV1 can keep the code on the v1 surface.
+func writeTypedError(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{"code": code, "message": message})
+}
+
 // POST /api/agent/{id}/fs-stat  body: {"path":"C:\	emp\\file.exe"}
 func (s *Server) handleAgentFSStat(w http.ResponseWriter, r *http.Request, agentID string) {
 	body, err := io.ReadAll(r.Body)
@@ -525,8 +550,12 @@ func (s *Server) forwardToAgentWithTimeout(agentID string, msgType string, param
 	case resp := <-respCh:
 		if resp.Error != nil {
 			s.auditLog(agentID, msgType, params, "success", "", start, false, operatorID)
+			// P8-05: the typed code travels with the message so the HTTP
+			// layer can refuse with FS_WRITE_EMPTY_DATA instead of a generic
+			// 5xx. Callers that only read "error" are unaffected.
 			return map[string]interface{}{
 				"error": resp.Error.Message,
+				"code":  resp.Error.Code,
 			}, nil
 		}
 		var result interface{}

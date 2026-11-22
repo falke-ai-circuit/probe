@@ -71,6 +71,10 @@ func (p *darwinPlatform) ReadFile(path string, offset int, limit int) (protocol.
 	if err != nil {
 		return protocol.FSReadResult{}, err
 	}
+	total := int64(len(raw))
+	if offset < 0 {
+		offset = 0
+	}
 	if offset > 0 && offset < len(raw) {
 		raw = raw[offset:]
 	} else if offset >= len(raw) {
@@ -79,8 +83,7 @@ func (p *darwinPlatform) ReadFile(path string, offset int, limit int) (protocol.
 	if limit > 0 && limit < len(raw) {
 		raw = raw[:limit]
 	}
-	size := int64(len(raw))
-	return protocol.FSReadResult{Data: base64Encode(raw), Size: size, Encoding: "base64"}, nil
+	return fsReadResult(raw, total, offset), nil
 }
 
 func (p *darwinPlatform) WriteFile(path string, data []byte, mode string) (protocol.FSWriteResult, error) {

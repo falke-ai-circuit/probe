@@ -165,6 +165,21 @@ func (s *Server) v1WrapAgentHandler(action string, h func(http.ResponseWriter, *
 func reformatV1(rec *httptest.ResponseRecorder, w http.ResponseWriter) {
 	body := rec.Body.Bytes()
 	if rec.Code >= 400 {
+		// P8-05: a legacy handler that refused with a typed code (e.g.
+		// FS_WRITE_EMPTY_DATA) keeps that code; only untyped bodies fall back
+		// to the status-derived code.
+		var typed struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(body, &typed) == nil && typed.Code != "" {
+			msg := typed.Message
+			if msg == "" {
+				msg = http.StatusText(rec.Code)
+			}
+			writeError(w, rec.Code, typed.Code, msg)
+			return
+		}
 		msg := strings.TrimSpace(string(body))
 		if msg == "" {
 			msg = http.StatusText(rec.Code)
