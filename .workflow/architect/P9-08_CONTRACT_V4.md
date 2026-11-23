@@ -558,7 +558,7 @@ Inherited verbatim from v2, with the section pointers: §0.1 measured facts M1-M
 | citation audit at `b32b8c7` (A2) | `python3 /opt/data/tmp/probe119/p908_v4_cite_audit.py P9-08_CONTRACT_V4.md` → **refs total 145, distinct spans 77, files 19, unresolved 0, out-of-range 0, mismatched 0; 57 semantic probes, 0 false; VERDICT PASS** |
 | source tree at the head graded | `git rev-parse r119-build` = `b32b8c72a07283e07e7a315b384d6e1767aec7bd`; `git diff --stat 867b0e9 b32b8c7 -- '*.go' 'cmd/**' 'internal/**'` = empty, so no citation target moved between the reviewed tree and this head |
 | suite at `b32b8c7` for the four packages | `PATH=/tmp/go/bin GOFLAGS=-mod=vendor go test ./internal/agent/ ./internal/upgrade/ ./internal/server/ ./internal/protocol/ -count=1 -v` → **458 top-level `--- PASS` + 55 subtests, 0 `--- FAIL`, 1 `--- SKIP`** (the skip is `TestV1_CreateTransfer`, pre-existing per P9-12 A3), 4 packages `ok`, exit 0, log `/opt/data/tmp/probe119/p908_v4_suite.log` |
-| no code changed | the closure commit adds `.workflow/architect/P9-08_CONTRACT_V4.md` only (`git show --stat`) |
+| closure commit | `a8d0738` — 1 file changed, +578, `.workflow/architect/P9-08_CONTRACT_V4.md` only; no source file touched |
 | ratification | **NOT declared.** Goran's decision; P9-03..P9-06 remain blocked |
 
 ---
