@@ -106,28 +106,27 @@ export function FilesTab({ agentId, agentOS }: { agentId: string; agentOS?: stri
     } catch (e) { setError((e as Error).message) } finally { setLoading(false) }
   }
 
-  // Download: pull file from agent to server
+  // Download: pull file from agent to server. The server chooses the
+  // destination inside its managed artifacts directory (P9-11).
   const downloadFile = async (entry: FileEntry, currentPath: string) => {
     if (entry.is_dir) return
     setError(''); setTransferMsg('')
     try {
       const remotePath = joinPath(currentPath, entry.name)
-      const localPath = `/tmp/probe-files/${entry.name}`
-      const res = await api.createTransfer(agentId, 'download', remotePath, localPath) as { id?: string }
-      setTransferMsg(`Download started: ${entry.name} → ${localPath} (ID: ${res?.id?.slice(0, 12) || '?'}) — check Transfers page for progress`)
+      const res = await api.createTransfer(agentId, 'download', remotePath) as { id?: string }
+      setTransferMsg(`Download started: ${entry.name} (ID: ${res?.id?.slice(0, 12) || '?'}) — check Transfers page for progress`)
     } catch (e) { setError((e as Error).message) }
   }
 
-  // Upload: push file from server to agent
+  // Upload: push file from server to agent. The source is resolved inside the
+  // server's managed artifacts directory (upload it with POST /api/v1/files).
   const uploadFile = async (entry: FileEntry, currentPath: string) => {
     if (entry.is_dir) return
     setError(''); setTransferMsg('')
     try {
-      // For upload, the local_path is on the server, remote_path is on the agent
-      const localPath = `/tmp/probe-files/${entry.name}`
       const remotePath = joinPath(currentPath, entry.name)
-      const res = await api.createTransfer(agentId, 'upload', remotePath, localPath) as { id?: string }
-      setTransferMsg(`Upload started: ${localPath} → ${remotePath} (ID: ${res?.id?.slice(0, 12) || '?'}) — check Transfers page for progress`)
+      const res = await api.createTransfer(agentId, 'upload', remotePath) as { id?: string }
+      setTransferMsg(`Upload started: ${entry.name} (ID: ${res?.id?.slice(0, 12) || '?'}) — check Transfers page for progress`)
     } catch (e) { setError((e as Error).message) }
   }
 

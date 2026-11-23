@@ -64,6 +64,10 @@ type Server struct {
 	// When the new agent connects, we use this to kill the old process.
 	pendingUpdates map[string]*pendingUpdate
 
+	// updateArtifacts maps an agent to the managed artifact its in-flight
+	// update references (P9-11): retention must not prune that file.
+	updateArtifacts map[string]string
+
 	// Tunnels: server-side TCP listeners that relay through WebSocket to the agent.
 	tunnelMu    sync.RWMutex
 	tunnels     map[string]*Tunnel // tunnelID -> Tunnel
@@ -127,6 +131,21 @@ type Server struct {
 
 	// File transfer manager: resumable chunked file transfers.
 	transferMgr *TransferManager
+
+	// Managed artifacts directory (P9-11). Builds, downloads, transfers and
+	// update payloads all resolve through FilesDir — one directory in the
+	// persistent /data volume, never /tmp, so a container recreate cannot
+	// destroy a deliverable.
+	filesMu        sync.RWMutex
+	filesDir       string
+	filesDirLogged bool
+	filesKeep      int
+
+	// Retention ledger (agent|name -> artifact records) and in-flight pins.
+	artifactMu     sync.Mutex
+	artifactLedger map[string][]artifactRecord
+	inflightMu     sync.Mutex
+	inflight       map[string]time.Time
 
 	// uiWrapper wraps the mux with an embedded-frontend handler for serving
 	// the React WebUI. When nil (frontend not built), Start/StartTLS uses
@@ -428,7 +447,7 @@ func (s *Server) registerRoutes() {
 	// HTTP API endpoints (legacy — kept for backward compatibility)
 	s.mux.HandleFunc("/api/agents", s.handleListAgents)
 	s.mux.HandleFunc("/api/agent/", s.handleAgentRoute)
-	// File download endpoint (serves files from /tmp/probe-files/)
+	// File download endpoint (serves files from the managed artifacts directory)
 	s.mux.HandleFunc("/download/", s.handleFileDownload)
 	// Also serve downloads under /api/download/ for Docker proxy compatibility
 	s.mux.HandleFunc("/api/download/", s.handleFileDownload)

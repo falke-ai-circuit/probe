@@ -502,14 +502,15 @@ func TestV1_FileDownload(t *testing.T) {
 	srv, cleanup := newV1TestServer(t)
 	defer cleanup()
 
-	// Create a test file in the download directory
-	downloadDir := "/tmp/probe-files/"
+	// P9-11: files are served from the managed artifacts directory.
+	if err := srv.SetFilesDir(t.TempDir()); err != nil {
+		t.Fatalf("SetFilesDir: %v", err)
+	}
+	downloadDir := srv.FilesDir()
 	os.MkdirAll(downloadDir, 0755)
-	defer os.RemoveAll(downloadDir)
 
 	testData := []byte("download me")
-	os.WriteFile(downloadDir+"test-download.bin", testData, 0644)
-	defer os.Remove(downloadDir + "test-download.bin")
+	os.WriteFile(filepath.Join(downloadDir, "test-download.bin"), testData, 0644)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/api/v1/downloads/test-download.bin", nil)
@@ -546,13 +547,15 @@ func TestV1_AgentFileDownload(t *testing.T) {
 	srv, cleanup := newV1TestServer(t)
 	defer cleanup()
 
-	downloadDir := "/tmp/probe-files/"
+	// P9-11: files are served from the managed artifacts directory.
+	if err := srv.SetFilesDir(t.TempDir()); err != nil {
+		t.Fatalf("SetFilesDir: %v", err)
+	}
+	downloadDir := srv.FilesDir()
 	os.MkdirAll(downloadDir, 0755)
-	defer os.RemoveAll(downloadDir)
 
 	testData := []byte("agent download me")
-	os.WriteFile(downloadDir+"agent-test.bin", testData, 0644)
-	defer os.Remove(downloadDir + "agent-test.bin")
+	os.WriteFile(filepath.Join(downloadDir, "agent-test.bin"), testData, 0644)
 
 	body := map[string]interface{}{
 		"filename": "agent-test.bin",

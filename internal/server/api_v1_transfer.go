@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"strings"
 
 	"github.com/falke-ai-circuit/probe/internal/protocol"
@@ -30,6 +31,21 @@ func (s *Server) handleV1CreateTransfer(w http.ResponseWriter, r *http.Request) 
 	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
 		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid JSON: "+err.Error())
 		return
+	}
+
+	// P9-11: an omitted local_path resolves inside the managed artifacts
+	// directory, so no client hardcodes a server path (and no client needs to
+	// know the configured directory). Downloads land there; uploads read a file
+	// already placed there by POST /api/v1/files.
+	if strings.TrimSpace(params.LocalPath) == "" {
+		remoteName := filepath.Base(strings.ReplaceAll(params.RemotePath, `\`, "/"))
+		resolved, perr := s.ManagedPath(remoteName)
+		if perr != nil {
+			writeError(w, http.StatusBadRequest, "INVALID_PARAMS",
+				"local_path omitted and remote_path has no usable file name: "+perr.Error())
+			return
+		}
+		params.LocalPath = resolved
 	}
 
 	transfer, err := s.transferMgr.Create(agentID, params.Direction, params.RemotePath, params.LocalPath, params.ChunkSize)
@@ -209,8 +225,9 @@ func (s *Server) handleV1FileDownload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid filename")
 		return
 	}
-	// Use the existing handleFileDownload logic by serving from /tmp/probe-files/
-	downloadPath := "/tmp/probe-files/" + filename
+	// Serve from the managed artifacts directory (P9-11) — the same directory
+	// builds, uploads, transfers and updates write into.
+	downloadPath := s.FilesDir() + "/" + filename
 	http.ServeFile(w, r, downloadPath)
 }
 
@@ -234,7 +251,7 @@ func (s *Server) handleV1AgentFileDownload(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid filename")
 		return
 	}
-	downloadPath := "/tmp/probe-files/" + params.Filename
+	downloadPath := s.FilesDir() + "/" + params.Filename
 	http.ServeFile(w, r, downloadPath)
 }
 

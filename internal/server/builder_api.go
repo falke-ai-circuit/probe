@@ -319,10 +319,10 @@ func (s *Server) deployRedeployUpdate(agentID, buildID, agentName, binaryPath st
 		return
 	}
 
-	// Copy binary to the download directory.
+	// Copy binary into the managed artifacts directory (P9-11).
 	filename := filepath.Base(binaryPath)
-	downloadDir := "/tmp/probe-files/"
-	downloadPath := downloadDir + filename
+	downloadDir := s.FilesDir()
+	downloadPath := filepath.Join(downloadDir, filename)
 	if binaryPath != downloadPath {
 		if err := copyFile(binaryPath, downloadPath); err != nil {
 			log.Printf("[redeploy] copy to download dir failed for build %s: %v", buildID, err)

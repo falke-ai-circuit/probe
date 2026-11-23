@@ -209,11 +209,13 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ debug_id: debugId, address: addr }),
     }),
-  // File transfer create (from FilesTab)
-  createTransfer: (id: string, direction: string, remotePath: string, localPath: string, chunkSize?: number) =>
+  // File transfer create (from FilesTab). localPath is optional: when omitted
+  // the server resolves it inside its managed artifacts directory, so the UI
+  // never hardcodes a server path.
+  createTransfer: (id: string, direction: string, remotePath: string, localPath?: string, chunkSize?: number) =>
     apiFetch<unknown>(`/agents/${id}/transfer`, {
       method: 'POST',
-      body: JSON.stringify({ direction, remote_path: remotePath, local_path: localPath, chunk_size: chunkSize || 65536 }),
+      body: JSON.stringify({ direction, remote_path: remotePath, local_path: localPath || '', chunk_size: chunkSize || 65536 }),
     }),
 
   // Builds

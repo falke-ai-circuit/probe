@@ -7,7 +7,8 @@ import (
 	"strings"
 )
 
-// handleFileDownload serves files from /tmp/probe-files/ over HTTP.
+// handleFileDownload serves files from the managed artifacts directory
+// (Server.FilesDir, inside the persistent /data volume) over HTTP.
 // This allows the agent to download large files (like updated binaries) from
 // the server without hitting command-line length limits.
 //
@@ -55,7 +56,7 @@ func (s *Server) handleFileDownload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid filename", http.StatusBadRequest)
 		return
 	}
-	filepath := "/tmp/probe-files/" + filename
+	filepath := s.FilesDir() + "/" + filename
 	http.ServeFile(w, r, filepath)
 }
 
@@ -75,6 +76,6 @@ func (s *Server) handleFileDownloadBody(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid filename", http.StatusBadRequest)
 		return
 	}
-	filepath := "/tmp/probe-files/" + params.Filename
+	filepath := s.FilesDir() + "/" + params.Filename
 	http.ServeFile(w, r, filepath)
 }

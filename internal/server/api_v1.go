@@ -422,6 +422,10 @@ func (s *Server) registerV1Routes() {
 	s.mux.HandleFunc("GET /api/v1/builds/{id}/download", s.handleV1DownloadBuild)
 	s.mux.HandleFunc("DELETE /api/v1/builds/{id}", s.handleV1DeleteBuild)
 
+	// P9-11: streamed artifact upload into the managed artifacts directory.
+	// Additive route — no existing command or response shape changes.
+	s.mux.HandleFunc("POST /api/v1/files", s.handleV1FileUpload)
+
 	// Sensors (v1.14.0)
 	// sensor GET/PUT use raw route registration (no v1WrapAgentHandler) because
 	// the handlers write their own APIResponse envelope directly. (Reviewer #1 fix.)

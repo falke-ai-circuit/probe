@@ -57,16 +57,27 @@ func (s *Server) purgeCanaryRegistryRow(agentID string) bool {
 }
 
 // handleAgentUpdate is the HTTP API endpoint that triggers a remote agent update.
-// POST /api/agent/{id}/update  body: {"binary_path":"/tmp/probe-files/PROBE_v9.exe","version":"v9"}
+// POST /api/agent/{id}/update
+//
+// Three delivery modes, all resolved inside the managed artifacts directory
+// (Server.FilesDir, P9-11):
+//
+//	{"build_id":"...", "version":"v9"}                  — stage that build's artifact
+//	{"binary_path":"probe.exe", "sha256":"...", ...}    — a file already in the dir
+//	{"ws_remote_path":"...", "sha256":"...", ...}       — pre-staged over the WS tunnel
+//
+// A binary_path outside the managed directory is refused with 400: the only
+// persistent, API-visible place for a deliverable is the managed directory.
 //
 // The server:
-//  1. Computes SHA256 of the binary file
+//  1. Resolves the artifact and computes its SHA256
 //  2. Sends agent_update message to the agent with download URL + hash
 //  3. Agent downloads, verifies, starts new process, reports old PID
 //  4. When new agent connects (detected by version change), server kills old PID
 func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request, agentID string) {
 	var params struct {
-		BinaryPath   string `json:"binary_path"`   // local path on server to the binary
+		BuildID      string `json:"build_id"`      // managed artifact source: a completed build
+		BinaryPath   string `json:"binary_path"`   // managed-dir path/name of the binary
 		Version      string `json:"version"`       // version label
 		DownloadHost string `json:"download_host"` // override for download URL host (e.g. "187.124.31.229:80")
 		WSPath       string `json:"ws_path"`       // if set, server pre-staged binary via WS at this path on the agent
@@ -77,9 +88,47 @@ func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request, agent
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if params.BinaryPath == "" && params.WSRemotePath == "" {
-		http.Error(w, "either binary_path or ws_remote_path is required", http.StatusBadRequest)
+	if params.BinaryPath == "" && params.WSRemotePath == "" && params.BuildID == "" {
+		http.Error(w, "one of build_id, binary_path or ws_remote_path is required", http.StatusBadRequest)
 		return
+	}
+
+	// P9-11: build_id resolves to that build's artifact INSIDE the managed
+	// directory. The build output dir is a build-scratch location; the
+	// deliverable is copied into FilesDir so /download serves it and retention
+	// can see it.
+	if params.BuildID != "" {
+		build := s.builder.GetBuild(params.BuildID)
+		if build == nil {
+			http.Error(w, fmt.Sprintf("build %s not found", params.BuildID), http.StatusNotFound)
+			return
+		}
+		if build.Status != BuildStatusComplete {
+			http.Error(w, fmt.Sprintf("build %s is not complete (status %s)", params.BuildID, build.Status), http.StatusConflict)
+			return
+		}
+		if build.BinaryPath == "" {
+			http.Error(w, fmt.Sprintf("build %s has no binary path", params.BuildID), http.StatusNotFound)
+			return
+		}
+		staged, serr := s.stageBuildArtifact(build)
+		if serr != nil {
+			http.Error(w, fmt.Sprintf("stage build artifact: %v", serr), http.StatusInternalServerError)
+			return
+		}
+		params.BinaryPath = staged
+	}
+
+	// P9-11: a caller-supplied binary_path must already be inside the managed
+	// directory. Relative names are resolved against it; anything else is a
+	// 400 with the remediation, never a silent copy from /tmp or a host path.
+	if params.BinaryPath != "" {
+		resolved, rerr := s.ResolveManagedFilePath(params.BinaryPath)
+		if rerr != nil {
+			writeError(w, http.StatusBadRequest, "BAD_REQUEST", rerr.Error())
+			return
+		}
+		params.BinaryPath = resolved
 	}
 
 	// Compute SHA256 of the binary. In ws_remote_path mode there is no local
@@ -118,15 +167,29 @@ func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request, agent
 		filename = filepath.Base(params.WSRemotePath)
 	}
 
-	// Copy binary to the download directory if not already there. Only a
-	// server-local binary has anything to copy.
-	downloadDir := "/tmp/probe-files/"
-	downloadPath := downloadDir + filename
-	if params.BinaryPath != "" && params.BinaryPath != downloadPath {
+	// Copy binary into the managed artifacts directory if not already there.
+	// Only a server-local binary has anything to copy; FilesDir is the one
+	// directory every read path serves from (P9-11).
+	downloadDir := s.FilesDir()
+	downloadPath := filepath.Join(downloadDir, filename)
+	if params.BinaryPath != "" && filepath.Clean(params.BinaryPath) != filepath.Clean(downloadPath) {
 		if err := copyFile(params.BinaryPath, downloadPath); err != nil {
 			http.Error(w, fmt.Sprintf("copy to download dir failed: %v", err), http.StatusInternalServerError)
 			return
 		}
+	}
+
+	// P9-11 retention: the delivered artifact is registered under
+	// (agent|name) and pinned while the update is in flight, so a concurrent
+	// prune cannot delete the file the agent is downloading.
+	if params.BinaryPath != "" {
+		var size int64
+		if fi, statErr := os.Stat(downloadPath); statErr == nil {
+			size = fi.Size()
+		}
+		s.markArtifactInFlight(downloadPath)
+		s.setUpdateArtifact(agentID, downloadPath)
+		s.registerArtifact(agentID, filename, filename, downloadPath, hash, size)
 	}
 
 	// Build the download URL. Use download_host from request if provided,
@@ -207,6 +270,13 @@ func (s *Server) handleAgentUpdateResult(agentID string, env protocol.Envelope) 
 
 	log.Printf("[update] agent %s update result: success=%v, oldPID=%d, newPID=%d, msg=%s",
 		agentID, result.Success, result.OldPID, result.NewPID, result.Message)
+
+	// P9-11: the delivery ended, one way or the other — release the retention
+	// pin so the artifact can age out. A failed delivery leaves the file in
+	// place for a retry; it just stops being protected.
+	if artifact := s.takeUpdateArtifact(agentID); artifact != "" {
+		s.clearArtifactInFlight(artifact)
+	}
 
 	if !result.Success {
 		log.Printf("[update] agent %s update failed: %s", agentID, result.Message)

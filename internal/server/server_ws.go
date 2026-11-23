@@ -123,6 +123,12 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		delete(s.pendingUpdates, agentID)
 		s.pendingMu.Unlock()
 
+		// P9-11: the promoted agent is live, so the artifact is no longer
+		// being delivered — release its retention pin.
+		if artifact := s.takeUpdateArtifact(agentID); artifact != "" {
+			s.clearArtifactInFlight(artifact)
+		}
+
 		log.Printf("[update] agent %s reconnected after update — scheduling kill of old PID %d", agentID, oldPID)
 
 		// Wait a moment for the new agent to be fully ready, then kill the old process.

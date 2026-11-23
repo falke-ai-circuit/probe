@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,6 +37,8 @@ func main() {
 	caDir := flag.String("ca-dir", "", "directory for CA cert/key storage (default: PROBE_CA_DIR env or /tmp/probe-ca)")
 	builderPath := flag.String("builder-db", "", "agent builder records file path (default: PROBE_BUILDER_DB env or /tmp/probe-builds.json)")
 	builderOutputDir := flag.String("builder-output-dir", "", "directory for built agent binaries (default: PROBE_BUILDER_OUTPUT_DIR env or /tmp/probe-builds)")
+	filesDir := flag.String("files-dir", "", "managed artifacts directory for builds, downloads, transfers and updates — must live on a persistent volume (default: PROBE_FILES_DIR env or /data/files)")
+	filesKeep := flag.Int("files-keep", 0, "artifacts retained per (agent|name) (default: PROBE_FILES_KEEP env or 5)")
 	profilesPath := flag.String("profiles-db", "", "build profiles file path (default: PROBE_PROFILES_DB env or /tmp/probe-profiles.json)")
 	allowedCIDR := flag.String("allowed-cidr", "100.64.0.0/10,10.10.10.0/24,172.16.0.0/12", "CIDR ranges allowed for WebUI/API HTTP routes (default: Tailscale 100.64.0.0/10 + subnet-routed 10.10.10.0/24 + Docker bridges 172.16.0.0/12). Comma-separated for multiple. /ws is always open from any IP. Set to 0.0.0.0/0 to disable.")
 	adminPassword := flag.String("admin-password", "", "password for the default admin operator created on startup if no operators exist")
@@ -107,6 +110,19 @@ func main() {
 	if *vtAPIKey == "" {
 		*vtAPIKey = os.Getenv("PROBE_VT_API_KEY")
 	}
+	if *filesDir == "" {
+		*filesDir = os.Getenv("PROBE_FILES_DIR")
+	}
+	if *filesDir == "" {
+		*filesDir = server.DefaultFilesDir
+	}
+	if *filesKeep <= 0 {
+		if raw := os.Getenv("PROBE_FILES_KEEP"); raw != "" {
+			if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+				*filesKeep = n
+			}
+		}
+	}
 
 	rlCfg := server.RateLimitConfig{
 		RatePerSec:    *rateLimit,
@@ -136,6 +152,13 @@ func main() {
 	srv.SetEnrollmentPath(*enrollmentPath)
 	srv.SetCADir(*caDir)
 	srv.SetBuilderPath(*builderPath, *builderOutputDir)
+	// P9-11: one resolved, persistent artifacts directory. Fail loud at boot
+	// rather than at the first build: an unwritable volume is a deployment
+	// error, not a per-request surprise.
+	if err := srv.SetFilesDir(*filesDir); err != nil {
+		log.Fatalf("artifacts dir: %v", err)
+	}
+	srv.SetFilesKeep(*filesKeep)
 	srv.SetProfilesPath(*profilesPath)
 	srv.SetOperatorPath(*operatorPath)
 	srv.SetAllowedCIDR(*allowedCIDR)

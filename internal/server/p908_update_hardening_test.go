@@ -83,6 +83,11 @@ func newUpdateTestServer(t *testing.T, agentID string) (*Server, *updateMockAgen
 	srv := NewServer("", "test-token", filepath.Join(dir, "registry.json"))
 	srv.mux = http.NewServeMux()
 	srv.registerRoutes()
+	// P9-11: artifacts live in a managed directory; give every test server its
+	// own so binary_path fixtures resolve inside it and nothing touches /data.
+	if err := srv.SetFilesDir(filepath.Join(dir, "artifacts")); err != nil {
+		t.Fatalf("SetFilesDir: %v", err)
+	}
 	agent := &updateMockAgent{srv: srv}
 	srv.mu.Lock()
 	srv.conns[agentID] = agent
@@ -177,30 +182,25 @@ func TestP908UpdateWSRemotePathContract(t *testing.T) {
 // match, or the request is refused before anything reaches the agent.
 func TestP908UpdateBinaryPathSHA256(t *testing.T) {
 	const agentID = "TEST-OLD-1187"
-	dir := t.TempDir()
 	content := []byte("server-local binary payload")
-	binPath := filepath.Join(dir, fmt.Sprintf("p908-%d.bin", time.Now().UnixNano()))
-	if err := os.WriteFile(binPath, content, 0644); err != nil {
-		t.Fatalf("write fixture binary: %v", err)
-	}
 	correct := shaOf(content)
 	wrong := shaOf([]byte("some other binary"))
 
 	cases := []struct {
 		name       string
-		body       map[string]interface{}
+		sha        string
 		wantCode   int
 		wantSubstr string
 	}{
 		{
 			name:       "wrong sha256 is a 400 mismatch",
-			body:       map[string]interface{}{"binary_path": binPath, "sha256": wrong, "version": "1.19.0"},
+			sha:        wrong,
 			wantCode:   http.StatusBadRequest,
 			wantSubstr: "sha256 mismatch",
 		},
 		{
 			name:     "correct sha256 proceeds",
-			body:     map[string]interface{}{"binary_path": binPath, "sha256": correct, "version": "1.19.0"},
+			sha:      correct,
 			wantCode: http.StatusOK,
 		},
 	}
@@ -208,7 +208,15 @@ func TestP908UpdateBinaryPathSHA256(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, agent := newUpdateTestServer(t, agentID)
-			rec := postUpdate(srv, agentID, tc.body)
+			// P9-11: a binary_path outside the managed directory is refused, so
+			// the fixture is written inside it — still a server-local file.
+			binPath := filepath.Join(srv.FilesDir(), fmt.Sprintf("p908-%d.bin", time.Now().UnixNano()))
+			if err := os.WriteFile(binPath, content, 0644); err != nil {
+				t.Fatalf("write fixture binary: %v", err)
+			}
+			rec := postUpdate(srv, agentID, map[string]interface{}{
+				"binary_path": binPath, "sha256": tc.sha, "version": "1.19.0",
+			})
 
 			if rec.Code != tc.wantCode {
 				t.Fatalf("status = %d, want %d (body=%s)", rec.Code, tc.wantCode, rec.Body.String())
@@ -279,7 +287,8 @@ func TestP908UpdateStartDropsStaleCanary(t *testing.T) {
 	srv.registry.Register(agentID+canaryRegistrySuffix, agentID+canaryRegistrySuffix, "1.18.6", "windows", "amd64", "silent", nil)
 
 	content := []byte("binary for the start-path cleanup")
-	binPath := filepath.Join(t.TempDir(), fmt.Sprintf("p908-start-%d.bin", time.Now().UnixNano()))
+	// P9-11: the deliverable must live in the managed artifacts directory.
+	binPath := filepath.Join(srv.FilesDir(), fmt.Sprintf("p908-start-%d.bin", time.Now().UnixNano()))
 	if err := os.WriteFile(binPath, content, 0644); err != nil {
 		t.Fatalf("write fixture binary: %v", err)
 	}
