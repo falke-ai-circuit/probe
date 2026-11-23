@@ -5,10 +5,12 @@
 | unit | P9-01 · milestone P9 · workflow wf_probe1 |
 | owner | architect (design only — no code, no dispatch) |
 | session | api_server · profile `architect` · gateway: none |
-| timestamp | 2026-11-23T12:46:46Z (kernel `date -u`, not recall) |
+| timestamp | 2026-11-23T13:05Z (kernel `date -u`, not recall) — v2 correction pass |
+| reviewed_by | architect self-check v2 (independent reviewer: **pending**) |
+| verdict | **CONTRACT COMPLETE — four measured defects in v1 corrected (§0.4 X1-X4); coder may start §2/§6/§7, UI from §8, Windows from §9** |
 | ratified input | `/opt/data/tmp/probe119/P8-02_DESIGN.md` · 871 lines · 69,707 B · sha256 head `88e6fbf2983c17a3` — read this unit; OD-1 and A-1 govern §9 and §7 |
-| tree | `/opt/data/projects/PROBE_UPGRADE/v119wt` · branch `r119-build` · HEAD `3ad56e5fb4cadd40cd18d6d622d6e705c0de7f66` · working tree clean at read |
-| tree_read sha | `3ad56e5` — this unit modifies no source file; the closure commit adds only this document |
+| tree | `/opt/data/projects/PROBE_UPGRADE/v119wt` · branch `r119-build` · HEAD `b3c0b3c` (= `3ad56e5` + the v1 copy of this document) · working tree clean at read |
+| tree_read sha | `3ad56e5` (source code; this unit modifies no source file — the closure commit adds this document only) |
 | research leg | **NONE** — the existing mechanism was read and is cited below; every claim is `file:line` from this tree or a live probe run this unit |
 | status | design gate artefact. Coder units may start from §2/§6/§7; §8/§9 are frontend and Windows work orders |
 | prohibited compliance | no parallel swap mechanism (reuses `internal/upgrade` + `internal/agent/canary.go`); no agent-wire field the 1.18.6 fleet must learn; no confirmation claim outside §2's four checks; no frontend rewrite (§8 verdict: additive); no code changed |
@@ -67,6 +69,19 @@ The brief states `GET /api/v1/agents/{id}/fs/download` returns 404 while `api_v1
 | "the old process restores `.old` if the canary does not promote" | nothing is renamed before promotion, so there is nothing to restore in the common case; `.old` restore matters only after a **partial** swap | §3 watchdog has three branches, because two of them are not "restore" |
 | kill is "from the server after confirmation" | the measured kill is the canary's own `stopProcess`; the server kill is a 3 s-delayed backstop | both exist; §4 assigns authority explicitly so they cannot race |
 
+### 0.4 v2 correction pass — three v1 claims that did not survive re-reading the wire
+
+v1 of this document asserted three things the source does not support. They are corrected here rather than left for the coder to discover at build time. Each is a `file:line` fact, not a preference.
+
+| # | v1 claim | source says | correction |
+|---|---|---|---|
+| **X1** | Kill identity guard reads the target row's `exe` and start time from `proc-list` (§4.3 steps 2-3) | `protocol.ProcessInfo` carries **`pid`, `name`, `cpu_percent`, `memory_mb` only** — no exe path, no start time (`internal/protocol/messages.go:587-592`); `windowsProcessList` parses `tasklist /FO CSV` name+PID only (`internal/agent/agent_proc.go:129-157`) | the guard cannot be built on that wire. §4.3 is rewritten to use evidence that exists: the canary's own in-process `CanaryOldPID` (`internal/agent/agent.go:177-178`) and the superseded connection's PID as recorded server-side at connect (`internal/server/server_ws.go:93`). `exe`/`started_at` become an **additive, availability-gated** `ProcessInfo` extension — declared, never required |
+| **X2** | The server backstop `proc_kill` is a working second killer (§4.2 row 2) | in `sandboxed`\\|`standard` permissions the agent refuses to kill a PID it did not spawn (`internal/agent/agent_proc.go:44-52`); the new agent never spawned the old PID, so the backstop is **dead code** on those agents as written | §4.2 gains a mandatory registration step: the canary inserts `CanaryOldPID` into `spawnedPIDs` at startup (`internal/agent/agent.go:227-229`, `:105` pattern), which is the existing allowlist, not a new bypass. Without it the backstop legitimately refuses and the job ends F4 |
+| **X3** | Check (d) runs `exec "echo probe-update-ok"` (§2.1 row d) | there is no `echo` executable on Windows; `exec` spawns the string as a command (`internal/server/server_api.go:184-201`) | the probe is `cmd /c echo probe-update-ok` on Windows and `/bin/echo probe-update-ok` elsewhere, selected from the agent's advertised `os` (`internal/server/registry.go:37`) |
+| **X4** | Kill authority was assigned canary-first (v1 §4.2, D-04) | the owner's instruction is explicit: *"proc_kill from the server after confirmation, not self-kill before it"*, while the intent line says the swap-then-kill is driven *from* the new process | resolved by splitting **authority** from **execution**: the **server** issues `proc_kill`; the **new process** executes it (it is the only process that receives the command, and it holds the inherited PID). The canary never calls `TerminateProcess`/`stopProcess` on its own initiative — `canary.go:203-205` is the line that violates the instruction and must be gated off. §4.1/§4.2 rewritten; §1.1 S5 and D-04 updated |
+
+No other v1 claim was contradicted by the tree. The 404 resolution (§0.2), the byte arithmetic (§6.2) and the 256 KiB measurement (§6.3) were re-verified this pass.
+
 ---
 
 ## 1. State machine — one update
@@ -82,7 +97,7 @@ Single job object, `update_id`, per agent. Every state is persisted before it is
 | S2 | `artifact_verified` | **old process** (agent), reported to server | agent hashes the artifact and compares to `params.SHA256`; journal `event=ARTIFACT_VERIFIED sha256=<hex> size=<n> source=<http\|ws>`; server confirms the same sha against the build record | no |
 | S3 | `canary_connected` | **canary** (new process) | a connection registering `<name>-canary` (`connect.go:106-109`); server registry row for `<name>-canary` with the expected version; journal `event=CANARY_CONNECTED pid=<n>` | no |
 | S4 | `promoted` | **canary** | `swapBinaryPaths` returned success: `<canonical>.old` holds the previous sha, `<canonical>` holds the expected sha; journal `event=PROMOTED canonical_sha=<hex> backup=<path>` | no |
-| S5 | `old_killed` | **canary** (primary) / **server** (backstop) | `proc-list` no longer lists `old_pid` **with the probe exe path**; journal `event=OLD_KILLED pid=<n> by=canary\|server` | no |
+| S5 | `old_killed` | **server** (authority) → **new process** (executes `proc_kill`) | server issued `proc_kill{PID: old_pid}` after S4 was durable and checks (a)(b) were true; agent returned `TaskStopResult{killed:true}` (`messages.go:603-606`) or the PID is absent from `proc-list`; journal `event=OLD_KILLED pid=<n> by=server executor=new` | no |
 | S6 | `confirmed` | **server** | all four checks of §2 true, in order, each with its own evidence row | **yes** |
 | F1 | `failed` | server (from any pre-promotion state) | `failure{code,message,at}` + journal `event=ABANDONED reason=…`; canonical binary untouched (sha == pre-update) | **yes** |
 | F2 | `rolled_back` | old process or canary | journal `event=ROLLED_BACK_*`; canonical sha == pre-update sha, asserted (`canary.go:126-139`) | **yes** |
@@ -113,9 +128,9 @@ server ──S1──▶ old process ──S2──▶ canary ──S3──▶ 
 
 | driver | may write | may never write |
 |---|---|---|
-| server | S1, S6, F1, F4; S5 **only** as backstop with identity proof | S4 — the server cannot observe a rename it did not do |
-| old process | S2, F1 (pre-promotion), F2 branch (ii) of §3.2 | S4, S5 |
-| canary | S3, S4, S5 | S6 — the new process cannot certify itself |
+| server | S1, S5, S6, F1, F4 | S4 — the server cannot observe a rename it did not do |
+| old process | S2, F1 (pre-promotion), F2 branch (ii) of §3.2 | S4, S5 — and never its own termination |
+| canary | S3, S4; executes S5's `proc_kill` on the server's order | S6 — the new process cannot certify itself; S5 authority |
 
 ---
 
@@ -129,8 +144,8 @@ server ──S1──▶ old process ──S2──▶ canary ──S3──▶ 
 |---|---|---|---|---|
 | **a** | **version read FROM THE ARTIFACT equals expected** — and the artifact on the agent is byte-identical to the artifact that version was read from | server | `POST /agents/{id}/fs-hash {path:<canonical>}` → `sha256` must equal `artifact.sha256`; then `exec "<canonical> --version"` (10 s) → stdout must contain `version.expected`; the server independently runs `--version` on its own build artifact and compares to `build.version`. Where `exec` is unavailable, the sha-bridge stands alone: equal sha over a build whose version the server read = the agent runs that version | `checks.a = {ok, sha_agent, sha_expected, version_observed, version_expected, source:"artifact", at}` |
 | **b** | **the new process registered under the SAME agent name** | server (registry) | `GET /api/v1/agents/{id}` → `name == id`, `version == expected`, and no registry row whose name ends `-canary` for this host (`canary.go:26`, `:71` strips it before reconnecting); `last_seen` within the job window | `checks.b = {ok, agent_id, name_registered, version_registered, canary_row_remaining:false, at}` |
-| **c** | **the old PID is gone** | server (agent-side truth) | `POST /agents/{id}/proc-list` → no row with `pid == old_pid` **and** `exe` matching the canonical path. Identity match is mandatory: a recycled PID elsewhere does not satisfy (c) and does not block it | `checks.c = {ok, old_pid, identity_exe, present:false, at}` |
-| **d** | **one functional probe succeeds post-swap** | server | `exec` `echo probe-update-ok` through the **new** connection, deadline 10 s → `ok:true`, `exit_code:0`, stdout contains the marker, `replayed:false`, and the response's `agent_clock_skew_ms` is present | `checks.d = {ok, exit_code, stdout_marker:true, request_id, at}` |
+| **c** | **the old PID is gone** | server (agent-side truth) | `POST /agents/{id}/proc-list` → **no row with `pid == old_pid`**. Identity is established *before* the check, not from the listing: the PID came from the old process itself (`AgentUpdateResult.OldPID`, `messages.go:798-803`) and from the superseded connection (`server_ws.go:93`). Where a 1.19+ agent supplies the additive `exe` field, the row's `exe` must resolve to the canonical path; on the current wire only `name` exists (`messages.go:587-592`), so the fallback is `name == filepath.Base(canonical)` and the job records `identity_source:"name_only"` | `checks.c = {ok, old_pid, present:false, identity_source:"ping"\|"proc-list-name"\|"proc-list-exe", at}` |
+| **d** | **one functional probe succeeds post-swap** | server | `exec` the platform marker — `cmd /c echo probe-update-ok` on Windows, `/bin/echo probe-update-ok` elsewhere (selected from the agent's `os`, `registry.go:37`) — deadline 10 s → `ok:true`, `exit_code:0`, stdout contains the marker, `replayed:false`, and the response's `agent_clock_skew_ms` is present | `checks.d = {ok, exit_code, command, stdout_marker:true, request_id, at}` |
 
 ### 2.2 The identity bridge, stated because it is the load-bearing assumption
 
@@ -203,30 +218,32 @@ The server cannot restore a file it cannot see, and its kill path is exactly the
 
 ### 4.1 The rule, in one line
 
-**No kill of any kind before `PROMOTED` is durable; the canary kills first (it earned the right by swapping), the server kills only as a backstop with identity proof.**
+**No kill of any kind before `PROMOTED` is durable and checks (a)+(b) pass; the SERVER issues the `proc_kill`, the NEW process executes it, and the old process never terminates itself.** Authority and execution are separated because the owner's instruction separates them: *"proc_kill from the server after confirmation, not self-kill before it"* — while the kill still happens *from* the new process, because that is the only process holding a live connection and the inherited PID.
 
 ### 4.2 Who kills, in what order
 
 | order | actor | trigger | mechanism | evidence |
 |---|---|---|---|---|
-| 1 | **canary** | immediately after the two renames returned and the backup sha is on disk (`canary.go:196-209`) | Windows `TerminateProcess`; POSIX `SIGTERM` then `SIGKILL` after 5 s | journal `event=OLD_KILLED pid=<n> by=canary` |
-| 2 | **server** | `pending_update_ttl` reached and (c) is still false | `proc_kill{PID: old_pid, Signal: 9}` sent to the **new** connection | journal `event=OLD_KILLED pid=<n> by=server` |
-| never | old process | — | self-kill before promotion is forbidden | — |
+| **0 — forbidden** | old process | — | self-kill at any time | `canary.go:203-205` (`stopProcess(CanaryOldPID)`) is the line that must be **removed/gated**; self-termination before the server's order is a protocol violation, not a shortcut |
+| **1 — authority** | **server** | S4 durable **and** checks (a) and (b) true | `proc_kill{PID: old_pid, Signal: 9}` to the **new** connection (`server_ws.go:132-133` path, now job-scoped instead of a 3 s blind sleep) | journal `event=OLD_KILLED pid=<n> by=server order_id=<upd_…>` |
+| **2 — execution** | **new process (canary, now canonical)** | receives `proc_kill` | `taskkill /PID <n> /F` on Windows; `kill -9` on POSIX (`agent_proc.go:53-64`) | `TaskStopResult{killed:true,pid:<n>}` (`messages.go:603-606`); journal `event=KILL_ACK pid=<n> executor=new` |
+| **3 — fallback** | **new process** | `kill_grace` = **60 s** after S4 with no server order (server unreachable / restarting) | same `taskkill`/`kill`, journaled as a fallback | journal `event=OLD_KILLED pid=<n> by=canary_fallback reason=server_silent` — visible in the job as `kill_authority:"fallback"`, never silently equal to a server order |
 
-Why the canary first: it is the process that just proved it is healthy and holds the verified swap; "kills old FROM new so it confirms" is the owner's intent and the measured flow. Why the server second: if the canary dies between promotion and kill, nobody else knows the PID — the server does, from `AgentUpdateResult.OldPID`.
+**Why the fallback exists and why it is not the primary.** If the server dies between promotion and the order, the old and new processes both serve and the registry flaps between versions. A 60 s bounded fallback converges the host; it is journaled as a fallback so an auditor can distinguish "confirmed normally" from "confirmed while the server was down". The primary path is still the server's order.
 
-### 4.3 Identity guard (mandatory, closes M13)
+**Mandatory precondition for rows 1-3 (corrects X2).** `proc_kill` is refused by any agent in `sandboxed`/`standard` permissions for a PID it did not spawn (`internal/agent/agent_proc.go:44-52`). The new process therefore must register the inherited PID in the existing allowlist at canary startup — `a.spawnedPIDs[CanaryOldPID] = true`, the same map `proc_start` populates (`internal/agent/agent.go:227-229`, `:105`) — so the kill is authorized for exactly one PID and nothing else. Without this line every kill path above is dead code on a standard-permission agent.
 
-Before **any** kill, the killer proves the PID is the right process:
+### 4.3 Identity guard (mandatory, closes M13) — rebuilt on evidence that exists
 
-| step | probe | pass condition |
-|---|---|---|
-| 1 | `proc-list` on the agent | a row with `pid == old_pid` exists |
-| 2 | that row's `exe` | resolves (after `TrimSuffix(".next")`) to the canonical binary path |
-| 3 | that row's start time | predates `job.requested_at` |
-| 4 | if 1-3 not all true | **do not kill**, mark (c) satisfied-by-absence only if the PID is absent entirely; if present but mismatched, F4 `PID_IDENTITY_MISMATCH` |
+The v1 version of this table asked `proc-list` for the target's **exe path and start time**. Neither is on the wire: `ProcessInfo` is `{pid, name, cpu_percent, memory_mb}` (`internal/protocol/messages.go:587-592`) and the Windows collector parses `tasklist /FO CSV` for name+PID only (`internal/agent/agent_proc.go:129-157`). A guard that reads a field the protocol does not carry is not a guard. Rebuilt:
 
-Recycled-PID protection is not theoretical: the server's `pendingUpdates` entry survives indefinitely today, so a `proc_kill` can arrive minutes or hours later (M13). §5.3 gives it a TTL; §4.3 makes the kill wrong-PID-proof even inside the TTL.
+| layer | source of identity | availability | rule |
+|---|---|---|---|
+| **L1 — primary (always)** | the PID is inherited, not looked up: `AgentUpdateResult.OldPID` from the old process itself (`messages.go:798-803`) and the superseded connection's PID recorded server-side at connect time (`server_ws.go:93`) | every agent, every version | the canary kills `CanaryOldPID` (`agent.go:177-178`); the server kills only `pending.OldPID`. **Neither ever kills a PID discovered by scanning `proc-list`** — a scan is how a recycled PID gets chosen |
+| **L2 — name check (always, on the wire today)** | `ProcessInfo.Name` | every agent | before the kill, `proc-list` must show a row with `pid == old_pid` and `name == filepath.Base(canonical)`. If the PID is absent → already exited, success. If present with a **different name** → F4 `PID_IDENTITY_MISMATCH`, no kill |
+| **L3 — strong check (1.19+, additive)** | `ProcessInfo.Exe` + `ProcessInfo.StartedAt`, appended beside the existing JSON fields (no `DisallowUnknownFields`, P8-02 F7) | agents ≥ 1.19; `identity_source:"proc-list-exe"` | the row's `exe` resolves (after `TrimSuffix(".next")`) to the canonical path **and** `started_at < job.requested_at`. A 1.19 agent that omits the fields is not penalised — it degrades to L2 and says so |
+
+Recycled-PID protection is not theoretical: the server's `pendingUpdates` entry survives indefinitely today, so a `proc_kill` can arrive minutes or hours later (M13). §5.3 gives it a TTL; L1 + L2 make the kill wrong-PID-proof even inside the TTL and even without the additive fields.
 
 ### 4.4 When the kill cannot complete
 
@@ -578,6 +595,8 @@ Why not one process: a service that also owns a window dies with the window's me
 | E11 | two operators | lease | 409 `LOCK_BUSY` | — | wait or `replace_lease` |
 | E12 | server restarts mid-job | persisted job | resumes | unchanged | `resumed:true`; reconcile from journal |
 | E13 | agent reconnects as zombie (old PID) | server accept filter (§4.4) | stays S4/S5 | new | connection refused, logged |
+| E14 | `proc_kill` refused by the sandbox allowlist (registration missing) | `permission_denied` envelope (`agent_proc.go:44-52`) | F4 `OLD_PID_ALIVE` | new | register `CanaryOldPID` in `spawnedPIDs`; retry once |
+| E15 | server dies after S4, before the kill order | 60 s `kill_grace` expiry in the new process | S5 via `kill_authority:"fallback"` | new | journal records the fallback; job still reaches `confirmed` with the distinction visible |
 
 ---
 
@@ -588,7 +607,7 @@ Why not one process: a service that also owns a window dies with the window's me
 | D-01 | `download_url` primary, `ws_path` fallback | ws-only (the P8-06 narrative) or both | 33% fewer bytes, no control-channel blocking, Range resume, independent deadline | agents behind HTTP-block must fall back — measured by attempting, §6.4 |
 | D-02 | 256 KiB chunks, 64 MiB max | 1 MiB chunks; 512 MiB max | 256 KiB is the measured-safe unit; 64 MiB is 4.7× the real build and bounds staging memory | a >64 MiB build needs a knob change, not a code change |
 | D-03 | watchdog N = **90 s**, owned by the old process | 30 s / 300 s; server-owned | 40 s connect + 50 s promote, no slack that hides a hang; the file owner must be the restorer | a slow disk >50 s to rename + hash a 13.5 MB file fails the update; knob `PROBE_UPDATE_WATCHDOG_S` |
-| D-04 | canary kills first; server is backstop | server-only kill (brief's literal reading) | the canary holds the verified swap; server-only would leave a window with two live processes and no proof | the canary must know the PID — it does (`CanaryOldPID`, `canary_launch.go:24-31`) |
+| D-04 | **server issues** `proc_kill`; **new process executes**; 60 s fallback if the server is silent | canary self-kill (v1) or server-only kill without an executor | the owner's instruction is explicit ("proc_kill from the server … not self-kill before it"); execution must stay on the new process because it holds the connection and the inherited PID | one more round trip per update; a 60 s convergence window when the server is down |
 | D-05 | three-branch watchdog (abandon / restore / escalate) | single "restore .old" branch | two of three cases have nothing to restore; restoring a successful promotion is a self-inflicted outage | one more journal event name |
 | D-06 | idempotency by artifact sha | per-request nonce | "make these bytes run" is the operation; a nonce makes retries duplicate | two different builds = two jobs, correctly |
 | D-07 | lease 300 s, persisted | in-memory lock | a server restart must not allow a double swap | stale claims need the reconciler |
@@ -629,7 +648,7 @@ Why not one process: a service that also owns a window dies with the window's me
 | **1. state machine** | §1.1 nine-state table with driver + entry evidence per state; §1.2 legal-transition guards; §1.3 driver authority table |
 | **2. four checks** | §2.1 (a) version from artifact / (b) same name / (c) old PID gone / (d) functional probe; §2.3 names the slogans they replace; "`confirmed` **is** these four" stated at the head of §2 |
 | **3. watchdog number** | §3.1 `watchdog_n = 90 s`; §3.2 owner = old process, three branches; §3.3 exact journal line `event=WATCHDOG_TIMEOUT branch=… wait_s=90 …` |
-| **4. kill-old semantics** | §4.1 rule; §4.2 canary-first/server-backstop table; §4.3 PID identity guard; §4.4 five failure cases incl. locked exe and access denied |
+| **4. kill-old semantics** | §4.1 rule (server authority / new-process execution, no self-kill); §4.2 four-row order table incl. the forbidden self-kill line and the 60 s fallback, plus the `spawnedPIDs` authorization (§0.4 X2); §4.3 three-layer identity guard built on wire-available evidence (§0.4 X1); §4.4 five failure cases incl. locked exe and access denied |
 | **5. idempotency + concurrency** | §5.1 key = `sha256:<artifact>`; §5.2 lease TTL 300 s persisted; §5.3 seven-row behaviour matrix; §5.4 agent-side duplicate guard |
 | **6. delivery channel** | §6.1 `download_url` primary with fallback; §6.3 chunk 256 KiB, max 64 MiB, 413 above it; §6.2 the byte arithmetic |
 | **7. API surface** | §7.1 request + 202 body; §7.2 status fields + cadence (1 s → 5 s); §7.3 rollback; §7.4 thirteen error codes |
@@ -637,5 +656,18 @@ Why not one process: a service that also owns a window dies with the window's me
 | **9. Windows console** | §9.1 attach-console rejected on session-0 mechanism; §9.2 service writes `status.json`, separate window reads it; §9.3 nine displayed fields |
 
 ---
+
+## 16. Close record
+
+| field | value |
+|---|---|
+| artefact | `/opt/data/tmp/probe119/P9-01_UPDATE_CONTRACT.md` (canonical copy committed at `.workflow/architect/P9-01_UPDATE_CONTRACT.md`) |
+| version | v2 — §0.4 carries the four corrections (X1 wire-incomplete identity guard, X2 sandbox-blocked kill, X3 Windows probe command, X4 kill authority) |
+| code changed | **none.** The closure commit adds this document only; `git status` clean at close |
+| research leg | NONE — every claim is `file:line` in this tree or a live probe run this unit (§0.2 404 resolution: `strings` count 0 on the deployed binaries, route present at `api_v1.go:342`, commit `fa29134` 2026-11-23T07:41Z vs binary mtime 2026-11-22T22:35Z) |
+| acceptance | all nine owner items answered; §15 maps each to its section |
+| open items | O1-O5 (§14) — none blocks the coder's first unit; O2 (Windows runtime leg) blocks only §9 acceptance |
+| reviewed_by | architect self-check v2; **independent reviewer pending** |
+| verdict | **CONTRACT COMPLETE for coder dispatch on §2/§6/§7, frontend on §8 (additive), Windows console on §9.** The §4 kill path requires the `canary.go:203-205` self-kill removal and the `spawnedPIDs` registration before any field test |
 
 *End of P9-01. No source file was modified. The closure commit adds this document only.*
