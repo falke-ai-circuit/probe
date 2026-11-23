@@ -56,8 +56,12 @@ func (s *Server) handleFileDownload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid filename", http.StatusBadRequest)
 		return
 	}
-	filepath := s.FilesDir() + "/" + filename
-	http.ServeFile(w, r, filepath)
+	localPath, err := s.ManagedPath(filename)
+	if err != nil {
+		http.Error(w, "invalid filename", http.StatusBadRequest)
+		return
+	}
+	http.ServeFile(w, r, localPath)
 }
 
 // handleFileDownloadBody serves a file from the download directory, with the
@@ -76,6 +80,10 @@ func (s *Server) handleFileDownloadBody(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid filename", http.StatusBadRequest)
 		return
 	}
-	filepath := s.FilesDir() + "/" + params.Filename
-	http.ServeFile(w, r, filepath)
+	localPath, err := s.ManagedPath(params.Filename)
+	if err != nil {
+		http.Error(w, "invalid filename", http.StatusBadRequest)
+		return
+	}
+	http.ServeFile(w, r, localPath)
 }

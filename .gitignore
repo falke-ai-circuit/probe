@@ -9,8 +9,8 @@ cmd/probe-server/probe-server
 __pycache__/
 *.pyc
 web/node_modules/
-web/dist/
-!web/dist/.gitkeep
+# web/dist is committed on purpose: embed.go embeds it, so a clean checkout must
+# build without node. Rebuild with `cd web && npm ci && npm run build`.
 cmd/probe/probe-agent
 probe-agent
 vt-submissions.log

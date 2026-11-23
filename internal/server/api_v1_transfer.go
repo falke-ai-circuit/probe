@@ -226,8 +226,14 @@ func (s *Server) handleV1FileDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Serve from the managed artifacts directory (P9-11) — the same directory
-	// builds, uploads, transfers and updates write into.
-	downloadPath := s.FilesDir() + "/" + filename
+	// builds, uploads, transfers and updates write into. P9-14: resolved through
+	// ManagedPath, so the download routes cannot drift from the constructor the
+	// write paths use.
+	downloadPath, err := s.ManagedPath(filename)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid filename")
+		return
+	}
 	http.ServeFile(w, r, downloadPath)
 }
 
@@ -251,7 +257,11 @@ func (s *Server) handleV1AgentFileDownload(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid filename")
 		return
 	}
-	downloadPath := s.FilesDir() + "/" + params.Filename
+	downloadPath, err := s.ManagedPath(params.Filename)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid filename")
+		return
+	}
 	http.ServeFile(w, r, downloadPath)
 }
 

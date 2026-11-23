@@ -33,7 +33,33 @@ func (s *Server) writeToAgentLocked(agentID string, conn Conn, v interface{}) er
 	return conn.WriteJSON(v)
 }
 
-// handleWebSocket upgrades HTTP to WebSocket, authenticates, and processes agent connections.
+// updatePromotionKillDelay is how long the server waits for the promoted agent
+// to stabilise before ordering the kill of its predecessor. A variable so the
+// completion path can be tested without a three-second sleep per run.
+var updatePromotionKillDelay = 3 * time.Second
+
+// completeUpdatePromotion is the completion half of an update: after the
+// promoted agent has reconnected, it waits for it to stabilise, orders the
+// predecessor process killed through the new connection, and clears the dead
+// `<agentID>-canary` registry row. It runs in its own goroutine from
+// handleWebSocket. Split out as a method so tests can exercise the completion
+// path directly (P9-14 / P9-12 A2: no test reached this call site).
+func (s *Server) completeUpdatePromotion(agentID string, oldPID int) {
+	time.Sleep(updatePromotionKillDelay) // give new agent time to stabilise
+	killParams := protocol.TaskStopParams{PID: oldPID, Signal: 9}
+	if _, err := s.forwardToAgentWithTimeout(agentID, protocol.TypeProcKill, killParams, 30*time.Second, ""); err != nil {
+		log.Printf("[update] failed to kill old PID %d: %v (old process may have already exited)", oldPID, err)
+	} else {
+		log.Printf("[update] successfully killed old PID %d — update complete", oldPID)
+	}
+	// The purge runs after the kill attempt on BOTH paths. A failed kill means
+	// the predecessor exited on its own — the handover still happened — and the
+	// suffixed row is dead weight that reads as a second live agent either way.
+	// P9-14: leaving it inside the success branch was defect B surviving its
+	// own fix (P9-12 A2, server_ws.go:140-148).
+	s.purgeCanaryRegistryRow(agentID)
+}
+
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Auth check — accept primary, extra, or rotated tokens
 	authHeader := r.Header.Get("Authorization")
@@ -133,20 +159,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 		// Wait a moment for the new agent to be fully ready, then kill the old process.
 		// We send proc_kill to the NEW agent (which is now connected) to kill the OLD process.
-		go func() {
-			time.Sleep(3 * time.Second) // give new agent time to stabilize
-			killParams := protocol.TaskStopParams{PID: oldPID, Signal: 9}
-			_, err := s.forwardToAgentWithTimeout(agentID, protocol.TypeProcKill, killParams, 30*time.Second, "")
-			if err != nil {
-				log.Printf("[update] failed to kill old PID %d: %v (old process may have already exited)", oldPID, err)
-			} else {
-				log.Printf("[update] successfully killed old PID %d — update complete", oldPID)
-				// The promotion is complete: the canary has stripped its suffix
-				// and registered under the canonical name. Its suffixed registry
-				// row is now dead weight that reads as a second live agent.
-				s.purgeCanaryRegistryRow(agentID)
-			}
-		}()
+		go s.completeUpdatePromotion(agentID, oldPID)
 	} else {
 		s.pendingMu.Unlock()
 	}

@@ -1,2 +1,4 @@
 node_modules/
-dist/
+# dist/ is committed: embed.go (package assets) embeds web/dist, so a clean
+# checkout must build without a node toolchain. Rebuild with `npm ci && npm run
+# build` in this directory and commit the result.
