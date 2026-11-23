@@ -54,8 +54,10 @@ func fsReadResult(data []byte, totalSize int64, offset int) protocol.FSReadResul
 		TotalSize: totalSize,
 		Offset:    offset,
 		Truncated: int64(offset)+int64(len(data)) < totalSize,
-		Sha256:    fmt.Sprintf("%x", sum),
-		Encoding:  "base64",
+		NextOffset: int64(offset) + int64(len(data)),
+		Sha256:     fmt.Sprintf("%x", sum),
+		Sha256Scope: "window",
+		Encoding:   "base64",
 	}
 }
 

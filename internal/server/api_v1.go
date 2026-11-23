@@ -313,6 +313,10 @@ func (s *Server) registerV1Routes() {
 		s.v1WrapAgentHandler("fs-stat", s.handleAgentFSStat))
 	s.mux.HandleFunc("POST /api/v1/agents/{id}/fs-hash",
 		s.v1WrapAgentHandler("fs-hash", s.handleAgentFSHash))
+	// P8-06 (P8-02 §5): raw-body streaming transport. Additive routes — no
+	// existing response shape changes, old clients never call them.
+	s.mux.HandleFunc("POST /api/v1/agents/{id}/fs/upload", s.handleV1FSRawUpload)
+	s.mux.HandleFunc("GET /api/v1/agents/{id}/fs/download", s.handleV1FSDownload)
 	s.mux.HandleFunc("POST /api/v1/agents/{id}/fs-move",
 		s.v1Forward("fs-move", protocol.TypeFSMove, true))
 	s.mux.HandleFunc("POST /api/v1/agents/{id}/fs-mkdir",

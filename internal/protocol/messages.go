@@ -355,6 +355,13 @@ type FSListResult struct {
 	// Count is len(Entries): a caller must not have to trust the array it
 	// received as proof the listing was complete.
 	Count int `json:"count"`
+	// P8-06 (P8-02 §4.1): every fs-* response proves what it conveys.
+	// EntryCount is the same number under the name the contract uses for
+	// listings (a listing has no `size`).
+	EntryCount int `json:"entry_count"`
+	// Sha256 covers the canonical JSON of Entries; Sha256Scope declares that.
+	Sha256      string `json:"sha256"`
+	Sha256Scope string `json:"sha256_scope"`
 }
 
 type FSStatResult struct {
@@ -363,6 +370,10 @@ type FSStatResult struct {
 	ModTime int64  `json:"mod_time"`
 	IsDir   bool   `json:"is_dir"`
 	Exists  bool   `json:"exists"`
+	// P8-06 (P8-02 §4.1): the digest covers the canonical JSON of this record
+	// (fs-stat conveys metadata, not file bytes); scope names that.
+	Sha256      string `json:"sha256"`
+	Sha256Scope string `json:"sha256_scope"`
 }
 
 // FSReadResult carries the integrity of the window that was actually returned.
@@ -376,6 +387,12 @@ type FSReadResult struct {
 	Truncated bool   `json:"truncated"`
 	Sha256    string `json:"sha256"` // lowercase hex of the returned window
 	Encoding  string `json:"encoding"`
+	// P8-06 (P8-02 §4.1/§4.3.1): scope names what Sha256 covers, and
+	// NextOffset is the byte to continue from. It is always present (equal to
+	// offset+size) so a tailer never has to derive it; when Truncated is true
+	// it is the only correct continuation point.
+	Sha256Scope string `json:"sha256_scope"`
+	NextOffset  int64  `json:"next_offset"`
 }
 
 // FSWriteResult carries the post-write proof: size and digest are read back
@@ -386,6 +403,9 @@ type FSWriteResult struct {
 	Size     int64  `json:"size"`
 	Sha256   string `json:"sha256"`
 	Verified bool   `json:"verified"`
+	// P8-06 (P8-02 §4.1): scope of Sha256. The write path digests the file on
+	// disk after the write, so the honest scope is "file", never "window".
+	Sha256Scope string `json:"sha256_scope"`
 }
 
 type FSDeleteResult struct {
@@ -408,6 +428,8 @@ type FSHashResult struct {
 	Path string `json:"path"`
 	Hash string `json:"sha256"`
 	Size int64  `json:"size"`
+	// P8-06 (P8-02 §4.1): this digest is the whole file.
+	Sha256Scope string `json:"sha256_scope"`
 }
 
 type ScreenParams struct {

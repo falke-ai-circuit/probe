@@ -13,6 +13,26 @@ import (
 )
 
 
+// writeToAgentLocked writes a control reply on an agent connection under the
+// same per-connection mutex forwardToAgent uses. gorilla's Conn is not safe for
+// concurrent writers; one unlocked writer is enough to panic the process
+// ("concurrent write to websocket connection") and take every agent with it.
+// Relayed connections own their locking internally, so they are not double-locked.
+func (s *Server) writeToAgentLocked(agentID string, conn Conn, v interface{}) error {
+	if _, isVirtual := conn.(*virtualConn); isVirtual {
+		return conn.WriteJSON(v)
+	}
+	s.mu.RLock()
+	mu := s.connWriteMu[agentID]
+	s.mu.RUnlock()
+	if mu == nil {
+		return conn.WriteJSON(v)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	return conn.WriteJSON(v)
+}
+
 // handleWebSocket upgrades HTTP to WebSocket, authenticates, and processes agent connections.
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Auth check — accept primary, extra, or rotated tokens
@@ -200,7 +220,15 @@ func (s *Server) handleMessages(agentID string, conn *websocket.Conn) {
 		switch env.Type {
 		case protocol.TypePing:
 			pong := protocol.NewPong(env.ID)
-			conn.WriteJSON(pong)
+			// P8-06 (P8-16 crash evidence): this was the only server-side
+			// WebSocket write that did not take the per-connection write mutex.
+			// A pong landing while forwardToAgent was writing an fs-write
+			// response is exactly the "concurrent write to websocket
+			// connection" panic at gorilla flushFrame. Every writer on a
+			// connection serializes through connWriteMu, so the race cannot
+			// form — for any payload size, which is why chunk size was never
+			// the real threshold.
+			s.writeToAgentLocked(agentID, conn, pong)
 			s.registry.Heartbeat(agentID)
 
 		case protocol.TypePong:

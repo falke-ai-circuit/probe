@@ -26,6 +26,9 @@ type FileTransfer struct {
 	AgentID    string    `json:"agent_id"`
 	Direction  string    `json:"direction"`   // "upload" (server→agent) or "download" (agent→server)
 	RemotePath string    `json:"remote_path"`
+	// PartPath is the "<path>.part" the raw upload writes into until the whole
+	// file is verified (P8-06 §5.1.3). Empty for legacy chunked transfers.
+	PartPath   string    `json:"part_path,omitempty"`
 	TotalSize  int64     `json:"total_size"`
 	Offset     int64     `json:"offset"`      // current offset (for resume)
 	ChunkSize  int       `json:"chunk_size"`
@@ -114,6 +117,51 @@ func (tm *TransferManager) Create(agentID, direction, remotePath, localPath stri
 	tm.save()
 
 	return transfer, nil
+}
+
+// TrackRawUpload registers (or advances) the session record for a raw-body
+// upload so GET /api/v1/transfers/{id} can report offset/percent for it. The
+// raw path is the §5.1 extension of this manager, not a second subsystem: the
+// bytes move through fs-write chunks, this only keeps the record.
+func (tm *TransferManager) TrackRawUpload(agentID, remotePath, partPath string, total, offset int64) *FileTransfer {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	for _, t := range tm.transfers {
+		if t.AgentID == agentID && t.RemotePath == remotePath && t.Direction == "upload" &&
+			t.Status != "completed" && t.Status != "failed" && t.Status != "cancelled" {
+			t.Offset = offset
+			if total > 0 {
+				t.TotalSize = total
+			}
+			t.PartPath = partPath
+			t.UpdatedAt = time.Now().UTC()
+			if total > 0 && offset >= total {
+				t.Status = "completed"
+			} else {
+				t.Status = "transferring"
+			}
+			tm.saveLocked()
+			return t
+		}
+	}
+	t := &FileTransfer{
+		ID:         generateTransferID(),
+		AgentID:    agentID,
+		Direction:  "upload",
+		RemotePath: remotePath,
+		PartPath:   partPath,
+		TotalSize:  total,
+		Offset:     offset,
+		Status:     "transferring",
+		CreatedAt:  time.Now().UTC(),
+		UpdatedAt:  time.Now().UTC(),
+	}
+	if total > 0 && offset >= total {
+		t.Status = "completed"
+	}
+	tm.transfers[t.ID] = t
+	tm.saveLocked()
+	return t
 }
 
 // Get returns a transfer by ID.

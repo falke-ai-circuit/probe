@@ -362,10 +362,44 @@ func (s *Server) handleAgentFSRead(w http.ResponseWriter, r *http.Request, agent
 		return
 	}
 
+	// P8-06 (P8-02 §4.3.2): the server-side cap. A caller that asks for no
+	// limit on a file larger than the cap gets a declared window instead of a
+	// whole-file buffer. PROBE_FS_READ_MAX_BYTES=0 restores unlimited.
+	if maxBytes := fsReadMaxBytes(); maxBytes > 0 {
+		if params.Limit <= 0 || int64(params.Limit) > maxBytes {
+			params.Limit = int(maxBytes)
+		}
+	}
+
 	resp, err := s.forwardToAgent(agentID, protocol.TypeFSRead, params)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
+	}
+	// P8-06 (P8-02 §4.3.1): truncated=true always carries next_offset. An agent
+	// from before this unit does not send it, so the server derives the
+	// continuation point from the window it actually received — the field is
+	// present on every fs-read response the v1 surface returns.
+	if m, ok := resp.(map[string]interface{}); ok {
+		if truncated, _ := m["truncated"].(bool); truncated {
+			if _, has := m["next_offset"]; !has {
+				offset := 0
+				if v, ok := m["offset"].(float64); ok {
+					offset = int(v)
+				}
+				window := 0
+				if enc, ok := m["data"].(string); ok {
+					window = len(enc) / 4 * 3
+				}
+				if v, ok := m["size"].(float64); ok {
+					window = int(v)
+				}
+				m["next_offset"] = float64(offset + window)
+			}
+			if _, has := m["sha256_scope"]; !has {
+				m["sha256_scope"] = "window"
+			}
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)

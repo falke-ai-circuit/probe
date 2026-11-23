@@ -732,10 +732,30 @@ func (a *Agent) handleFSList(env protocol.Envelope) protocol.Envelope {
 		}
 		return protocol.NewError(env.ID, protocol.ErrInternal, err.Error())
 	}
-	return protocol.NewResult(env.ID, protocol.TypeFSListResult, protocol.FSListResult{
-		Entries: entries,
-		Count:   len(entries),
-	})
+	return protocol.NewResult(env.ID, protocol.TypeFSListResult, withListingDigest(entries))
+}
+
+// withListingDigest stamps the entry count and the digest of the canonical JSON
+// of the entries on a listing (P8-06 / P8-02 §4.1). A listing conveys no file
+// bytes, so the thing it can prove is the exact array that was returned: a
+// caller that hashes the entries it received and compares gets a real equality
+// check instead of a claim.
+func withListingDigest(entries []protocol.FSEntry) protocol.FSListResult {
+	if entries == nil {
+		entries = []protocol.FSEntry{}
+	}
+	canonical, err := json.Marshal(entries)
+	res := protocol.FSListResult{
+		Entries:     entries,
+		Count:       len(entries),
+		EntryCount:  len(entries),
+		Sha256Scope: "listing",
+	}
+	if err == nil {
+		sum := sha256.Sum256(canonical)
+		res.Sha256 = fmt.Sprintf("%x", sum)
+	}
+	return res
 }
 
 func (a *Agent) handleFSStat(env protocol.Envelope) protocol.Envelope {
@@ -751,6 +771,17 @@ func (a *Agent) handleFSStat(env protocol.Envelope) protocol.Envelope {
 			return protocol.NewError(env.ID, protocol.ErrTimeout, err.Error())
 		}
 		return protocol.NewError(env.ID, protocol.ErrInternal, err.Error())
+	}
+	// P8-06 (P8-02 §4.1): fs-stat conveys metadata, so the digest covers the
+	// canonical JSON of the record it is about to return. Computed over the
+	// zero-valued digest fields so the hash is a function of the record alone.
+	stamp := result
+	stamp.Sha256 = ""
+	stamp.Sha256Scope = ""
+	if canonical, err := json.Marshal(stamp); err == nil {
+		sum := sha256.Sum256(canonical)
+		result.Sha256 = fmt.Sprintf("%x", sum)
+		result.Sha256Scope = "listing"
 	}
 	return protocol.NewResult(env.ID, protocol.TypeFSStatResult, result)
 }
@@ -825,6 +856,7 @@ func (a *Agent) handleFSWrite(env protocol.Envelope) protocol.Envelope {
 	size, sum := dig.Size, dig.Sum
 	result.Size = size
 	result.Sha256 = sum
+	result.Sha256Scope = "file" // sha256 is the whole file on disk after the write
 	result.Verified = true
 	if params.ExpectedSize != nil && size != *params.ExpectedSize {
 		return protocol.NewError(env.ID, protocol.ErrFSWriteSizeMismatch,
@@ -942,9 +974,10 @@ func (a *Agent) handleFSHash(env protocol.Envelope) protocol.Envelope {
 			return protocol.FSHashResult{}, err
 		}
 		return protocol.FSHashResult{
-			Path: params.Path,
-			Hash: fmt.Sprintf("%x", h.Sum(nil)),
-			Size: info.Size(),
+			Path:        params.Path,
+			Hash:        fmt.Sprintf("%x", h.Sum(nil)),
+			Size:        info.Size(),
+			Sha256Scope: "file",
 		}, nil
 	})
 	if err != nil {
