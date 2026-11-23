@@ -53,6 +53,10 @@ var appVersion = version.Display()
 // clientFlags holds the parsed command line for the probe-client entrypoint.
 type clientFlags struct {
 	configPath   string
+	// configExplicit records whether --config was actually passed. The default
+	// value "probe-client.json" is a filename, not a decision: resolution must
+	// be able to tell "the operator named this file" from "nobody said".
+	configExplicit bool
 	canary       bool
 	canaryOldPID int
 }
@@ -74,6 +78,11 @@ func parseClientArgs(argv []string) (clientFlags, error) {
 	if err := fs.Parse(argv); err != nil {
 		return out, err
 	}
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "config" {
+			out.configExplicit = true
+		}
+	})
 	if fs.NArg() > 0 {
 		return out, fmt.Errorf("unexpected arguments: %v", fs.Args())
 	}
@@ -225,7 +234,28 @@ func runClient() {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	configPath := opts.configPath
+	// Resolve the config file this process ACTUALLY uses, in the fixed order:
+	// explicit --config → probe-client.json beside the exe → <exe>.json beside
+	// the exe → the only .json beside the exe → embedded build config. The
+	// resolved path is remembered (agent.Config.ConfigPath) so the updater can
+	// hand it to the canary explicitly; without it an agent-named install
+	// (probe-V6049A-EAS1.exe + probe-V6049A-EAS1.json) launches a canary that
+	// falls back to probe-client.json and dies.
+	exePath, exeErr := os.Executable()
+	if exeErr != nil {
+		exePath = ""
+	}
+	explicitConfig := ""
+	if opts.configExplicit {
+		explicitConfig = opts.configPath
+	}
+	configPath, configSource, resolveErr := agent.ResolveConfigPath(explicitConfig, exePath, configB64 != "")
+	if resolveErr != nil {
+		printUsage()
+		fmt.Fprintf(os.Stderr, "Error: %v\n", resolveErr)
+		os.Exit(1)
+	}
+	log.Printf("config: %s (%s)", configPath, configSource)
 
 	// Read config: prefer ldflags-injected base64 config, fall back to JSON file.
 	var fcfg ConfigFile
@@ -324,6 +354,7 @@ func runClient() {
 		SandboxDir:      fcfg.SandboxDir,
 		Capabilities:    fcfg.Capabilities,
 		ConfigPath:      configPath,
+		EmbeddedConfig:  configB64 != "",
 		CanaryMode:      opts.canary,
 		CanaryOldPID:    opts.canaryOldPID,
 	}

@@ -55,10 +55,40 @@ func runConnect(args []string) {
 	canaryOldPID := fs.Int("canary-old-pid", 0, "PID of the old process to stop after a successful swap")
 	fs.Parse(args)
 
+	// configExplicit records whether --config was passed at all: the default
+	// "probe-client.json" is a filename, not an operator decision.
+	configExplicit := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "config" {
+			configExplicit = true
+		}
+	})
+
 	if *showVersion {
 		fmt.Printf("PROBE Client %s\n", appVersion)
 		os.Exit(0)
 	}
+
+	// Resolve the config file this process ACTUALLY uses (explicit --config →
+	// probe-client.json → <exe>.json → the only .json → embedded) and remember
+	// it, so a canary launched by the updater gets an explicit --config instead
+	// of a default filename an agent-named install does not have.
+	exePath, exeErr := os.Executable()
+	if exeErr != nil {
+		exePath = ""
+	}
+	explicitConfig := ""
+	if configExplicit {
+		explicitConfig = *configPath
+	}
+	resolvedConfig, configSource, resolveErr := agent.ResolveConfigPath(explicitConfig, exePath, configB64 != "")
+	if resolveErr != nil {
+		printConnectUsage()
+		fmt.Fprintf(os.Stderr, "Error: %v\n", resolveErr)
+		os.Exit(1)
+	}
+	*configPath = resolvedConfig
+	log.Printf("config: %s (%s)", resolvedConfig, configSource)
 
 	// Read config: prefer ldflags-injected base64 config, fall back to JSON file.
 	var fcfg ConfigFile
@@ -154,6 +184,7 @@ func runConnect(args []string) {
 		SandboxDir:     fcfg.SandboxDir,
 		Capabilities:   fcfg.Capabilities,
 		ConfigPath:     *configPath,
+		EmbeddedConfig: configB64 != "",
 		CanaryMode:     *canaryMode,
 		CanaryOldPID:   *canaryOldPID,
 	}

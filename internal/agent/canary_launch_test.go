@@ -99,8 +99,11 @@ func TestStartCanaryCapturesOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, gotLog, err := StartCanary(next, canonical, "/opt/probe/cfg.json", 1234); err != nil {
-		t.Fatalf("StartCanary: %v", err)
+	// A canary that exits is a failed update (P9-19): StartCanary must report an
+	// error, so the server records a failure instead of "waiting for new agent
+	// to connect" forever. The capture assertions below run on the same log.
+	if _, gotLog, err := StartCanary(next, canonical, "/opt/probe/cfg.json", 1234); err == nil {
+		t.Fatal("StartCanary returned nil error for a canary that exited")
 	} else if gotLog != logPath {
 		t.Fatalf("log path = %q, want %q", gotLog, logPath)
 	}

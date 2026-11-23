@@ -155,9 +155,16 @@ type Config struct {
 	// server on connect (e.g. "exec", "filesystem", "capture"). When empty,
 	// the server treats the agent as having all capabilities (backward compat).
 	Capabilities []string
-	// ConfigPath is the path to the config file used to start this agent.
-	// Used by reconfigure to save updated config back to disk.
+	// ConfigPath is the path to the config file used to start this agent,
+	// resolved at startup by ResolveConfigPath (explicit flag, probe-client.json,
+	// agent-named <exe>.json, the single .json beside the exe). It is empty when
+	// the build carries EmbeddedConfig instead. The updater hands this exact path
+	// to the canary — never the child's default filename.
 	ConfigPath string
+	// EmbeddedConfig is true when the settings were compiled into the binary
+	// (-X main.configB64). Such a build needs no config file, so a canary may be
+	// launched without --config.
+	EmbeddedConfig bool
 	// StateDir is where durable agent state lives — for P8-04, detached job
 	// spools. Empty resolves to PROBE_STATE_DIR, then <ConfigPath dir>/state,
 	// then ./probe-state. It must be stable across restarts: job_status is

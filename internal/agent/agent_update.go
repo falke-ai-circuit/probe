@@ -35,16 +35,26 @@ func (a *Agent) handleAgentUpdate(env protocol.Envelope) protocol.Envelope {
 
 	log.Printf("[update] received update command: version=%s, file=%s, ws_path=%q", params.Version, params.Filename, params.WSPath)
 
+	// Resolve the config path BEFORE anything touches the disk: a canary that
+	// cannot read its config cannot prove health, so staging it is pointless and
+	// leaves a .next file behind. The v1.19.1 field defect was staging + launch
+	// with an empty config path, which the child turned into the default
+	// filename and exited on.
+	configPath, cfgErr := a.resolvedConfigPath()
+	if cfgErr != nil {
+		return a.abortUpdateForConfig(env, cfgErr)
+	}
+
 	// If WSPath is set, the server pre-staged the binary at this path via WS
 	// file_save chunks. Use it directly instead of HTTP-downloading.
 	if params.WSPath != "" {
-		return a.handleAgentUpdateFromWSPath(env, params)
+		return a.handleAgentUpdateFromWSPath(env, params, configPath)
 	}
 
 	// Step 1: Download the new binary
 	// Use a temp path in the same directory as the current exe to ensure
 	// the rename works (rename fails across volumes).
-	currentExe, _ := os.Executable()
+	currentExe, _ := executablePath()
 	// Derive the canonical path: strip a stale ".next" suffix (Windows returns the
 	// load-time path after a self-promotion swap renames the running exe).
 	currentExe = strings.TrimSuffix(currentExe, ".next")
@@ -121,9 +131,9 @@ func (a *Agent) handleAgentUpdate(env protocol.Envelope) protocol.Envelope {
 	}
 	os.Remove(tmpPath) // clean up temp file if rename left it
 
-	// Step 5: Start new binary with same config + same args
-	// Pass the config path that was used to start this process
-	configPath := getConfigPath()
+	// Step 5: Start new binary with the config path resolved above. The child
+	// gets it explicitly on the command line: it must never depend on its own CWD
+	// or on a default filename that agent-named installs do not have.
 
 	// Start the new binary as a CANARY: it connects under a distinct name,
 	// proves it is healthy, then swaps itself into the canonical path and stops
@@ -132,6 +142,7 @@ func (a *Agent) handleAgentUpdate(env protocol.Envelope) protocol.Envelope {
 	newPID, canaryLog, err := StartCanary(newExePath, currentExe, configPath, oldPID)
 	if err != nil {
 		os.Remove(newExePath)
+		a.reportUpdateFailure(env, fmt.Sprintf("update failed: %v", err))
 		return canaryStartError(env.ID, err, canaryLog)
 	}
 
@@ -156,7 +167,7 @@ func (a *Agent) handleAgentUpdate(env protocol.Envelope) protocol.Envelope {
 // the transfer manager; we still re-verify as defense-in-depth, then rename
 // the current binary as backup, move the new one into place, start it, and
 // return the old PID so the server can kill us when the new agent connects.
-func (a *Agent) handleAgentUpdateFromWSPath(env protocol.Envelope, params protocol.AgentUpdateParams) protocol.Envelope {
+func (a *Agent) handleAgentUpdateFromWSPath(env protocol.Envelope, params protocol.AgentUpdateParams, configPath string) protocol.Envelope {
 	log.Printf("[update] using WS-pre-staged binary at %s", params.WSPath)
 
 	// Defense-in-depth SHA256 verify
@@ -179,7 +190,7 @@ func (a *Agent) handleAgentUpdateFromWSPath(env protocol.Envelope, params protoc
 	// Step 1: Determine target path on disk — stage next to the current binary
 	// with a ".next" suffix so the canary can swap atomically into the canonical
 	// path after proving healthy.
-	currentExe, _ := os.Executable()
+	currentExe, _ := executablePath()
 	// Derive the canonical path: strip a stale ".next" suffix (Windows returns the
 	// load-time path after a self-promotion swap renames the running exe).
 	currentExe = strings.TrimSuffix(currentExe, ".next")
@@ -194,12 +205,13 @@ func (a *Agent) handleAgentUpdateFromWSPath(env protocol.Envelope, params protoc
 	}
 	log.Printf("[update] staged binary moved to %s", newExePath)
 
-	// Step 3: Start new binary as a canary (prove healthy → swap → stop old).
-	configPath := getConfigPath()
+	// Step 3: Start new binary as a canary (prove healthy → swap → stop old), with
+// the config path resolved before staging.
 	oldPID := os.Getpid()
 	newPID, canaryLog, err := StartCanary(newExePath, currentExe, configPath, oldPID)
 	if err != nil {
 		os.Remove(newExePath)
+		a.reportUpdateFailure(env, fmt.Sprintf("update failed: %v", err))
 		return canaryStartError(env.ID, err, canaryLog)
 	}
 
@@ -214,6 +226,48 @@ func (a *Agent) handleAgentUpdateFromWSPath(env protocol.Envelope, params protoc
 	return protocol.NewResult(env.ID, protocol.TypeAgentUpdateResult, result)
 }
 
+// executablePath is the seam tests use to point the updater at a temporary
+// install directory. Production reads os.Executable() — the same value the
+// running process reports on Windows and Unix.
+// (declared in jobs_launch.go, shared with the guardian spawner)
+
+// abortUpdateForConfig refuses an update whose canary would have no config file
+// to read. It runs before anything is staged: no .next file, no temp download,
+// no backup rename — the host is left exactly as it was.
+//
+// The refusal is reported to the server as a failed agent_update_result (with
+// the "config not found" reason) and returned as the RPC error, so the operator
+// sees a failure instead of "old PID recorded, waiting for new agent to
+// connect" forever.
+func (a *Agent) abortUpdateForConfig(env protocol.Envelope, cause error) protocol.Envelope {
+	msg := "update aborted: " + cause.Error()
+	log.Printf("[update] %s", msg)
+	a.reportUpdateFailure(env, msg)
+	return protocol.NewError(env.ID, protocol.ErrInternal, msg)
+}
+
+// reportUpdateFailure sends an agent_update_result with Success=false over the
+// live connection, which makes the server log the reason (handleAgentUpdateResult)
+// and release the artifact retention pin. Missing connection is not fatal: the
+// returned error envelope still carries the message to the API caller.
+func (a *Agent) reportUpdateFailure(env protocol.Envelope, message string) {
+	a.mu.Lock()
+	conn := a.conn
+	a.mu.Unlock()
+	if conn == nil {
+		log.Printf("[update] no live connection to report update failure: %s", message)
+		return
+	}
+	result := protocol.AgentUpdateResult{
+		Success: false,
+		OldPID:  os.Getpid(),
+		Message: message,
+	}
+	if err := a.writeMessage(conn, protocol.NewResult(env.ID, protocol.TypeAgentUpdateResult, result)); err != nil {
+		log.Printf("[update] could not report update failure to server: %v", err)
+	}
+}
+
 // hashFile computes the SHA256 hex digest of a file.
 func hashFile(path string) (string, error) {
 	f, err := os.Open(path)
@@ -226,25 +280,6 @@ func hashFile(path string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
-// getConfigPath extracts the -config flag value from os.Args.
-// Falls back to "probe-client.json" if not found.
-func getConfigPath() string {
-	for i, arg := range os.Args {
-		if arg == "-config" || arg == "--config" {
-			if i+1 < len(os.Args) {
-				return os.Args[i+1]
-			}
-		}
-		if len(arg) > 8 && arg[:8] == "-config=" {
-			return arg[8:]
-		}
-		if len(arg) > 9 && arg[:9] == "--config=" {
-			return arg[9:]
-		}
-	}
-	return "probe-client.json"
 }
 
 // getSysProcAttr is defined in sysprocattr_windows.go / sysprocattr_other.go
