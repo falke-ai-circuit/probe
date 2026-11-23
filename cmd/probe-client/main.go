@@ -194,6 +194,12 @@ func main() {
 		runGuardian(os.Args[2:])
 		return
 	}
+	// P8-07: the SSH helper is a subcommand of this binary, not a separate
+	// executable and not a runtime-compiled password helper. The credential
+	// arrives on stdin.
+	if len(os.Args) > 1 && os.Args[1] == "ssh" {
+		os.Exit(agent.RunSSH(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
+	}
 	runClient()
 }
 

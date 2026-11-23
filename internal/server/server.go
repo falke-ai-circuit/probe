@@ -159,6 +159,14 @@ type Server struct {
 	// When active, incoming binary messages are decrypted and outgoing
 	// messages are encrypted. Relays see only encrypted bytes.
 	e2eMgr *cryptomanager.Manager
+
+	// P8-07 (P8-02 §6): write-only credential vault, single-use handle
+	// registry, and the redactor every sink in a credential call passes
+	// through. credStore is opened lazily — see (*Server).credentials().
+	credMu      sync.Mutex
+	credStore   *CredentialStore
+	credHandles *handleRegistry
+	redactor    *Redactor
 }
 
 // startTime records when the server process began, used by /health for uptime.
@@ -196,6 +204,8 @@ func NewServer(addr string, token string, registryPath string) *Server {
 		tasks:           NewTaskManager("", nil),
 		transferMgr:     NewTransferManager(""),
 		loginLimiter:    newLoginRateLimiter(),
+		credHandles:     newHandleRegistry(),
+		redactor:        NewRedactor(),
 	}
 }
 
@@ -276,6 +286,10 @@ func (s *Server) GetForwardPolicies() map[string]string {
 // encrypted with AES-GCM using a key derived from the token.
 func (s *Server) SetE2E(token string, enabled bool) {
 	s.e2eMgr = cryptomanager.NewManager(token, enabled)
+	// P8-07: the handle registry and redactor are process-wide; the store is
+	// opened on first use so an unconfigured server never touches /var/lib.
+	s.credHandles = newHandleRegistry()
+	s.redactor = NewRedactor()
 	if s.e2eMgr.IsActive() {
 		log.Printf("[server] E2E encryption enabled (AES-256-GCM)")
 	}

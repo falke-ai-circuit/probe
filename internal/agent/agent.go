@@ -243,6 +243,11 @@ type Agent struct {
 	// When active, all outgoing messages are encrypted and incoming
 	// messages are decrypted. Relays see only encrypted bytes.
 	e2eMgr *cryptomanager.Manager
+
+	// P8-07: live credential values waiting for the exec that names them.
+	// Held only in memory, zeroed after the child exits.
+	credMu      sync.Mutex
+	credPending map[string]*pendingCredential
 }
 
 // writeMessage sends a WebSocket message with write mutex protection.
@@ -587,6 +592,9 @@ var cmdTable = map[string]func(*Agent, protocol.Envelope) protocol.Envelope{
 	// P8-04: detached job queries, answered from the spool file.
 	protocol.TypeJobStatus: (*Agent).handleJobStatus,
 	protocol.TypeJobLog:    (*Agent).handleJobLog,
+	// P8-07: the credential handle arrives as its own envelope, immediately
+	// before the exec that references it by name.
+	protocol.TypeCredentialDeliver: (*Agent).handleCredentialDeliver,
 }
 
 func (a *Agent) handleCommand(conn *websocket.Conn, env protocol.Envelope) {
@@ -693,7 +701,39 @@ func (a *Agent) handleExec(env protocol.Envelope) protocol.Envelope {
 		params.Timeout = maxTimeout
 	}
 	start := time.Now()
-	result, err := a.plat.Exec(params.Command, params.Timeout, params.WorkDir, params.Env)
+	// P8-07: a named credential is consumed from memory and handed to the
+	// child on stdin (default) or in its environment (documented fallback).
+	// Either way it is absent from argv; only the NAME appears in the command.
+	var result protocol.ExecResult
+	if name := strings.TrimSpace(params.Credential); name != "" {
+		pc, expired := a.takeCredential(name)
+		if expired {
+			return protocol.NewError(env.ID, protocol.ErrCredentialExpired,
+				fmt.Sprintf("credential handle for %q expired; the server may re-mint once", name))
+		}
+		if pc == nil {
+			return protocol.NewError(env.ID, protocol.ErrCredentialUnknown,
+				fmt.Sprintf("no delivered handle for credential %q on this agent", name))
+		}
+		// The buffer is zeroed on every exit path after this point.
+		defer zeroCredential(pc.value)
+		if strings.EqualFold(pc.Mode, "env") {
+			if params.Env == nil {
+				params.Env = map[string]string{}
+			}
+			params.Env["PROBE_CREDENTIAL"] = string(pc.value)
+			result, err = a.plat.Exec(params.Command, params.Timeout, params.WorkDir, params.Env)
+		} else {
+			result, err = platform.ExecWithStdin(params.Command, params.Timeout, params.WorkDir, params.Env, pc.value)
+		}
+		// Scrub at the source: whatever the child printed, the secret cannot
+		// reach the response, the job spool or the agent's own log. The
+		// server-side redactor is the second layer, not the only one.
+		result.Stdout = scrubSecret(result.Stdout, pc.value)
+		result.Stderr = scrubSecret(result.Stderr, pc.value)
+	} else {
+		result, err = a.plat.Exec(params.Command, params.Timeout, params.WorkDir, params.Env)
+	}
 	if err != nil {
 		return protocol.NewError(env.ID, protocol.ErrInternal, err.Error())
 	}

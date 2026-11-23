@@ -317,6 +317,9 @@ func (s *Server) registerV1Routes() {
 	// existing response shape changes, old clients never call them.
 	s.mux.HandleFunc("POST /api/v1/agents/{id}/fs/upload", s.handleV1FSRawUpload)
 	s.mux.HandleFunc("GET /api/v1/agents/{id}/fs/download", s.handleV1FSDownload)
+	// P8-07 (§6 C-CRED): write-only credential store. PUT writes, GET is
+	// metadata-only by type construction.
+	s.registerCredentialRoutes()
 	s.mux.HandleFunc("POST /api/v1/agents/{id}/fs-move",
 		s.v1Forward("fs-move", protocol.TypeFSMove, true))
 	s.mux.HandleFunc("POST /api/v1/agents/{id}/fs-mkdir",

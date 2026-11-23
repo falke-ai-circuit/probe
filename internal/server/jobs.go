@@ -212,7 +212,9 @@ func (s *Server) handleV1JobLog() http.HandlerFunc {
 			writeError(w, http.StatusServiceUnavailable, "AGENT_UNREACHABLE", err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, resp)
+		// P8-07: the job log is one of the four sinks; it passes through the
+		// same redactor as the response body.
+		writeJSON(w, http.StatusOK, s.redactValue(resp))
 	}
 }
 

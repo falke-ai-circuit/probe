@@ -248,6 +248,13 @@ type ExecParams struct {
 	// the job finished. JobTimeoutS bounds the detached job itself (0 =
 	// the caller's Timeout, or defaultTimeout when that is also 0).
 	Detach      bool   `json:"detach,omitempty"`
+
+	// P8-07 (P8-02 §6.2): a credential is referenced by NAME, never by value.
+	// The value travels in a separate TypeCredentialDeliver envelope delivered
+	// immediately before this exec. CredentialMode is "stdin" (default) or
+	// "env"; stdin is the default because it is absent from argv.
+	Credential     string `json:"credential,omitempty"`
+	CredentialMode string `json:"credential_mode,omitempty"`
 	OnDeath     string `json:"on_death,omitempty"`
 	JobTimeoutS int    `json:"job_timeout_s,omitempty"`
 }

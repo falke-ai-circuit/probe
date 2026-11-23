@@ -6,12 +6,18 @@ package agent
 // command unelevated as flk) is refused instead of producing a false success.
 const CapExecSystem = "exec.system"
 
+// CapCredential is advertised by every v1.19+ agent that implements credential
+// delivery (P8-07). The server gates a referenced credential on this marker:
+// an agent without it would ignore the handle and run the command with no
+// login, which is the silent false success the unit exists to prevent.
+const CapCredential = "credential"
+
 // defaultCapabilities is what a v1.19 agent advertises when the config leaves
 // Capabilities empty (empty historically meant "all"). The list mirrors the
 // commands this binary implements plus the new contract marker.
 var defaultCapabilities = []string{
 	"exec", "filesystem", "process", "tunnel", "mitm", "debug",
-	"capture", "input", "clipboard", CapExecSystem,
+	"capture", "input", "clipboard", CapExecSystem, CapCredential,
 }
 
 // advertisedCapabilities returns the capability list to publish on connect.

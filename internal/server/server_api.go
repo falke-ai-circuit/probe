@@ -227,7 +227,53 @@ func (s *Server) handleAgentExec(w http.ResponseWriter, r *http.Request, agentID
 	}
 
 	timeout := time.Duration(params.Timeout) * time.Second
-	resp, err := s.forwardToAgentWithTimeout(agentID, protocol.TypeExec, params, timeout, operatorIDFromRequest(r))
+
+	// P8-07 (§6 C-CRED): a referenced credential is resolved to a sealed,
+	// single-use handle here and delivered in its OWN envelope immediately
+	// before the exec. The value never enters params (params are audited by
+	// design), and the redactor is seeded for the duration of the call.
+	var credRef string
+	var credHits0 int64
+	var credCleanups []func()
+	defer func() {
+		for _, f := range credCleanups {
+			f()
+		}
+	}()
+	if name := strings.TrimSpace(params.Credential); name != "" {
+		ref, cleanup, cerr := s.sealCredentialForExec(agentID, name, "", params.CredentialMode)
+		if cerr != nil {
+			writeTypedErrorDetail(w, cerr.Status, cerr.Code, cerr.Message, map[string]interface{}{
+				"call":       "exec",
+				"agent_id":   agentID,
+				"credential": name,
+				"ran":        false,
+				"exit_code":  nil,
+			})
+			return
+		}
+		credRef = ref
+		credHits0 = s.redactor.Hits()
+		credCleanups = append(credCleanups, cleanup)
+	}
+
+	var resp interface{}
+	for attempt := 0; attempt < 2; attempt++ {
+		resp, err = s.forwardToAgentWithTimeout(agentID, protocol.TypeExec, params, timeout, operatorIDFromRequest(r))
+		if err != nil || !isCredentialExpired(resp) {
+			break
+		}
+		// §6.3(5): an expired handle is re-minted exactly once. Prompting is
+		// not a fallback this server has.
+		if attempt == 0 {
+			ref, cleanup, cerr := s.sealCredentialForExec(agentID, strings.TrimSpace(params.Credential), "", params.CredentialMode)
+			if cerr != nil {
+				break
+			}
+			credRef = ref
+			credCleanups = append(credCleanups, cleanup)
+		}
+	}
 	if err != nil {
 		// Amendment A-1: a call that did not produce a result is never a 200.
 		if strings.Contains(err.Error(), "timed out") {
@@ -272,7 +318,8 @@ func (s *Server) handleAgentExec(w http.ResponseWriter, r *http.Request, agentID
 			status := http.StatusInternalServerError
 			switch code {
 			case protocol.ErrElevationUnavailable, protocol.ErrUnsupportedAgent,
-				protocol.ErrGuardianUnavailable, "CAPABILITY_MISSING":
+				protocol.ErrGuardianUnavailable, "CAPABILITY_MISSING",
+				protocol.ErrCredentialExpired:
 				status = http.StatusConflict
 			case protocol.ErrTimeout:
 				status = http.StatusGatewayTimeout
@@ -305,8 +352,23 @@ func (s *Server) handleAgentExec(w http.ResponseWriter, r *http.Request, agentID
 	// P8-04: remember a detached launch as a witness record. Foreground exec
 	// responses carry no job_id and are ignored.
 	s.recordDetachedJob(agentID, resp)
+	// P8-07: the credential result is metadata — name, handle ref, whether it
+	// was used, and how many redactions the call performed. The value is not
+	// an input to this struct.
+	if credRef != "" {
+		if m, ok := resp.(map[string]interface{}); ok {
+			m["credential"] = credentialResult{
+				Name:     params.Credential,
+				Ref:      credRef,
+				Used:     true,
+				Redacted: int(s.redactor.Hits() - credHits0),
+			}
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	// Every response in this path leaves through the redactor, so a handler
+	// that echoed the value would still be filtered at the last hop.
+	w.Write(s.redactBody(resp))
 }
 
 // hasCapabilityStrict reports whether cap is listed explicitly. It differs
