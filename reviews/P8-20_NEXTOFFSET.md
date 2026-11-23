@@ -1,7 +1,11 @@
 # P8-20 — C1 fix: fs-read next_offset for non-zero offsets on v1.18.6 agents
 
 Unit: P8-20 · owner coder · repo /opt/data/projects/PROBE_UPGRADE/v119wt · branch r119-build
-Start HEAD: 70dc607 (tree clean) · fix commit: see below
+Start HEAD: 70dc607 (tree clean) · fix commit: 0c3ed3e76057369ad9e887f449d8baca53dbaa4d
+closed_by: coder=c1-fix
+reviewed_by: none (this is the fix submission; independent re-gate is the reviewer's unit)
+verdict: FIX SUBMITTED — A1–A6 6/6 PASS by my own execution (quoted below); no independent review yet
+verdict_sha_of_head: n/a (no review of this sha yet; the sha under test is 0c3ed3e)
 Input: /opt/data/tmp/probe119/P8-19_REGATE.md §C1 (mechanism, file:line, measured rows) — not re-derived
 Toolchain: go1.22.5 (/tmp/go/bin/go), GOFLAGS=-mod=vendor, web/dist present (gitignored embed input)
 
