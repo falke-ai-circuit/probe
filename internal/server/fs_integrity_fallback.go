@@ -21,15 +21,23 @@ import (
 // Rules:
 //   - fill only what is ABSENT. A v1.19.0 agent's own values are never
 //     overwritten, so the new-agent wire is unchanged (P8-18 A2).
-//   - derive from evidence, never from the request: fs-read digests the decoded
-//     window bytes the server just received; fs-list/fs-stat digest the record
-//     that was returned; fs-write asks the agent for the file digest after the
-//     write (a real read-back), because the server never holds those bytes.
-//   - a field the server cannot derive is left absent and is a DOCUMENTED
-//     VERSION-GATED GAP (fs-read total_size/truncated on a pre-1.19 agent: an
-//     old agent reports neither, and the server cannot distinguish a file that
-//     ends exactly at the cap from one that continues).
-func (s *Server) applyFSIntegrityFallback(agentID, action, reqPath string, resp interface{}) interface{} {
+//   - derive from the returned bytes and the record the server holds: fs-read
+//     digests the decoded window bytes it just received; fs-list/fs-stat digest
+//     the record that was returned; fs-write asks the agent for the file digest
+//     after the write (a real read-back), because the server never holds those
+//     bytes.
+//   - the ONE thing a field may take from the request is the position the
+//     return value is relative to: next_offset = request_offset +
+//     len(decoded). reqOffset is the caller's actual offset, not a default
+//     standing in for an unknown one (P8-20; a default of 0 here made every
+//     continuation on a v1.18.6 agent re-read from byte 0).
+//   - fs-read total_size/truncated stay absent for a pre-1.19 agent. This is a
+//     SCOPE CUT, not a physical limit: both are derivable (fs-stat reports the
+//     file size on 1.18.6, and truncated = offset+len(window) < size), but that
+//     costs an extra agent round-trip on every read, so this fallback does not
+//     make it. The caller gets a correct window and a correct next_offset, and
+//     nothing here claims otherwise.
+func (s *Server) applyFSIntegrityFallback(agentID, action, reqPath string, reqOffset int, resp interface{}) interface{} {
 	m, ok := resp.(map[string]interface{})
 	if !ok {
 		return resp
@@ -39,7 +47,7 @@ func (s *Server) applyFSIntegrityFallback(agentID, action, reqPath string, resp 
 	}
 	switch action {
 	case "fs-read":
-		fillFSReadIntegrity(m)
+		fillFSReadIntegrity(m, reqOffset)
 	case "fs-list":
 		fillFSListingIntegrity(m)
 	case "fs-stat":
@@ -52,11 +60,41 @@ func (s *Server) applyFSIntegrityFallback(agentID, action, reqPath string, resp 
 	return resp
 }
 
+// fsReqOffset reads the offset out of whatever parameter shape a forward call
+// was handed: the legacy handlers pass a typed protocol.FSParams, while
+// v1Forward passes the raw request body through untouched. An absent offset is
+// 0 because that is the caller's actual offset, not because it is unknown.
+func fsReqOffset(params interface{}) int {
+	switch p := params.(type) {
+	case protocol.FSParams:
+		return p.Offset
+	case *protocol.FSParams:
+		if p != nil {
+			return p.Offset
+		}
+	case json.RawMessage:
+		var fp protocol.FSParams
+		if err := json.Unmarshal(p, &fp); err == nil {
+			return fp.Offset
+		}
+	case []byte:
+		var fp protocol.FSParams
+		if err := json.Unmarshal(p, &fp); err == nil {
+			return fp.Offset
+		}
+	}
+	return 0
+}
+
 // fillFSReadIntegrity digests the window the server just received. The window
 // length is the DECODED byte count: the older code used len(base64)/4*3, an
 // upper bound that is wrong by up to two bytes and would hand a tailer an
 // overlapping or gapped next_offset.
-func fillFSReadIntegrity(m map[string]interface{}) {
+//
+// reqOffset is the offset the caller asked for. A pre-1.19 agent does not echo
+// it, so it is the only sound origin for next_offset; the agent's own `offset`
+// wins when it is present (P8-20).
+func fillFSReadIntegrity(m map[string]interface{}, reqOffset int) {
 	encoded, ok := m["data"].(string)
 	if !ok {
 		return
@@ -78,7 +116,7 @@ func fillFSReadIntegrity(m map[string]interface{}) {
 	if _, has := m["encoding"]; !has {
 		m["encoding"] = "base64"
 	}
-	offset := 0
+	offset := reqOffset
 	if v, ok := m["offset"].(float64); ok {
 		offset = int(v)
 	}

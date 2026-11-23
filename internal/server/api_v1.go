@@ -264,7 +264,9 @@ func (s *Server) v1Forward(action, msgType string, readBody bool) http.HandlerFu
 		// P8-18 (P8-17 C1): fs-* fields an agent older than 1.19.0 cannot
 		// produce are filled here, on every response (no-op for actions the
 		// fallback does not know, and a no-op for fields already present).
-		resp = s.applyFSIntegrityFallback(agentID, action, "", resp)
+		// P8-20: the request offset travels with it — next_offset is a value
+		// relative to the caller's position, not to zero.
+		resp = s.applyFSIntegrityFallback(agentID, action, "", fsReqOffset(params), resp)
 		writeJSON(w, http.StatusOK, resp)
 	}
 }

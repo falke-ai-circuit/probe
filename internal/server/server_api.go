@@ -459,8 +459,10 @@ func (s *Server) handleAgentFSRead(w http.ResponseWriter, r *http.Request, agent
 	// P8-18 (P8-17 C1): the fallback runs on EVERY fs-read response, not only
 	// inside `if truncated` — a v1.18.6 agent never sets truncated, so the old
 	// branch was dead for exactly the population it existed for. The window
-	// digest and next_offset are derived from the decoded bytes.
-	resp = s.applyFSIntegrityFallback(agentID, "fs-read", params.Path, resp)
+	// digest is derived from the decoded bytes and next_offset from the
+	// REQUESTED offset plus that window (P8-20: a pre-1.19 agent does not echo
+	// the offset, so it has to be carried in from here).
+	resp = s.applyFSIntegrityFallback(agentID, "fs-read", params.Path, params.Offset, resp)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
@@ -518,7 +520,7 @@ func (s *Server) handleAgentFSWrite(w http.ResponseWriter, r *http.Request, agen
 	}
 	// P8-18 (P8-17 C1): fs-write integrity for a pre-1.19 agent — digest is
 	// read back from the same agent after the write.
-	resp = s.applyFSIntegrityFallback(agentID, "fs-write", params.Path, resp)
+	resp = s.applyFSIntegrityFallback(agentID, "fs-write", params.Path, params.Offset, resp)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
@@ -551,7 +553,7 @@ func (s *Server) handleAgentFSStat(w http.ResponseWriter, r *http.Request, agent
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	resp = s.applyFSIntegrityFallback(agentID, "fs-stat", params.Path, resp)
+	resp = s.applyFSIntegrityFallback(agentID, "fs-stat", params.Path, params.Offset, resp)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
@@ -578,7 +580,7 @@ func (s *Server) handleAgentFSHash(w http.ResponseWriter, r *http.Request, agent
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	resp = s.applyFSIntegrityFallback(agentID, "fs-hash", params.Path, resp)
+	resp = s.applyFSIntegrityFallback(agentID, "fs-hash", params.Path, params.Offset, resp)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }

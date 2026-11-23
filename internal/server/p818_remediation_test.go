@@ -217,14 +217,14 @@ func TestP818NewAgentWireUnchanged(t *testing.T) {
 func applyFSIntegrityFallbackHolder(t *testing.T, action, path string, m map[string]interface{}) map[string]interface{} {
 	t.Helper()
 	srv := &Server{}
-	srv.applyFSIntegrityFallback("agent", action, path, m)
+	srv.applyFSIntegrityFallback("agent", action, path, 0, m)
 	return m
 }
 
 func applyFallbackDirect(t *testing.T, action, path string, m map[string]interface{}) {
 	t.Helper()
 	srv := &Server{}
-	srv.applyFSIntegrityFallback("agent", action, path, m)
+	srv.applyFSIntegrityFallback("agent", action, path, 0, m)
 }
 
 func cloneMap(in map[string]interface{}) map[string]interface{} {
