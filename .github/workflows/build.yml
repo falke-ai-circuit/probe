@@ -11,12 +11,32 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # The repo embeds web/dist via //go:embed all:web/dist (embed.go:9).
+      # web/dist is a BUILD ARTIFACT and is not committed, so it must be built
+      # before go vet/build/test can even compile the root package.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: frontend build (produces web/dist for go:embed)
+        working-directory: web
+        run: |
+          npm ci || npm install
+          npm run build
+
       - uses: actions/setup-go@v5
         with:
           go-version: "1.22"
+          cache: true
+
       - name: vet
         run: go vet ./...
+
       - name: build
         run: go build ./...
+
       - name: test
         run: go test ./...

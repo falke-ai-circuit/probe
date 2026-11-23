@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"strconv"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -64,7 +65,7 @@ func (a *Agent) handleTunnelOpen(env protocol.Envelope) protocol.Envelope {
 		return protocol.NewError(env.ID, protocol.ErrInvalidParams, "missing target_host")
 	}
 
-	targetAddr := fmt.Sprintf("%s:%d", openParams.TargetHost, openParams.TargetPort)
+	targetAddr := net.JoinHostPort(openParams.TargetHost, strconv.Itoa(openParams.TargetPort))
 	conn, err := net.DialTimeout("tcp", targetAddr, 10*time.Second)
 	if err != nil {
 		return protocol.NewError(env.ID, protocol.ErrInternal, fmt.Sprintf("connect to %s failed: %v", targetAddr, err))
