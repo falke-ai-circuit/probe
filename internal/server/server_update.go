@@ -10,10 +10,17 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/falke-ai-circuit/probe/internal/protocol"
 )
+
+// canaryRegistrySuffix is the registry-key suffix a canary process carries
+// while it runs beside the still-live old agent (agent.canaryNameSuffix).
+// When the update commits the canary strips the suffix and registers as the
+// canonical agent, so the suffixed row must not outlive the update.
+const canaryRegistrySuffix = "-canary"
 
 // pendingUpdates tracks agents that have been told to update.
 // When a new agent connects and the old one reports its PID, we kill the old.
@@ -22,6 +29,31 @@ type pendingUpdate struct {
 	OldPID     int
 	NewVersion string
 	NotifiedAt time.Time
+}
+
+// purgeCanaryRegistryRow deletes the "<agentID>-canary" registry row if one
+// exists and reports whether a row was removed. The canonical agent row (key
+// == agentID) is never touched. Both call sites are idempotent: a missing row
+// is a silent no-op, so a repeated update start or a retried completion cannot
+// remove anything twice or log noise.
+//
+// Defect B (P9-08): the canary row stayed in the registry forever after a
+// successful promotion, so a completed update left TEST-OLD-1186 and
+// TEST-OLD-1186-canary both at 1.19.0 — indistinguishable from a live second
+// agent.
+func (s *Server) purgeCanaryRegistryRow(agentID string) bool {
+	if agentID == "" {
+		return false
+	}
+	canaryID := agentID + canaryRegistrySuffix
+	if canaryID == agentID { // unreachable, kept so the canonical row can never be the target
+		return false
+	}
+	if !s.registry.Remove(canaryID) {
+		return false
+	}
+	log.Printf("[update] removed stale canary registry row %s (canonical %s untouched)", canaryID, agentID)
+	return true
 }
 
 // handleAgentUpdate is the HTTP API endpoint that triggers a remote agent update.
@@ -39,6 +71,7 @@ func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request, agent
 		DownloadHost string `json:"download_host"` // override for download URL host (e.g. "187.124.31.229:80")
 		WSPath       string `json:"ws_path"`       // if set, server pre-staged binary via WS at this path on the agent
 		WSRemotePath string `json:"ws_remote_path"` // remote path on agent where the WS-staged binary lives (for swap to find)
+		SHA256       string `json:"sha256"`        // optional with binary_path (must match), required with ws_remote_path
 	}
 	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -49,20 +82,47 @@ func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request, agent
 		return
 	}
 
-	// Compute SHA256 of the binary
-	hash, err := hashFileServer(params.BinaryPath)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("hash binary failed: %v", err), http.StatusInternalServerError)
-		return
+	// Compute SHA256 of the binary. In ws_remote_path mode there is no local
+	// file to hash — the binary was staged on the agent over the WS tunnel — so
+	// the caller supplies the digest it staged, and the agent verifies it
+	// against the file it finds at ws_remote_path. Defect A (P9-08): hashing
+	// params.BinaryPath unconditionally made the documented ws_remote_path mode
+	// return "hash binary failed: open : no such file or directory".
+	var hash string
+	if params.BinaryPath == "" {
+		supplied := strings.ToLower(strings.TrimSpace(params.SHA256))
+		if supplied == "" {
+			http.Error(w, "sha256 is required with ws_remote_path", http.StatusBadRequest)
+			return
+		}
+		hash = supplied
+	} else {
+		computed, err := hashFileServer(params.BinaryPath)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("hash binary failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+		hash = computed
+		// Optional server-side confirmation: when the caller also states the
+		// digest it believes it is sending, a disagreement is a bad request —
+		// never a silent install of a different binary.
+		if supplied := strings.ToLower(strings.TrimSpace(params.SHA256)); supplied != "" && supplied != computed {
+			http.Error(w, fmt.Sprintf("sha256 mismatch: supplied %s, computed %s", supplied, computed), http.StatusBadRequest)
+			return
+		}
 	}
 
-	// Get the filename for the download URL
+	// Get the filename for the download URL (ws mode: the staged file's name).
 	filename := filepath.Base(params.BinaryPath)
+	if params.BinaryPath == "" {
+		filename = filepath.Base(params.WSRemotePath)
+	}
 
-	// Copy binary to the download directory if not already there
+	// Copy binary to the download directory if not already there. Only a
+	// server-local binary has anything to copy.
 	downloadDir := "/tmp/probe-files/"
 	downloadPath := downloadDir + filename
-	if params.BinaryPath != downloadPath {
+	if params.BinaryPath != "" && params.BinaryPath != downloadPath {
 		if err := copyFile(params.BinaryPath, downloadPath); err != nil {
 			http.Error(w, fmt.Sprintf("copy to download dir failed: %v", err), http.StatusInternalServerError)
 			return
@@ -98,8 +158,17 @@ func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request, agent
 		updateParams.DownloadURL = "" // empty tells agent not to HTTP-fetch
 	}
 
+	// An update start supersedes any canary row left behind by an earlier
+	// attempt: from here the only rows that should exist are the old agent and
+	// (once it connects) the promoted agent under its canonical name.
+	s.purgeCanaryRegistryRow(agentID)
+
+	shortHash := hash
+	if len(shortHash) > 16 {
+		shortHash = shortHash[:16]
+	}
 	log.Printf("[update] sending agent_update to %s: version=%s, file=%s, hash=%s, ws_path=%q",
-		agentID, params.Version, filename, hash[:16], updateParams.WSPath)
+		agentID, params.Version, filename, shortHash, updateParams.WSPath)
 
 	// Send agent_update to the agent. We use forwardToAgentWithTimeout which
 	// will send the WebSocket message and wait for a response. The agent will

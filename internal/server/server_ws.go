@@ -135,6 +135,10 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				log.Printf("[update] failed to kill old PID %d: %v (old process may have already exited)", oldPID, err)
 			} else {
 				log.Printf("[update] successfully killed old PID %d — update complete", oldPID)
+				// The promotion is complete: the canary has stripped its suffix
+				// and registered under the canonical name. Its suffixed registry
+				// row is now dead weight that reads as a second live agent.
+				s.purgeCanaryRegistryRow(agentID)
 			}
 		}()
 	} else {
