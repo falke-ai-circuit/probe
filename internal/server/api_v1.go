@@ -32,8 +32,9 @@ type APIResponse struct {
 
 // APIError is the error detail returned inside a v1 APIResponse.
 type APIError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code    string                 `json:"code"`
+	Message string                 `json:"message"`
+	Detail  map[string]interface{} `json:"detail,omitempty"`
 }
 
 // writeJSON writes a success APIResponse with the given status code and data.
@@ -46,11 +47,17 @@ func writeJSON(w http.ResponseWriter, statusCode int, data interface{}) {
 // writeError writes an error APIResponse with the given status code, error
 // code, and human-readable message.
 func writeError(w http.ResponseWriter, statusCode int, code, message string) {
+	writeErrorDetail(w, statusCode, code, message, nil)
+}
+
+// writeErrorDetail is writeError with structured detail (P8-03: the elevation
+// refusal carries the observed principal and the remediation).
+func writeErrorDetail(w http.ResponseWriter, statusCode int, code, message string, detail map[string]interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	json.NewEncoder(w).Encode(APIResponse{
 		OK:    false,
-		Error: &APIError{Code: code, Message: message},
+		Error: &APIError{Code: code, Message: message, Detail: detail},
 	})
 }
 
@@ -169,15 +176,16 @@ func reformatV1(rec *httptest.ResponseRecorder, w http.ResponseWriter) {
 		// FS_WRITE_EMPTY_DATA) keeps that code; only untyped bodies fall back
 		// to the status-derived code.
 		var typed struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
+			Code    string                 `json:"code"`
+			Message string                 `json:"message"`
+			Detail  map[string]interface{} `json:"detail"`
 		}
 		if json.Unmarshal(body, &typed) == nil && typed.Code != "" {
 			msg := typed.Message
 			if msg == "" {
 				msg = http.StatusText(rec.Code)
 			}
-			writeError(w, rec.Code, typed.Code, msg)
+			writeErrorDetail(w, rec.Code, typed.Code, msg, typed.Detail)
 			return
 		}
 		msg := strings.TrimSpace(string(body))

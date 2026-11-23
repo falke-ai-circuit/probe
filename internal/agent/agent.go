@@ -431,7 +431,7 @@ func (a *Agent) handleConnection(conn *websocket.Conn) {
 		Arch:            getArch(),
 		Mode:            a.cfg.Mode,
 		ProtocolVersion: "2",
-		Capabilities:    a.cfg.Capabilities,
+		Capabilities:    a.advertisedCapabilities(),
 	}
 	if err := a.writeMessage(conn, protocol.Envelope{
 		ID:     "agent-info",
@@ -655,6 +655,31 @@ func (a *Agent) handleExec(env protocol.Envelope) protocol.Envelope {
 	if err != nil {
 		return protocol.NewError(env.ID, protocol.ErrInvalidParams, err.Error())
 	}
+	// P8-03: `as` is a declaration we verify, not an escalation primitive.
+	// Refusal happens BEFORE anything is spawned, so a refused call cannot
+	// leave a half-run command behind.
+	if want := strings.TrimSpace(params.As); want != "" && !strings.EqualFold(want, "current") {
+		if !strings.EqualFold(want, "SYSTEM") {
+			return protocol.NewError(env.ID, protocol.ErrInvalidParams,
+				fmt.Sprintf("as must be \"current\" or \"SYSTEM\", got %q", params.As))
+		}
+		pr := currentPrincipal()
+		if !pr.IsSystem {
+			return protocol.NewErrorDetail(env.ID, protocol.ErrElevationUnavailable,
+				fmt.Sprintf("exec{as:\"SYSTEM\"} refused: agent principal is %q (is_system=false, integrity=%s); "+
+					"install the agent as a Windows service so the process itself runs as LocalSystem",
+					pr.User, pr.Integrity),
+				map[string]interface{}{
+					"principal":      pr.User,
+					"is_system":      pr.IsSystem,
+					"elevated":       pr.Elevated,
+					"integrity":      pr.Integrity,
+					"token_filtered": pr.TokenFiltered,
+					"remediation":    "install the agent as a Windows service (probe-client.exe --install-service, one admin step per node); the service principal is LocalSystem",
+					"requested":      "SYSTEM",
+				})
+		}
+	}
 	// P8-04: a detached exec bypasses the per-call deadline entirely — that
 	// deadline is what killed the runner between `shutdown` and
 	// `no shutdown`. It returns a handle and the guardian owns completion.
@@ -673,6 +698,15 @@ func (a *Agent) handleExec(env protocol.Envelope) protocol.Envelope {
 		return protocol.NewError(env.ID, protocol.ErrInternal, err.Error())
 	}
 	result.DurationMs = time.Since(start).Milliseconds()
+	// P8-03 envelope: the same shape for an elevated and a normal exec.
+	// started_at_* are the instant the command was dispatched; tz is declared
+	// by the host, never inferred by the caller.
+	tzName, tzOff := agentTZ()
+	result.StartedAtUTC = start.UTC().Format(time.RFC3339Nano)
+	result.StartedAtLocal = start.Format(time.RFC3339)
+	result.TZ = tzName
+	result.TZOffsetMin = tzOff
+	result.Principal = currentPrincipal().User
 	return protocol.NewResult(env.ID, protocol.TypeExecResult, result)
 }
 

@@ -185,36 +185,118 @@ func (s *Server) handleAgentExec(w http.ResponseWriter, r *http.Request, agentID
 		params.Timeout = 60
 	}
 
-	timeout := time.Duration(params.Timeout) * time.Second
-	resp, err := s.forwardToAgentWithTimeout(agentID, protocol.TypeExec, params, timeout, operatorIDFromRequest(r))
-	if err != nil {
-		// Check if it was a timeout
-		if strings.Contains(err.Error(), "timed out") {
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"stdout":      "",
-				"stderr":      "command timed out",
-				"exit_code":   -1,
-				"duration_ms": params.Timeout * 1000,
-				"timed_out":   true,
-			})
-			return
-		}
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+	// P8-03: validate `as` before dispatch. An old agent ignores unknown
+	// fields, so an unvalidated "SYSTEM" would run the command as flk and
+	// report success — the exact silent lie this unit exists to close.
+	wantSystem := strings.EqualFold(strings.TrimSpace(params.As), "SYSTEM")
+	if a := strings.TrimSpace(params.As); a != "" && !strings.EqualFold(a, "current") && !wantSystem {
+		writeTypedErrorDetail(w, http.StatusBadRequest, protocol.ErrInvalidParams,
+			fmt.Sprintf("as must be \"current\" or \"SYSTEM\", got %q", params.As),
+			map[string]interface{}{"call": "exec", "agent_id": agentID, "requested": params.As})
 		return
 	}
 
-	// If the response contains an error field, format it like the old handler did
+	startedAt := time.Now().UTC()
+	tzName, tzOff := serverTZ()
+
+	// P8-03: gate on the explicit capability, NOT the permissive "empty means
+	// all" rule — an old agent advertises nothing and must be refused in
+	// milliseconds rather than dispatched into a silent unelevated run.
+	if wantSystem {
+		if rec, herr := s.registry.GetHealth(agentID); herr == nil {
+			if !hasCapabilityStrict(rec.Capabilities, "exec.system") {
+				writeTypedErrorDetail(w, http.StatusConflict, protocol.ErrUnsupportedAgent,
+					fmt.Sprintf("agent %s does not implement exec{as:\"SYSTEM\"} (capability exec.system absent); "+
+						"it would ignore the field and run the command unelevated", agentID),
+					map[string]interface{}{
+						"call":           "exec",
+						"agent_id":       agentID,
+						"version":        rec.Version,
+						"requested":      "SYSTEM",
+						"capabilities":   rec.Capabilities,
+						"started_at_utc": startedAt.Format(time.RFC3339Nano),
+						"tz":             tzName,
+						"tz_offset_min":  tzOff,
+						"ran":            false,
+						"exit_code":      nil,
+						"remediation":    "upgrade the agent to v1.19+ (which advertises exec.system), then install it as a service so its principal is LocalSystem",
+					})
+				return
+			}
+		}
+	}
+
+	timeout := time.Duration(params.Timeout) * time.Second
+	resp, err := s.forwardToAgentWithTimeout(agentID, protocol.TypeExec, params, timeout, operatorIDFromRequest(r))
+	if err != nil {
+		// Amendment A-1: a call that did not produce a result is never a 200.
+		if strings.Contains(err.Error(), "timed out") {
+			writeTypedErrorDetail(w, http.StatusGatewayTimeout, "DEADLINE_EXCEEDED",
+				fmt.Sprintf("exec did not return within %d ms", params.Timeout*1000),
+				map[string]interface{}{
+					"call":           "exec",
+					"agent_id":       agentID,
+					"deadline_ms":    params.Timeout * 1000,
+					"started_at_utc": startedAt.Format(time.RFC3339Nano),
+					"tz":             tzName,
+					"tz_offset_min":  tzOff,
+					"timed_out":      true,
+					"ran":            false,
+					"exit_code":      nil,
+				})
+			return
+		}
+		code := "AGENT_UNAVAILABLE"
+		status := http.StatusServiceUnavailable
+		if strings.Contains(err.Error(), "lacks required capability") {
+			code = "CAPABILITY_MISSING"
+			status = http.StatusConflict
+		}
+		writeTypedErrorDetail(w, status, code, err.Error(), map[string]interface{}{
+			"call":           "exec",
+			"agent_id":       agentID,
+			"started_at_utc": startedAt.Format(time.RFC3339Nano),
+			"tz":             tzName,
+			"tz_offset_min":  tzOff,
+			"ran":            false,
+			"exit_code":      nil,
+		})
+		return
+	}
+
+	// P8-03/Amendment A-1: an agent refusal is an error envelope, never a 200
+	// carrying stderr text. The typed code decides the HTTP status.
 	if m, ok := resp.(map[string]interface{}); ok {
 		if errMsg, hasErr := m["error"]; hasErr {
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"stdout":      "",
-				"stderr":      errMsg,
-				"exit_code":   -1,
-				"duration_ms": 0,
-				"timed_out":   false,
-			})
+			code, _ := m["code"].(string)
+			status := http.StatusInternalServerError
+			switch code {
+			case protocol.ErrElevationUnavailable, protocol.ErrUnsupportedAgent,
+				protocol.ErrGuardianUnavailable, "CAPABILITY_MISSING":
+				status = http.StatusConflict
+			case protocol.ErrTimeout:
+				status = http.StatusGatewayTimeout
+			case protocol.ErrPermissionDenied, "permission_denied":
+				status = http.StatusForbidden
+			case protocol.ErrInvalidParams:
+				status = http.StatusBadRequest
+			case "":
+				code = protocol.ErrInternal
+			}
+			detail, _ := m["detail"].(map[string]interface{})
+			if detail == nil {
+				detail = map[string]interface{}{}
+			}
+			detail["call"] = "exec"
+			detail["agent_id"] = agentID
+			detail["started_at_utc"] = startedAt.Format(time.RFC3339Nano)
+			detail["tz"] = tzName
+			detail["tz_offset_min"] = tzOff
+			detail["ran"] = false
+			if _, has := detail["exit_code"]; !has {
+				detail["exit_code"] = nil
+			}
+			writeTypedErrorDetail(w, status, code, fmt.Sprintf("%v", errMsg), detail)
 			return
 		}
 	}
@@ -225,6 +307,38 @@ func (s *Server) handleAgentExec(w http.ResponseWriter, r *http.Request, agentID
 	s.recordDetachedJob(agentID, resp)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// hasCapabilityStrict reports whether cap is listed explicitly. It differs
+// from HasCapability (empty list = all) on purpose: a pre-1.19 agent never
+// advertises exec.system, and dispatching to it would be a silent failure.
+func hasCapabilityStrict(caps []string, want string) bool {
+	for _, c := range caps {
+		if c == want {
+			return true
+		}
+	}
+	return false
+}
+
+// writeTypedErrorDetail writes an error body carrying both the typed code and
+// structured detail. reformatV1 forwards the detail onto the v1 envelope.
+func writeTypedErrorDetail(w http.ResponseWriter, status int, code, message string, detail map[string]interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"code":    code,
+		"message": message,
+		"detail":  detail,
+	})
+}
+
+// serverTZ declares the server's zone for envelopes whose clock source is the
+// server (agent unreachable, refusal before dispatch).
+func serverTZ() (string, int) {
+	now := time.Now()
+	_, off := now.Zone()
+	return now.Location().String(), off / 60
 }
 
 func mustMarshalRaw(v interface{}) []byte {
@@ -557,8 +671,9 @@ func (s *Server) forwardToAgentWithTimeout(agentID string, msgType string, param
 			// layer can refuse with FS_WRITE_EMPTY_DATA instead of a generic
 			// 5xx. Callers that only read "error" are unaffected.
 			return map[string]interface{}{
-				"error": resp.Error.Message,
-				"code":  resp.Error.Code,
+				"error":  resp.Error.Message,
+				"code":   resp.Error.Code,
+				"detail": resp.Error.Detail,
 			}, nil
 		}
 		var result interface{}

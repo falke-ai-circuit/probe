@@ -188,6 +188,11 @@ const (
 	// P8-04: the launching binary has no guardian entry point, so a detached
 	// job would have no executor and no cleanup. Refused at launch.
 	ErrGuardianUnavailable = "GUARDIAN_UNAVAILABLE"
+	// P8-03: exec{as:"SYSTEM"} on an agent whose principal is not SYSTEM.
+	// A typed refusal naming the prerequisite — never a silent unelevated run.
+	ErrElevationUnavailable = "ELEVATION_UNAVAILABLE"
+	// P8-03: the agent does not implement the as:"SYSTEM" contract (old build).
+	ErrUnsupportedAgent = "UNSUPPORTED_AGENT"
 )
 
 // Envelope is the top-level message wrapper.
@@ -204,6 +209,10 @@ type Envelope struct {
 type ErrorInfo struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	// Detail carries structured refusal evidence (e.g. the observed principal
+	// and the remediation for ELEVATION_UNAVAILABLE). Additive: old callers
+	// that only read Code/Message are unaffected.
+	Detail map[string]interface{} `json:"detail,omitempty"`
 }
 
 // --- Agent Info (sent on connect) ---
@@ -223,6 +232,14 @@ type ExecParams struct {
 	Timeout int               `json:"timeout,omitempty"` // seconds, default 60
 	WorkDir string            `json:"workdir,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
+
+	// P8-03: As selects the principal the command must run under.
+	// "" or "current" = today's behaviour (the agent's own principal).
+	// "SYSTEM" = a declaration that is VERIFIED against the principal, never
+	// an escalation primitive: an agent that is not already SYSTEM refuses
+	// with ELEVATION_UNAVAILABLE instead of attempting a runtime trick.
+	// Unknown values are refused with INVALID_PARAMS.
+	As string `json:"as,omitempty"`
 
 	// P8-04: detached execution. Detach=true returns immediately with a job
 	// handle and runs the command outside the per-call deadline, under a
@@ -293,6 +310,17 @@ type ExecResult struct {
 	ExitCode   int    `json:"exit_code"`
 	DurationMs int64  `json:"duration_ms"`
 	TimedOut   bool   `json:"timed_out"`
+
+	// P8-03 (P8-02 §1.1/§1.2): the mandatory envelope fields, additive on the
+	// existing body. DurationMs is measured monotonically; the wall-clock
+	// stamps are declared with their zone, never inferred by the caller.
+	StartedAtUTC   string `json:"started_at_utc"`
+	StartedAtLocal string `json:"started_at_local"`
+	TZ             string `json:"tz"`
+	TZOffsetMin    int    `json:"tz_offset_min"`
+	// Principal is who actually ran the command ("SYSTEM", "DOMAIN\user"),
+	// read from the agent's own token — proof, not a claim about the request.
+	Principal string `json:"principal"`
 }
 
 type FSParams struct {
@@ -871,6 +899,21 @@ func NewError(id string, code string, message string) Envelope {
 		Error: &ErrorInfo{
 			Code:    code,
 			Message: message,
+		},
+	}
+}
+
+// NewErrorDetail creates a typed error envelope carrying structured evidence
+// (e.g. the observed principal of a refused exec). The Detail map is additive
+// on the wire: callers that read only Code/Message are unaffected.
+func NewErrorDetail(id string, code string, message string, detail map[string]interface{}) Envelope {
+	return Envelope{
+		ID:   id,
+		Type: TypeError,
+		Error: &ErrorInfo{
+			Code:    code,
+			Message: message,
+			Detail:  detail,
 		},
 	}
 }
