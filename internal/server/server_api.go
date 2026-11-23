@@ -241,7 +241,7 @@ func (s *Server) handleAgentExec(w http.ResponseWriter, r *http.Request, agentID
 		}
 	}()
 	if name := strings.TrimSpace(params.Credential); name != "" {
-		ref, cleanup, cerr := s.sealCredentialForExec(agentID, name, "", params.CredentialMode)
+		ref, cleanup, cerr := s.sealCredentialForExec(agentID, name, params.JobID, params.CredentialMode)
 		if cerr != nil {
 			writeTypedErrorDetail(w, cerr.Status, cerr.Code, cerr.Message, map[string]interface{}{
 				"call":       "exec",
@@ -250,6 +250,24 @@ func (s *Server) handleAgentExec(w http.ResponseWriter, r *http.Request, agentID
 				"ran":        false,
 				"exit_code":  nil,
 			})
+			return
+		}
+		// P8-18 (P8-17 C6): use-time enforcement at the server's single
+		// decision point — single-use, TTL and the job/agent binding all live
+		// in handleRegistry.Use. A handle minted for job J presented by a call
+		// claiming another job is refused here, before the exec is dispatched.
+		if _, code := s.credHandles.Use(ref, agentID, params.JobID); code != "" {
+			cleanup()
+			writeTypedErrorDetail(w, http.StatusConflict, code,
+				fmt.Sprintf("credential handle %s is not usable for this call (%s)", ref, code),
+				map[string]interface{}{
+					"call":       "exec",
+					"agent_id":   agentID,
+					"credential": name,
+					"job_id":     params.JobID,
+					"ran":        false,
+					"exit_code":  nil,
+				})
 			return
 		}
 		credRef = ref
@@ -266,7 +284,7 @@ func (s *Server) handleAgentExec(w http.ResponseWriter, r *http.Request, agentID
 		// §6.3(5): an expired handle is re-minted exactly once. Prompting is
 		// not a fallback this server has.
 		if attempt == 0 {
-			ref, cleanup, cerr := s.sealCredentialForExec(agentID, strings.TrimSpace(params.Credential), "", params.CredentialMode)
+			ref, cleanup, cerr := s.sealCredentialForExec(agentID, strings.TrimSpace(params.Credential), params.JobID, params.CredentialMode)
 			if cerr != nil {
 				break
 			}
@@ -438,31 +456,11 @@ func (s *Server) handleAgentFSRead(w http.ResponseWriter, r *http.Request, agent
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	// P8-06 (P8-02 §4.3.1): truncated=true always carries next_offset. An agent
-	// from before this unit does not send it, so the server derives the
-	// continuation point from the window it actually received — the field is
-	// present on every fs-read response the v1 surface returns.
-	if m, ok := resp.(map[string]interface{}); ok {
-		if truncated, _ := m["truncated"].(bool); truncated {
-			if _, has := m["next_offset"]; !has {
-				offset := 0
-				if v, ok := m["offset"].(float64); ok {
-					offset = int(v)
-				}
-				window := 0
-				if enc, ok := m["data"].(string); ok {
-					window = len(enc) / 4 * 3
-				}
-				if v, ok := m["size"].(float64); ok {
-					window = int(v)
-				}
-				m["next_offset"] = float64(offset + window)
-			}
-			if _, has := m["sha256_scope"]; !has {
-				m["sha256_scope"] = "window"
-			}
-		}
-	}
+	// P8-18 (P8-17 C1): the fallback runs on EVERY fs-read response, not only
+	// inside `if truncated` — a v1.18.6 agent never sets truncated, so the old
+	// branch was dead for exactly the population it existed for. The window
+	// digest and next_offset are derived from the decoded bytes.
+	resp = s.applyFSIntegrityFallback(agentID, "fs-read", params.Path, resp)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
@@ -518,6 +516,9 @@ func (s *Server) handleAgentFSWrite(w http.ResponseWriter, r *http.Request, agen
 			return
 		}
 	}
+	// P8-18 (P8-17 C1): fs-write integrity for a pre-1.19 agent — digest is
+	// read back from the same agent after the write.
+	resp = s.applyFSIntegrityFallback(agentID, "fs-write", params.Path, resp)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
@@ -550,6 +551,7 @@ func (s *Server) handleAgentFSStat(w http.ResponseWriter, r *http.Request, agent
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
+	resp = s.applyFSIntegrityFallback(agentID, "fs-stat", params.Path, resp)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
@@ -576,6 +578,7 @@ func (s *Server) handleAgentFSHash(w http.ResponseWriter, r *http.Request, agent
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
+	resp = s.applyFSIntegrityFallback(agentID, "fs-hash", params.Path, resp)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }

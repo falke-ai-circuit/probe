@@ -25,6 +25,10 @@ type pendingCredential struct {
 	Handle  string
 	Name    string
 	Mode    string
+	// JobID is the job claim the server minted this secret for (P8-18). A
+	// non-empty claim means the secret may only be opened by the exec that
+	// presents the same job_id.
+	JobID   string
 	Expires time.Time
 	value   []byte
 }
@@ -93,6 +97,7 @@ func (a *Agent) handleCredentialDeliver(env protocol.Envelope) protocol.Envelope
 		Handle:  params.Handle,
 		Name:    params.Name,
 		Mode:    params.Mode,
+		JobID:   params.JobID,
 		Expires: expires,
 		value:   plain,
 	}

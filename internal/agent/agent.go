@@ -715,6 +715,14 @@ func (a *Agent) handleExec(env protocol.Envelope) protocol.Envelope {
 			return protocol.NewError(env.ID, protocol.ErrCredentialUnknown,
 				fmt.Sprintf("no delivered handle for credential %q on this agent", name))
 		}
+		// P8-18 (P8-17 C6): the job binding is enforced where the secret is
+		// actually opened. A handle minted for job J is refused for any other
+		// job, and the refusal consumes the parked secret like any use would.
+		if pc.JobID != "" && pc.JobID != params.JobID {
+			zeroCredential(pc.value)
+			return protocol.NewError(env.ID, protocol.ErrCredentialJobMismatch,
+				fmt.Sprintf("credential handle for %q is bound to job %s, not job %s", name, pc.JobID, params.JobID))
+		}
 		// The buffer is zeroed on every exit path after this point.
 		defer zeroCredential(pc.value)
 		if strings.EqualFold(pc.Mode, "env") {

@@ -255,6 +255,11 @@ type ExecParams struct {
 	// "env"; stdin is the default because it is absent from argv.
 	Credential     string `json:"credential,omitempty"`
 	CredentialMode string `json:"credential_mode,omitempty"`
+	// P8-18 (P8-17 C6): JobID is the caller's job claim. When set, the
+	// credential handle minted for this exec is bound to it: any other exec
+	// presenting a different job_id is refused with CREDENTIAL_JOB_MISMATCH.
+	// Additive and optional — a caller that omits it sees today's behaviour.
+	JobID       string `json:"job_id,omitempty"`
 	OnDeath     string `json:"on_death,omitempty"`
 	JobTimeoutS int    `json:"job_timeout_s,omitempty"`
 }

@@ -23,6 +23,9 @@ const (
 	ErrCredentialChannelInsec = "CREDENTIAL_CHANNEL_INSECURE"
 	ErrCredentialExpired      = "CREDENTIAL_EXPIRED"
 	ErrCredentialUnknown      = "CREDENTIAL_UNKNOWN"
+	// P8-18 (P8-17 C6): a handle minted for one job was presented for another.
+	// Same 409 family as the other credential refusals; not a new vocabulary.
+	ErrCredentialJobMismatch = "CREDENTIAL_JOB_MISMATCH"
 )
 
 // CredentialDelivery is the body of a TypeCredentialDeliver envelope.

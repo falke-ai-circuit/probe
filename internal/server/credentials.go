@@ -16,6 +16,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/falke-ai-circuit/probe/internal/protocol"
 )
 
 // P8-07 (P8-02 §6 C-CRED) — write-only credential store.
@@ -363,8 +365,40 @@ func (r *handleRegistry) Consume(handle string) (*credHandle, bool) {
 	return h, true
 }
 
-// Expired reports whether h has passed its TTL.
-func (h *credHandle) Expired() bool { return time.Now().After(h.Expires) }
+// Use consumes a handle for one claimed job and is the server's SINGLE place
+// where TTL is decided (P8-18, P8-17 C6 — the old Expired() had no caller, so
+// the field existed with a dead check). It enforces, in this order:
+//
+//   - single-use: the handle is removed on the first attempt, whether the
+//     attempt succeeds or is refused, so a replay cannot probe for another
+//     job id;
+//   - TTL: an expired handle is refused here and nowhere else;
+//   - agent binding: a handle minted for agent A is not usable by agent B;
+//   - job binding: a handle minted for job J is refused for any other job.
+//
+// The second return value is the refusal code ("" on success); the codes are
+// the existing credential vocabulary and map to 409 on the HTTP surface.
+func (r *handleRegistry) Use(handle, agentID, jobID string) (*credHandle, string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	h, ok := r.m[handle]
+	if !ok {
+		// Unknown, already consumed, or replayed: one refusal, no distinction,
+		// so a caller cannot tell a used handle from a fabricated one.
+		return nil, protocol.ErrCredentialUnknown
+	}
+	delete(r.m, handle)
+	if time.Now().After(h.Expires) {
+		return nil, protocol.ErrCredentialExpired
+	}
+	if h.AgentID != agentID {
+		return nil, protocol.ErrCredentialUnknown
+	}
+	if h.JobID != "" && h.JobID != jobID {
+		return nil, protocol.ErrCredentialJobMismatch
+	}
+	return h, ""
+}
 
 // ---------------------------------------------------------------------------
 // Redactor — a filter on every sink, not a promise
