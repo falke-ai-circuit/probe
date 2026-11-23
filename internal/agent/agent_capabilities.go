@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"strconv"
 	"bufio"
 	"fmt"
 	"net"
@@ -65,7 +66,7 @@ func (a *Agent) handlePortScan(env protocol.Envelope) protocol.Envelope {
 
 	for _, port := range params.Ports {
 		entry := protocol.PortScanEntry{Port: port}
-		addr := fmt.Sprintf("%s:%d", params.Host, port)
+		addr := net.JoinHostPort(params.Host, strconv.Itoa(port))
 		conn, err := net.DialTimeout("tcp", addr, timeout)
 		if err != nil {
 			entry.State = "closed"
