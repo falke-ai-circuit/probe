@@ -188,6 +188,10 @@ func (s *Server) handleV1DeleteProfile(w http.ResponseWriter, r *http.Request) {
 
 // handleV1GetAgentCapabilities handles GET /api/v1/agents/{id}/capabilities —
 // returns the agent's current capabilities from the registry.
+//
+// P8-10 (P8-02 §8.2): the response gains an `inventory` block and the route
+// accepts ?refresh=true. The two original keys keep their names and position;
+// the added keys sit beside them, so an existing caller is unaffected.
 func (s *Server) handleV1GetAgentCapabilities(w http.ResponseWriter, r *http.Request) {
 	agentID := r.PathValue("id")
 	if _, ok := s.v1CheckAuth(w, r, "list"); !ok {
@@ -198,10 +202,9 @@ func (s *Server) handleV1GetAgentCapabilities(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusNotFound, "NOT_FOUND", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"agent_id":     rec.AgentID,
-		"capabilities": rec.Capabilities,
-	})
+	refresh := parseRefreshFlag(r.URL.Query().Get("refresh"))
+	inv := s.cachedCapabilityInventory(rec, refresh)
+	writeJSON(w, http.StatusOK, inv)
 }
 
 // handleV1RedeployAgent handles POST /api/v1/agents/{id}/redeploy — rebuilds

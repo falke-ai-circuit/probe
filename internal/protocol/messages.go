@@ -262,6 +262,13 @@ type ExecParams struct {
 	JobID       string `json:"job_id,omitempty"`
 	OnDeath     string `json:"on_death,omitempty"`
 	JobTimeoutS int    `json:"job_timeout_s,omitempty"`
+
+	// P8-10 (P8-02 §8.4): idempotency_key makes the call replay-safe. The
+	// same key on the same agent returns the stored envelope with
+	// replayed=true and does NOT dispatch a second time. The field is
+	// server-side only — it is never forwarded to the agent, so an old
+	// agent is unaffected by it.
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
 }
 
 // JobLaunch is what a detached exec returns: no output, just the handle.

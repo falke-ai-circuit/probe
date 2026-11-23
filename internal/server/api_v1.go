@@ -163,8 +163,22 @@ func (s *Server) v1WrapAgentHandler(action string, h func(http.ResponseWriter, *
 		r = r.WithContext(context.WithValue(r.Context(), operatorContextKey{}, op))
 		rec := httptest.NewRecorder()
 		h(rec, r, agentID)
-		reformatV1(rec, w)
+		reformatV1WithAgent(rec, w, agentID)
 	}
+}
+
+// reformatV1WithAgent is reformatV1 with the agent id in scope. P8-10: a
+// command refused because the agent lacks the capability is a typed 409, not a
+// 503 transport failure (P8-02 §1.3 row "agent lacks the capability"). The
+// legacy handler reports it as a plain 503 string; the v1 surface must not.
+func reformatV1WithAgent(rec *httptest.ResponseRecorder, w http.ResponseWriter, agentID string) {
+	if rec.Code >= 400 && strings.Contains(rec.Body.String(), "lacks required capability") {
+		writeErrorDetail(w, http.StatusConflict, "CAPABILITY_MISSING",
+			strings.TrimSpace(rec.Body.String()),
+			map[string]interface{}{"agent_id": agentID, "ran": false, "exit_code": nil})
+		return
+	}
+	reformatV1(rec, w)
 }
 
 // reformatV1 reads the output captured by a ResponseRecorder from a legacy
@@ -319,6 +333,9 @@ func (s *Server) registerV1Routes() {
 		s.v1WrapAgentHandler("fs-stat", s.handleAgentFSStat))
 	s.mux.HandleFunc("POST /api/v1/agents/{id}/fs-hash",
 		s.v1WrapAgentHandler("fs-hash", s.handleAgentFSHash))
+	// P8-10 (P8-02 §8.3): watch is a server-side long-poll over fs-read.
+	// Additive route — no existing command or response shape changes.
+	s.mux.HandleFunc("POST /api/v1/agents/{id}/watch", s.handleV1Watch)
 	// P8-06 (P8-02 §5): raw-body streaming transport. Additive routes — no
 	// existing response shape changes, old clients never call them.
 	s.mux.HandleFunc("POST /api/v1/agents/{id}/fs/upload", s.handleV1FSRawUpload)

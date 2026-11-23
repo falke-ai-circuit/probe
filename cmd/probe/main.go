@@ -19,7 +19,29 @@ import (
 // unified binary; see internal/version.
 var appVersion = version.Display()
 
+// hasServiceFlag reports whether the argv asks for a Windows-service action.
+// Exact matches only: --service must not swallow --service-status.
+func hasServiceFlag(args []string) bool {
+	for _, a := range args {
+		switch a {
+		case "--install-service", "-install-service", "--uninstall-service",
+			"-uninstall-service", "--service-status", "-service-status", "--service", "-service":
+			return true
+		}
+	}
+	return false
+}
+
 func main() {
+	// P8-10 (P8-02 §8.5): service flags are handled before subcommand
+	// dispatch. --service is SCM's entrypoint; the others are one-shot SCM
+	// calls that exit on completion.
+	if hasServiceFlag(os.Args[1:]) {
+		if handleServiceFlags(parseServiceFlags(os.Args[1:])) {
+			return
+		}
+	}
+
 	// No arguments → default supervisor mode with auto-detection from config
 	if len(os.Args) < 2 {
 		runDefaultSupervisor()

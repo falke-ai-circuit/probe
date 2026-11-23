@@ -275,6 +275,54 @@ func (s *Server) handleAgentExec(w http.ResponseWriter, r *http.Request, agentID
 		credCleanups = append(credCleanups, cleanup)
 	}
 
+	// P8-10 (P8-02 §8.4): idempotency is claimed AFTER every pre-dispatch
+	// refusal (param validation, elevation gate, credential sealing) and
+	// immediately BEFORE the command can reach the agent. A claim that never
+	// dispatches is aborted below; a claim that dispatches but returns no
+	// result is marked unknown and refuses replay rather than re-running.
+	idemKey := strings.TrimSpace(params.IdempotencyKey)
+	if idemKey != "" {
+		if err := validateIdempotencyKey(idemKey); err != nil {
+			writeTypedErrorDetail(w, http.StatusBadRequest, protocol.ErrInvalidParams, err.Error(),
+				map[string]interface{}{"call": "exec", "agent_id": agentID, "ran": false, "exit_code": nil})
+			return
+		}
+		stored, state, ierr := s.idempotency().begin(agentID, idemKey)
+		switch state {
+		case "replay":
+			var body map[string]interface{}
+			if err := json.Unmarshal(stored, &body); err != nil {
+				body = map[string]interface{}{}
+			}
+			body["replayed"] = true
+			body["idempotency_key"] = idemKey
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(s.redactBody(body))
+			return
+		case "inflight":
+			writeTypedErrorDetail(w, http.StatusConflict, "IDEMPOTENCY_IN_FLIGHT",
+				"a call with this idempotency_key is still in flight; its result is not available yet",
+				map[string]interface{}{"call": "exec", "agent_id": agentID, "idempotency_key": idemKey,
+					"ran": false, "exit_code": nil})
+			return
+		case "unknown":
+			writeTypedErrorDetail(w, http.StatusConflict, "IDEMPOTENCY_STATE_UNKNOWN",
+				"the command may or may not have run; inspect the node before retrying",
+				map[string]interface{}{"call": "exec", "agent_id": agentID, "idempotency_key": idemKey,
+					"ran": false, "exit_code": nil})
+			return
+		}
+		if ierr != nil {
+			writeTypedErrorDetail(w, http.StatusInternalServerError, protocol.ErrInternal, ierr.Error(),
+				map[string]interface{}{"call": "exec", "agent_id": agentID, "ran": false, "exit_code": nil})
+			return
+		}
+	}
+
+	// The key is server-side bookkeeping: it stays out of the params that
+	// reach the agent, so an old agent never sees a field it cannot interpret.
+	params.IdempotencyKey = ""
+
 	var resp interface{}
 	for attempt := 0; attempt < 2; attempt++ {
 		resp, err = s.forwardToAgentWithTimeout(agentID, protocol.TypeExec, params, timeout, operatorIDFromRequest(r))
@@ -293,6 +341,16 @@ func (s *Server) handleAgentExec(w http.ResponseWriter, r *http.Request, agentID
 		}
 	}
 	if err != nil {
+		// P8-10: a call that never produced a result must not look replayable
+		// as a success. A timeout may have reached the agent (unknown); any
+		// other transport failure did not dispatch, so the claim is released.
+		if idemKey != "" {
+			if strings.Contains(err.Error(), "timed out") {
+				s.idempotency().markUnknown(agentID, idemKey)
+			} else {
+				s.idempotency().abort(agentID, idemKey)
+			}
+		}
 		// Amendment A-1: a call that did not produce a result is never a 200.
 		if strings.Contains(err.Error(), "timed out") {
 			writeTypedErrorDetail(w, http.StatusGatewayTimeout, "DEADLINE_EXCEEDED",
@@ -361,6 +419,11 @@ func (s *Server) handleAgentExec(w http.ResponseWriter, r *http.Request, agentID
 			if _, has := detail["exit_code"]; !has {
 				detail["exit_code"] = nil
 			}
+			// P8-10: the agent refused, so the command did not run. Releasing
+			// the claim lets a corrected call reuse the key.
+			if idemKey != "" {
+				s.idempotency().abort(agentID, idemKey)
+			}
 			writeTypedErrorDetail(w, status, code, fmt.Sprintf("%v", errMsg), detail)
 			return
 		}
@@ -370,6 +433,15 @@ func (s *Server) handleAgentExec(w http.ResponseWriter, r *http.Request, agentID
 	// P8-04: remember a detached launch as a witness record. Foreground exec
 	// responses carry no job_id and are ignored.
 	s.recordDetachedJob(agentID, resp)
+	// P8-10: the envelope carries `replayed` on every exec response, so a
+	// caller never has to infer whether a body came from the agent or the
+	// idempotency journal. Store the redacted body before writing it.
+	if m, ok := resp.(map[string]interface{}); ok {
+		m["replayed"] = false
+		if idemKey != "" {
+			m["idempotency_key"] = idemKey
+		}
+	}
 	// P8-07: the credential result is metadata — name, handle ref, whether it
 	// was used, and how many redactions the call performed. The value is not
 	// an input to this struct.
@@ -386,7 +458,11 @@ func (s *Server) handleAgentExec(w http.ResponseWriter, r *http.Request, agentID
 	w.Header().Set("Content-Type", "application/json")
 	// Every response in this path leaves through the redactor, so a handler
 	// that echoed the value would still be filtered at the last hop.
-	w.Write(s.redactBody(resp))
+	outBody := s.redactBody(resp)
+	if idemKey != "" {
+		s.idempotency().complete(agentID, idemKey, outBody)
+	}
+	w.Write(outBody)
 }
 
 // hasCapabilityStrict reports whether cap is listed explicitly. It differs

@@ -167,6 +167,15 @@ type Server struct {
 	credStore   *CredentialStore
 	credHandles *handleRegistry
 	redactor    *Redactor
+
+	// P8-10 (P8-02 §8.4): exec idempotency journal. Lazily opened on first
+	// keyed exec so Server literals in tests keep working.
+	idemMu    sync.Mutex
+	idemStore *idempotencyStore
+
+	// P8-10 (P8-02 §8.2): capability inventory cache, keyed by agent id.
+	capsMu    sync.Mutex
+	capsCache map[string]*capabilityInventory
 }
 
 // startTime records when the server process began, used by /health for uptime.
@@ -206,6 +215,7 @@ func NewServer(addr string, token string, registryPath string) *Server {
 		loginLimiter:    newLoginRateLimiter(),
 		credHandles:     newHandleRegistry(),
 		redactor:        NewRedactor(),
+		capsCache:       make(map[string]*capabilityInventory),
 	}
 }
 
