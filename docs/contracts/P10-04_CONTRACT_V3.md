@@ -1,7 +1,7 @@
 # P10-04 v3 — OS-agnostic primitive contract (corrected after falsification)
 
 **CLOSE HEADER — artefact**
-`reviewed_by: reviewer` · `verdict: NEEDS-REVIEW` · `verdict_sha_of_head: PENDING-COMMIT` ·
+`reviewed_by: reviewer` · `verdict: NEEDS-REVIEW` · `verdict_sha_of_head: 57b141529fea78316c7216c6bf4c767bcfc28d73` ·
 `artefact: /opt/data/tmp/probe119/P10-04_CONTRACT_V3.md` · `committed as docs/contracts/P10-04_CONTRACT_V3.md on r119-build`
 `suite: n/a — doc-only unit; no code, no handler edit, tree at b342636 byte-identical in every .go file (git diff --name-only ec647ed..b342636 | grep -c '\.go$' → 0)`
 `open item: Windows has no node — every Windows cell is [S] and excluded from ratification (see ## Ratification scope)`
