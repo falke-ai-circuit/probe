@@ -19,12 +19,19 @@ import (
 	"os"
 	"time"
 
+	"github.com/falke-ai-circuit/probe/internal/lifecycle"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
 )
 
 const serviceName = "PROBEA"
+
+// procFreeConsole detaches the process from any console. The vendored x/sys
+// v0.20.0 does not export FreeConsole (it is not in the pinned surface), so it
+// is called through the same pinned kernel32 binding instead of adding a
+// dependency or hand-rolling a syscall.
+var procFreeConsole = windows.NewLazySystemDLL("kernel32.dll").NewProc("FreeConsole")
 
 // serviceExitCode maps our stop reasons onto SCM's vocabulary.
 type probeService struct {
@@ -84,6 +91,29 @@ func runServiceEntry() {
 		fmt.Fprintln(os.Stderr, "--service is only valid when launched by the Service Control Manager")
 		os.Exit(1)
 	}
+
+	// P12-02: no console window, and no console as a control surface.
+	//
+	// This binary is built as a console-subsystem PE, so a process started by
+	// SCM receives a console. Session 0 isolation (Vista+) keeps that console
+	// off the interactive desktop, so nothing visibly pops for the logged-in
+	// user — but the console object still exists, and a console control event
+	// (Ctrl+C/Ctrl+Break delivered by anything holding that console) would reach
+	// the Go runtime and exit the service with a console status instead of a
+	// service stop. Detaching removes both problems. FreeConsole fails with
+	// ERROR_INVALID_PARAMETER when the process has no console, which is exactly
+	// the state we want, so the error is ignored by design.
+	if err := procFreeConsole.Find(); err == nil {
+		_, _, _ = procFreeConsole.Call()
+	} else {
+		// kernel32 always has FreeConsole; a missing proc means the binding is
+		// broken, which must be visible rather than silently skipped.
+		log.Printf("[service] kernel32!FreeConsole unavailable: %v", err)
+	}
+	// Mark the process as SCM-owned before the agent loop starts, so the
+	// run-state record the status surface reads says how it was started.
+	_ = os.Setenv("PROBE_RUN_AS_SERVICE", "windows-service")
+
 	handler := &probeService{args: os.Args[1:]}
 	if err := svc.Run(serviceName, handler); err != nil {
 		log.Printf("[service] svc.Run: %v", err)
@@ -142,25 +172,38 @@ func uninstallService() error {
 	return s.Delete()
 }
 
-// serviceStatus prints SCM's view of the service — the console requirement.
-func serviceStatus() error {
+// serviceStatus prints SCM's view of the service AND the live run state the
+// agent publishes (PID, version, uptime). SCM can only say that the process
+// exists; the record proves which build is running and for how long, which is
+// what an operator asks after an in-place update.
+//
+// A service that is not installed is not an error: the agent may be running as
+// a plain foreground process, and the lifecycle line still answers the real
+// question. The exit code is the lifecycle verdict (0 running, 3 not running,
+// 1 unknown) so a smoke test can gate on it.
+func serviceStatus(statusFile string) int {
+	manager := "scm:not-installed"
 	m, err := mgr.Connect()
-	if err != nil {
-		return fmt.Errorf("connect to SCM: %w", err)
+	if err == nil {
+		if s, oerr := m.OpenService(serviceName); oerr == nil {
+			if st, qerr := s.Query(); qerr == nil {
+				manager = fmt.Sprintf("scm:%s", serviceStateString(st.State))
+				fmt.Printf("service=%s state=%s process_id=%d accepts_stop=%v\n",
+					serviceName, serviceStateString(st.State), st.ProcessId, st.Accepts&svc.AcceptStop != 0)
+			} else {
+				manager = "scm:query-failed"
+			}
+			s.Close()
+		}
+		m.Disconnect()
+	} else {
+		manager = "scm:unavailable"
 	}
-	defer m.Disconnect()
-	s, err := m.OpenService(serviceName)
-	if err != nil {
-		return fmt.Errorf("open service: %w", err)
-	}
-	defer s.Close()
-	st, err := s.Query()
-	if err != nil {
-		return err
-	}
-	fmt.Printf("service=%s state=%s process_id=%d accepts_stop=%v\n",
-		serviceName, serviceStateString(st.State), st.ProcessId, st.Accepts&svc.AcceptStop != 0)
-	return nil
+
+	rep := lifecycle.ProbeResolved(statusFile, time.Now())
+	rep.Manager = manager
+	fmt.Println(rep.Line())
+	return rep.ExitCode()
 }
 
 func serviceStateString(s svc.State) string {
@@ -204,11 +247,12 @@ func isElevated() bool {
 // drives install/uninstall/status; elsewhere it reports that the feature does
 // not exist on this platform.
 type serviceFlags struct {
-	install   bool
-	uninstall bool
-	status    bool
-	run       bool
-	config    string
+	install    bool
+	uninstall  bool
+	status     bool
+	run        bool
+	config     string
+	statusFile string
 }
 
 func parseServiceFlags(args []string) serviceFlags {
@@ -216,9 +260,10 @@ func parseServiceFlags(args []string) serviceFlags {
 	fs := flag.NewFlagSet("service", flag.ContinueOnError)
 	fs.BoolVar(&out.install, "install-service", false, "install the agent as a Windows service (admin, once)")
 	fs.BoolVar(&out.uninstall, "uninstall-service", false, "remove the Windows service")
-	fs.BoolVar(&out.status, "service-status", false, "print the service state from SCM")
+	fs.BoolVar(&out.status, "service-status", false, "print live run state: running/not-running, version, uptime")
 	fs.BoolVar(&out.run, "service", false, "internal: run under the Service Control Manager")
 	fs.StringVar(&out.config, "config", "", "config file for the installed service")
+	fs.StringVar(&out.statusFile, "status-file", "", "explicit path for the run-state record")
 	_ = fs.Parse(args)
 	return out
 }
@@ -249,8 +294,7 @@ func handleServiceFlags(f serviceFlags) bool {
 			os.Exit(1)
 		}
 		fmt.Printf("installed service %s (automatic, recovery 5s/10s/30s)\n", serviceName)
-		_ = serviceStatus()
-		return true
+		os.Exit(serviceStatus(f.statusFile))
 	case f.uninstall:
 		if err := uninstallService(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -259,11 +303,7 @@ func handleServiceFlags(f serviceFlags) bool {
 		fmt.Printf("removed service %s\n", serviceName)
 		return true
 	case f.status:
-		if err := serviceStatus(); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		return true
+		os.Exit(serviceStatus(f.statusFile))
 	}
 	return false
 }

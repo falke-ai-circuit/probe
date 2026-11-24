@@ -190,6 +190,12 @@ type Config struct {
 	// which keeps Config literals that predate this field compiling and
 	// reporting a real version.
 	Version string
+	// StatusPath is an explicit path for the run-state record the status
+	// surface reads (--status-file / $PROBE_STATUS_FILE). Empty resolves via
+	// lifecycle.ResolvePath: $PROBE_STATE_DIR, then the platform's shared state
+	// directory, then <exe dir>/state. The agent and the status command share
+	// that resolver so they cannot disagree about which file they mean.
+	StatusPath string
 }
 
 // Version is the wire form of the version this build reports when Config.Version
@@ -319,6 +325,12 @@ func (a *Agent) Stop() {
 
 // Run starts the agent in the configured mode.
 func (a *Agent) Run() error {
+	// Publish the run-state record the status surface reads (see statusfile.go)
+	// for every mode. The result is what "is it running, which version, for how
+	// long" is answered from — live process facts, not configuration.
+	stopStatus := a.startStatusFile()
+	defer stopStatus()
+
 	switch a.cfg.Mode {
 	case "outbound":
 		return a.runOutbound()

@@ -246,6 +246,59 @@ All subcommands are always available: `probe serve`, `probe connect`, `probe rel
 
 **Trade-off**: The unified binary includes server and relay code in every build, increasing the reverse-engineering surface compared to the v1.5.0 build-tag approach. This trade-off is accepted for operational simplicity — a single binary for all deployments. Obfuscation/evasion code was removed (commit 87fecdf) — MANTLE handles deployment-time obfuscation now.
 
+## Lifecycle: running as a service
+
+An agent that dies with the shell that started it is not deployed. Both
+platforms have a service path, and both answer the same status question from
+live process state.
+
+### Linux (systemd)
+
+Unit: `packaging/systemd/probe-agent.service` · installer: `packaging/systemd/install.sh`
+
+```bash
+sudo packaging/systemd/install.sh          # installs binary, account, unit; enables + starts
+journalctl -u probe-agent -f               # logs go to the journal
+/opt/probe/probe --service-status          # live state: running, version, uptime
+```
+
+Key directives (full file in `packaging/systemd/`): `ExecStart=/opt/probe/probe
+connect --config /etc/probe/agent.json --status-file /var/lib/probe/status.json`,
+`User=probe`, `WorkingDirectory=/opt/probe`, `Restart=on-failure`,
+`RestartSec=5s`, `StartLimitIntervalSec=0`, `StateDirectory=probe`,
+`StandardOutput=journal`. `StateDirectory` is what makes the state path
+survive a reboot and stay writable by the service account.
+
+`Restart=` only sees process exit. A live process whose event loop is wedged is
+reported by `--service-status` as `wedged=true`; `systemctl is-active` cannot
+see that, which is why the status command exists.
+
+### Windows (Service Control Manager)
+
+```powershell
+probe.exe --install-service                 # admin, once: automatic start + recovery 5s/10s/30s
+probe.exe --service-status                  # SCM state + live PID/version/uptime
+probe.exe --uninstall-service
+```
+
+The service runs under SCM in session 0, so nothing depends on the interactive
+session: logging off does not stop it and there is no console window on the
+user's desktop. The service entrypoint additionally calls `kernel32!FreeConsole`
+so a console control event cannot terminate the agent through the console path.
+
+### Status surface (both platforms)
+
+`--service-status` reads the record the running agent rewrites every 15 s
+(`status.json`: PID, process creation time, version, start time) and verifies it
+against the live process table — a recycled PID is rejected by comparing the
+process creation time, so the answer is "which build is running", not "which
+build is on disk". Exit codes: `0` running, `3` not running, `1` unknown.
+
+```
+state=running pid=4112 version=v1.19.1 uptime=1h2m3s heartbeat_age=4s status_file=/var/lib/probe/status.json source=/var/lib/probe (shared)
+state=not_running last_pid=4112 reason="pid 4112 is not alive (record left by a killed or exited process)" ...
+```
+
 ## License
 
 MIT

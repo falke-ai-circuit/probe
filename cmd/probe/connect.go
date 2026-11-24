@@ -53,6 +53,7 @@ func runConnect(args []string) {
 	showVersion := fs.Bool("version", false, "Print version and exit")
 	canaryMode := fs.Bool("canary", false, "Canary mode: connect, prove healthy, then swap into canonical path and stop the old process")
 	canaryOldPID := fs.Int("canary-old-pid", 0, "PID of the old process to stop after a successful swap")
+	statusFile := fs.String("status-file", "", "path for the run-state record read by --service-status (default: $PROBE_STATUS_FILE, $PROBE_STATE_DIR, or the platform state dir)")
 	fs.Parse(args)
 
 	// configExplicit records whether --config was passed at all: the default
@@ -187,6 +188,7 @@ func runConnect(args []string) {
 		EmbeddedConfig: configB64 != "",
 		CanaryMode:     *canaryMode,
 		CanaryOldPID:   *canaryOldPID,
+		StatusPath:     *statusFile,
 	}
 
 
@@ -216,8 +218,13 @@ func runConnect(args []string) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	// Start agent in background
+	// Start agent in background. agentDone closes after Run returns, which
+	// includes the deferred cleanup that retires the run-state record — so a
+	// SIGTERM shutdown must wait for it (below) instead of exiting underneath it
+	// and leaving a stale "running" record behind for every status read.
+	agentDone := make(chan struct{})
 	go func() {
+		defer close(agentDone)
 		if err := ag.Run(); err != nil {
 			log.Fatalf("Connection error: %v", err)
 		}
@@ -230,6 +237,12 @@ func runConnect(args []string) {
 
 	<-sigCh
 	log.Println("PROBE Client shutting down...")
+	ag.Stop()
+	select {
+	case <-agentDone:
+	case <-time.After(5 * time.Second):
+		log.Println("agent did not stop within 5s; exiting (the run-state record will read stale, which the status command reports as not_running)")
+	}
 }
 
 func printConnectUsage() {

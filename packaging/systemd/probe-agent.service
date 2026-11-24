@@ -1,0 +1,50 @@
+[Unit]
+Description=PROBE remote agent (connect)
+Documentation=file:///opt/probe/README.md
+# Wants/After network-online so the agent's first dial does not race DHCP or a
+# VPN coming up. The agent retries anyway; this just avoids a noisy first entry.
+After=network-online.target
+Wants=network-online.target
+# An agent that crashes on a bad config must not run out of start attempts: the
+# default (5 starts / 10 s) leaves it dead after a burst of failures, which looks
+# identical to "installed but not running" from the outside. Unlimited restarts
+# keep trying, and the journal shows the loop.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+# Unprivileged service account created by install.sh. The agent does not need
+# root for anything it does; grant it only if a task genuinely requires it.
+User=probe
+Group=probe
+WorkingDirectory=/opt/probe
+# connect = the agent dials out to the server. Absolute paths so the unit does
+# not depend on WorkingDirectory. --status-file pins the run-state record to the
+# directory systemd owns via StateDirectory, which is how `probe --service-status`
+# finds the live PID/version/uptime without being told where to look.
+ExecStart=/opt/probe/probe connect --config /etc/probe/agent.json --status-file /var/lib/probe/status.json
+# Restart on any non-zero exit, including a clean-looking exit 1 from a config
+# error: a fixed config should bring the agent back without a manual start.
+Restart=on-failure
+RestartSec=5s
+# Logs go to the journal, not to files the agent would have to rotate:
+#   journalctl -u probe-agent -f
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=probe-agent
+# Owns /var/lib/probe (0755, owned by User). StateDirectory is what makes the
+# status record survive a reboot and be writable by the service account without
+# a blanket chmod of /var/lib.
+StateDirectory=probe
+StateDirectoryMode=0755
+# SIGTERM lets the agent close its websocket; 20 s covers a slow close without
+# leaving systemd waiting forever on a wedged process.
+KillSignal=SIGTERM
+TimeoutStopSec=20s
+# Note: Restart= covers process exit only. A live process with a dead event loop
+# is reported by `probe --service-status` as state=running wedged=true
+# (heartbeat_age beyond 45 s) — systemd cannot see that, so the status surface
+# is the check, not `systemctl is-active`.
+
+[Install]
+WantedBy=multi-user.target
