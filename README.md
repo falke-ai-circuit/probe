@@ -99,6 +99,35 @@ EOF
 ./cmd/probe-client/probe-client
 ```
 
+## Container deployment
+
+The server image is pinned in `docker-compose.yml` by commit tag and manifest
+digest — never a floating tag:
+
+```yaml
+image: ghcr.io/falke-ai-circuit/probe:70de7fa03f879e0cdc48dc9048a5d25c69121211@sha256:466b2fc23e3349ba136a0a34867b44b48d24d9bd08ea7121fe324e24765d5504
+```
+
+The host pulls, it does not build; `docker-compose.yml` carries no `build:` key so
+the runtime `/src` cannot drift from the pinned commit. Persistent state is bind
+mounted, so a container recreation keeps the agent registry, the enrollment DB
+and the builder's artifacts:
+
+| in-container path | holds | host mount (default) |
+|---|---|---|
+| `/data/runtime` | registry.json, enrollment.json, operators.json, builds.json, `builds/` artifacts, ca/, flows.json | `/docker/agent-core/data/workspace-operative/probe/runtime` |
+| `/data/logs` | audit.jsonl | `/docker/agent-core/data/logs/falke/probe` |
+
+Override the host side with `PROBE_RUNTIME_DIR` / `PROBE_LOG_DIR`.
+
+Bring-up reports what it is — the server version, the agent counts and whether
+the running image is the pinned digest — instead of just "it started":
+
+```bash
+./scripts/bringup.sh            # compose up -d, wait for health, report
+./scripts/bringup.sh --no-up    # report on an already-running server
+```
+
 ## Usage
 
 ```

@@ -1,5 +1,26 @@
 # PROBE — Platform for Remote Operations & Bridge Environment
-# Directly deployable: docker compose up -d --build
+#
+# Deploy (host pulls, it does not build):  docker compose up -d
+# Bring-up that reports what it is:        ./scripts/bringup.sh
+#
+# IMAGE PIN — do not change this to a floating tag.
+#   ghcr.io/falke-ai-circuit/probe:70de7fa03f879e0cdc48dc9048a5d25c69121211
+#   @sha256:466b2fc23e3349ba136a0a34867b44b48d24d9bd08ea7121fe324e24765d5504
+# The tag is the commit the image was built from (70de7fa, "release: bump Semver
+# 1.19.0 -> 1.19.1"), the digest is the manifest digest that image resolved to on
+# the host that runs this stack. `image:` carries both, so a re-tag on the
+# registry cannot silently change what a deploy gets. There is deliberately no
+# `build:` key: the image is published by .github/workflows/docker.yml, and a
+# compose file that can build would let the runtime /src drift from the tag.
+# To build a local image for testing, use a distinct name and never push it under
+# this reference:  docker build -t probe:local-$(git rev-parse --short HEAD) .
+#
+# PERSISTENT DATA (survives container recreation):
+#   /data/runtime          agent registry, enrollment DB, operator DB, CA, flows,
+#                          builder DB and the managed build artifacts
+#   /data/logs             audit log
+# Both are bind mounts with production defaults; override the host side with
+# PROBE_RUNTIME_DIR / PROBE_LOG_DIR without editing this file.
 #
 # Security defaults:
 #   - Admin password: f4lk3.PROBE (change via PROBE_ADMIN_PASSWORD env)
@@ -12,15 +33,14 @@
 
 services:
   probe:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: falke-probe:latest
+    image: ghcr.io/falke-ai-circuit/probe:70de7fa03f879e0cdc48dc9048a5d25c69121211@sha256:466b2fc23e3349ba136a0a34867b44b48d24d9bd08ea7121fe324e24765d5504
     container_name: falke-probe
     restart: unless-stopped
     ports:
       - "7701:7701"
     volumes:
+      - ${PROBE_RUNTIME_DIR:-/docker/agent-core/data/workspace-operative/probe/runtime}:/data/runtime
+      - ${PROBE_LOG_DIR:-/docker/agent-core/data/logs/falke/probe}:/data/logs
       - probe-data:/data
     environment:
       - PROBE_ADMIN_PASSWORD=f4lk3.PROBE
@@ -49,6 +69,10 @@ services:
       - /data/runtime/builds.json
       - --builder-output-dir
       - /data/runtime/builds
+      - --builder-go
+      - /usr/local/go/bin/go
+      - --builder-source
+      - /src/cmd/probe-client/
       - --profiles-db
       - /data/runtime/profiles.json
       - --ca-dir
@@ -60,7 +84,10 @@ services:
       - --blacklist-cidr
       - ${PROBE_BLACKLIST_CIDR:-}
     healthcheck:
-      test: ["CMD", "sh", "-c", "curl -sf http://localhost:7701/api/v1/agents || exit 1"]
+      # /api/v1/health is the unauthenticated version+count surface. Do not use
+      # /api/v1/agents here: it requires a token and returns 401, which marks a
+      # healthy server unhealthy (measured: 401 without auth, 200 on health).
+      test: ["CMD", "sh", "-c", "curl -sf http://localhost:7701/api/v1/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
