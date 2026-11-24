@@ -1,7 +1,7 @@
 # P10-05 — PLATFORM MATRIX v2, re-measured against a HEAD build
 
 **CLOSE HEADER**
-`reviewed_by: reviewer` · `verdict: NEEDS-REVIEW` · `verdict_sha_of_head: VERDICT_SHA_PLACEHOLDER`
+`reviewed_by: reviewer` · `verdict: NEEDS-REVIEW` · `verdict_sha_of_head: 251d9b45990badec3c3c1f4ec764c012bcbac108` (the commit that added this document; this header line itself was echoed in the next commit)
 `artefact: /opt/data/tmp/probe119/P10-05_MATRIX_V2.md` · `also committed at .workflow/analyst/P10-05_MATRIX_V2.md` (repo `/opt/data/projects/PROBE_UPGRADE/v119wt`, branch `r119-build`)
 `suite: go test ./... -count=1 → 572 PASS / 0 FAIL / 1 SKIP, exit 0 (go1.25.0, HEAD b342636)`
 `open item: Windows, Wayland, Android columns remain U — no node of those platforms was reached (§7)`
