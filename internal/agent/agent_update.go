@@ -1,8 +1,6 @@
 package agent
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
@@ -13,6 +11,7 @@ import (
 	"time"
 
 	"github.com/falke-ai-circuit/probe/internal/protocol"
+	"github.com/falke-ai-circuit/probe/internal/upgrade"
 )
 
 // handleAgentUpdate downloads a new binary, verifies it, starts it as a new
@@ -268,19 +267,10 @@ func (a *Agent) reportUpdateFailure(env protocol.Envelope, message string) {
 	}
 }
 
-// hashFile computes the SHA256 hex digest of a file.
-func hashFile(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
+// hashFile computes the SHA256 hex digest of a file. It delegates to
+// upgrade.FileSHA256 so the update path has exactly one digest implementation:
+// the same one the swap verification reads after a placement.
+func hashFile(path string) (string, error) { return upgrade.FileSHA256(path) }
 
 // getSysProcAttr is defined in sysprocattr_windows.go / sysprocattr_other.go
 

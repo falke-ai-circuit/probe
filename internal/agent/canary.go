@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/falke-ai-circuit/probe/internal/upgrade"
 	"github.com/gorilla/websocket"
 )
 
@@ -74,104 +75,55 @@ func (a *Agent) runCanaryCommit(conn *websocket.Conn) {
 	_ = conn.Close()
 }
 
-// swapRename is the rename primitive used by swapBinaryPaths. It is a variable
-// so tests can force the commit rename to fail and exercise the rollback path.
+// swapRename is the rename primitive the swap uses. It is a variable so tests
+// can force the commit rename to fail and exercise the rollback path.
 var swapRename = os.Rename
 
-// backupSlot returns the fixed backup path used for a canonical binary. The
-// slot name is stable because startup recovery (RecoverCanonicalBinary) looks
-// for exactly "<canonical>.old" after a crash mid-swap.
-func backupSlot(canonical string) string {
-	return canonical + ".old"
-}
+// agentSwapFS adapts the process's own filesystem to upgrade.SwapFS. Rename goes
+// through swapRename so the rollback tests keep their failure seam; Stat and
+// Hash are the same reads the verification contract is built on.
+type agentSwapFS struct{}
 
-// archiveExistingBackup moves a pre-existing "<canonical>.old" aside to
-// "<canonical>.old-<sha8 of its contents>" so the slot can be reused without
-// destroying the previous generation.
-//
-// POSIX rename replaces the destination, so without this guard a second update
-// would overwrite the genuine old-version backup with the current binary and
-// the rollback path could only "restore" the already-new binary. After N
-// successful updates this keeps a chain: .old (immediately previous) plus one
-// .old-<sha8> per earlier generation, each identifiable by its own sha.
-func archiveExistingBackup(canonical string) (string, error) {
-	slot := backupSlot(canonical)
-	slotHash, err := hashFile(slot)
+func (agentSwapFS) Stat(path string) (upgrade.SwapFile, error) {
+	fi, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", nil
+			return upgrade.SwapFile{}, nil
 		}
-		return "", fmt.Errorf("hash existing backup %s: %w", slot, err)
+		return upgrade.SwapFile{}, err
 	}
-	archived := slot + "-" + slotHash[:8]
-	if prevHash, prevErr := hashFile(archived); prevErr == nil {
-		if prevHash != slotHash {
-			return "", fmt.Errorf("refusing to overwrite %s: holds sha %s, slot holds sha %s", archived, prevHash, slotHash)
-		}
-		// Same bytes already archived: replacing it loses nothing.
-	} else if !os.IsNotExist(prevErr) {
-		return "", fmt.Errorf("hash archived backup %s: %w", archived, prevErr)
-	}
-	if err := swapRename(slot, archived); err != nil {
-		return "", fmt.Errorf("archive existing backup %s -> %s: %w", slot, archived, err)
-	}
-	log.Printf("[canary] archived previous backup: %s -> %s", slot, archived)
-	return archived, nil
+	return upgrade.SwapFile{Exists: true, IsDir: fi.IsDir(), Size: fi.Size()}, nil
 }
 
-// restoreBackup renames the backup over the canonical path and proves the
-// restored bytes are the pre-update binary. A restore that cannot prove the
-// expected sha is reported as an error — never a silent success — because a
-// silently-wrong rollback leaves the host running an unverified binary.
-func restoreBackup(backup, canonical, expectedSHA string) error {
-	if err := swapRename(backup, canonical); err != nil {
-		return fmt.Errorf("restore %s -> %s: %w", backup, canonical, err)
-	}
-	restored, err := hashFile(canonical)
-	if err != nil {
-		return fmt.Errorf("verify restored %s: %w", canonical, err)
-	}
-	if restored != expectedSHA {
-		return fmt.Errorf("restored sha %s != expected pre-update sha %s at %s", restored, expectedSHA, canonical)
-	}
-	log.Printf("[canary] rollback restored %s: expected sha %s, restored sha %s (match)", canonical, expectedSHA, restored)
-	return nil
-}
+func (agentSwapFS) Hash(path string) (string, error) { return hashFile(path) }
+
+func (agentSwapFS) Rename(from, to string) error { return swapRename(from, to) }
 
 // swapBinaryPaths performs the two-rename swap of newExe into canonical and
-// returns the backup path holding the pre-update binary:
-//  1. archive an existing <canonical>.old to a sha-named generation
-//  2. rename <canonical> -> <canonical>.old  (back up the old binary)
-//  3. rename <canonical>.next -> <canonical> (new takes the canonical path)
+// returns the backup path holding the pre-update binary.
 //
-// If step 3 fails the pre-update binary is restored and its sha asserted; a
-// failed restore is returned as a loud, combined error.
+// The implementation lives in internal/upgrade (SwapRunningBinary): this is the
+// same leg the in-band update path uses, and there is deliberately only one of
+// it. The per-OS rules, the staged .next/.old naming and the size+sha read-back
+// verification are documented there; this wrapper only supplies the local
+// filesystem and the platform.
 func swapBinaryPaths(newExe, canonical string) (string, error) {
-	expectedOld, err := hashFile(canonical)
+	res, err := upgrade.SwapRunningBinary(upgrade.SwapRequest{
+		Canonical: canonical,
+		Staged:    newExe,
+		Platform:  upgrade.RuntimePlatform(),
+		FS:        agentSwapFS{},
+	})
 	if err != nil {
-		return "", fmt.Errorf("hash pre-update binary %s: %w", canonical, err)
+		return res.Backup, err
 	}
-
-	if _, err := archiveExistingBackup(canonical); err != nil {
-		return "", err
+	log.Printf("[canary] swap verified: canonical size=%d sha=%s, backup %s size=%d sha=%s",
+		res.AfterSize, upgrade.ShortDigest(res.AfterSHA),
+		res.Backup, res.BackupSize, upgrade.ShortDigest(res.BackupSHA))
+	if res.Archived != "" {
+		log.Printf("[canary] archived previous backup: %s", res.Archived)
 	}
-	backup := backupSlot(canonical)
-
-	// Linux/Unix: atomic rename over a running binary (old process keeps its
-	// inode). Windows: renaming a running exe aside is allowed (the loader
-	// opens it with FILE_SHARE_DELETE); only overwrite/delete is blocked.
-	if err := swapRename(canonical, backup); err != nil {
-		return "", fmt.Errorf("backup old binary: %w", err)
-	}
-
-	if err := swapRename(newExe, canonical); err != nil {
-		if restoreErr := restoreBackup(backup, canonical, expectedOld); restoreErr != nil {
-			return backup, fmt.Errorf("rename new into place: %w; ROLLBACK FAILED: %v (expected pre-update sha %s)", err, restoreErr, expectedOld)
-		}
-		return backup, fmt.Errorf("rename new into place: %w (rolled back, sha %s verified)", err, expectedOld)
-	}
-
-	return backup, nil
+	return res.Backup, nil
 }
 
 // swapAndKillOld atomically swaps the canary binary into the canonical path and

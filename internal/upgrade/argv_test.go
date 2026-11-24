@@ -60,6 +60,52 @@ func TestNewClientArgsRefusesUnterminatedQuote(t *testing.T) {
 	}
 }
 
+// TestNewClientArgsDropsSyntheticConfig is the P12-01 writer-side half: an old
+// client that synthesised <dir>\probe-client.json on an agent-named install
+// hands over a path that does not exist. Pinning it into the successor argv
+// would make the new process resolve a dead end; dropping the pair lets it
+// resolve the real config beside its own executable. The dropped path is
+// returned so the caller can journal exactly what was discarded.
+func TestNewClientArgsDropsSyntheticConfig(t *testing.T) {
+	const synthetic = `C:\Probe\probe-client.json`
+	oracle := func(path string) bool { return path != synthetic }
+
+	args, cfg, dropped, err := NewClientArgsChecked(
+		`C:\Probe\probe-V6049A-EAS1.exe connect --config C:\Probe\probe-client.json`, oracle)
+	if err != nil {
+		t.Fatalf("NewClientArgsChecked: %v", err)
+	}
+	if len(args) != 0 || cfg != "" {
+		t.Fatalf("args=%v cfg=%q, want zero arguments so the successor resolves its own config", args, cfg)
+	}
+	if dropped != synthetic {
+		t.Fatalf("dropped=%q, want the synthetic path %q (journal this)", dropped, synthetic)
+	}
+	if err := ValidateClientArgs(args); err != nil {
+		t.Fatalf("zero args must stay parseable: %v", err)
+	}
+}
+
+// TestNewClientArgsKeepsExistingConfig proves the existence check does not
+// regress a genuine --config: when the file is there, the pair is still passed
+// through and nothing is reported as dropped.
+func TestNewClientArgsKeepsExistingConfig(t *testing.T) {
+	const real = `C:\Probe\probe-V6049A-EAS1.json`
+	oracle := func(path string) bool { return EqualWinPath(path, real) }
+
+	args, cfg, dropped, err := NewClientArgsChecked(
+		`C:\Probe\probe-V6049A-EAS1.exe --config C:\Probe\probe-V6049A-EAS1.json`, oracle)
+	if err != nil {
+		t.Fatalf("NewClientArgsChecked: %v", err)
+	}
+	if cfg != real || dropped != "" {
+		t.Fatalf("cfg=%q dropped=%q, want %q and nothing dropped", cfg, dropped, real)
+	}
+	if len(args) != 2 || args[0] != "--config" || args[1] != real {
+		t.Fatalf("args=%v, want the --config pair unchanged", args)
+	}
+}
+
 func TestValidateClientArgs(t *testing.T) {
 	bad := [][]string{
 		{"connect"},
