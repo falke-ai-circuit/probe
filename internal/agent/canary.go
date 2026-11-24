@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"runtime"
@@ -53,26 +54,84 @@ func (a *Agent) runCanaryCommit(conn *websocket.Conn) {
 		return
 	}
 
-	if err := a.swapAndKillOld(); err != nil {
-		log.Printf("[canary] swap failed: %v — old keeps running (rollback)", err)
+	canonical, err := a.swapAndKillOld()
+	if err != nil {
+		a.abandonFailedCanary(conn, err)
 		return
 	}
+	a.finishCommit(canonical, conn)
+}
 
+// finishCommit is everything that happens after a swap has been verified: the
+// process becomes canonical and the connection is dropped so the reconnect loop
+// re-registers under the canonical name.
+func (a *Agent) finishCommit(canonical string, conn io.Closer) {
 	log.Printf("[canary] update committed — new version in place, old stopped. Becoming canonical agent.")
 
-	// Self-promote to the canonical agent. Not all hosts run under a service
-	// manager (systemd / Windows SCM / Android foreground service), so the
-	// canary itself must become the canonical process instead of relying on a
-	// service to restart it. Clear canary mode, restore the canonical name, and
-	// drop this connection so the reconnect loop re-registers under the
-	// canonical name and keeps running. The .old backup stays on disk for
-	// manual revert; the old process was already stopped above.
+	a.promoteToCanonical(canonical)
+
+	// Drop this connection so the reconnect loop re-registers under the
+	// canonical name and keeps running.
+	if conn != nil {
+		_ = conn.Close()
+	}
+}
+
+// canaryExitCode is the exit status of a canary that abandoned its update.
+const canaryExitCode = 3
+
+// canaryExecutable resolves the executable this process is running from. It is
+// a variable so the failed-swap test can point the swap at a scratch directory
+// instead of requiring the test binary to be named "<canonical>.next".
+var canaryExecutable = os.Executable
+
+// canaryExit terminates the canary process. It is a variable so a test can
+// observe that the exit path was taken without killing the test binary.
+var canaryExit = os.Exit
+
+// promoteToCanonical makes this process the canonical agent after a committed
+// swap. Not all hosts run under a service manager (systemd / Windows SCM /
+// Android foreground service), so the canary itself becomes the canonical
+// process instead of relying on a service to restart it: canary mode is cleared,
+// the -canary suffix is stripped, and the published run-state record is
+// re-derived.
+//
+// canonicalExe is the path the swap just placed the verified bytes at. Re-deriving
+// it from os.Executable() alone is not enough on every platform (a process can
+// keep reporting its staging name), and the swap has already proven the canonical
+// path holds this exact image — so the proven path is what the record carries.
+// The heartbeat shares this record, so the corrected identity is not reverted on
+// the next tick (P12-04 F2: status still said name=p1204-agent-canary,
+// executable=…/probe-agent.next, a file that no longer existed).
+func (a *Agent) promoteToCanonical(canonicalExe string) {
 	a.mu.Lock()
 	a.cfg.CanaryMode = false
 	a.cfg.Name = strings.TrimSuffix(a.cfg.Name, canaryNameSuffix)
+	name := a.cfg.Name
 	a.mu.Unlock()
 
-	_ = conn.Close()
+	if err := a.republishStatusIdentity(name, canonicalExe); err != nil {
+		log.Printf("[status] cannot re-publish run state after promotion: %v (record still names %q / %s)", err, name, canonicalExe)
+		return
+	}
+	log.Printf("[status] run state re-published after promotion: name=%s executable=%s", name, canonicalExe)
+}
+
+// abandonFailedCanary is the failed-swap exit path (P12-04 F4). The old process
+// keeps running and the canonical bytes were rolled back, so this process has no
+// job left — but it was connected and registered under "<name>-canary". Leaving
+// it alive produced TWO active agents after one failed update, the second one
+// running from a .next that no longer existed.
+//
+// CanaryMode is deliberately left true: if the exit is stubbed (tests) or the
+// runtime refuses to exit, Connect() sees an aborted canary and does not
+// reconnect — the old process stays the only agent.
+func (a *Agent) abandonFailedCanary(conn io.Closer, cause error) {
+	log.Printf("[canary] swap failed: %v — old keeps running (rollback); canary exiting so it cannot register as a second active agent", cause)
+	if conn != nil {
+		_ = conn.Close()
+	}
+	canaryExit(canaryExitCode)
 }
 
 // swapRename is the rename primitive the swap uses. It is a variable so tests
@@ -135,19 +194,19 @@ func swapBinaryPaths(newExe, canonical string) (string, error) {
 //
 // If step 2 fails, the old binary is restored (sha-verified) so the canonical
 // path still holds the exact pre-update binary.
-func (a *Agent) swapAndKillOld() error {
-	exe, err := os.Executable()
+func (a *Agent) swapAndKillOld() (string, error) {
+	exe, err := canaryExecutable()
 	if err != nil {
-		return fmt.Errorf("os.Executable: %w", err)
+		return "", fmt.Errorf("os.Executable: %w", err)
 	}
 	canonical := strings.TrimSuffix(exe, ".next")
 	if canonical == exe {
-		return fmt.Errorf("canary executable %q does not end in .next", exe)
+		return "", fmt.Errorf("canary executable %q does not end in .next", exe)
 	}
 
 	backup, err := swapBinaryPaths(exe, canonical)
 	if err != nil {
-		return err
+		return canonical, err
 	}
 
 	log.Printf("[canary] swapped binary: %s -> %s (backup %s)", exe, canonical, backup)
@@ -157,7 +216,7 @@ func (a *Agent) swapAndKillOld() error {
 		stopProcess(a.cfg.CanaryOldPID)
 	}
 
-	return nil
+	return canonical, nil
 }
 
 // stopProcess stops a process by PID. On Unix it sends SIGTERM (graceful) and

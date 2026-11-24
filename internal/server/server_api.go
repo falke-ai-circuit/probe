@@ -769,12 +769,50 @@ func (s *Server) forwardToAgent(agentID string, msgType string, params interface
 	return s.forwardToAgentWithTimeout(agentID, msgType, params, 120*time.Second, "")
 }
 
+// Refusal codes for a command that was refused BEFORE it reached the wire.
+// They are typed (ForwardRefusal) so a handler can tell "this never left the
+// server" from "sent, the answer did not arrive in time" — the two states have
+// opposite meanings to a caller (P12-04 F1: a capability refusal was answered
+// HTTP 200 {"status":"update_in_progress"}).
+const (
+	RefusalCapabilityMissing = "CAPABILITY_MISSING"
+	RefusalAgentNotConnected = "AGENT_NOT_CONNECTED"
+)
+
+// ForwardRefusal is returned by forwardToAgentWithTimeout when the command was
+// never written to the agent: the agent has no live connection, or the registry
+// says it does not advertise the capability the command requires. A caller must
+// surface it as a failure; the agent did not receive anything and nothing will
+// happen on the host.
+type ForwardRefusal struct {
+	Code    string
+	AgentID string
+	Message string
+	Err     error
+}
+
+func (e *ForwardRefusal) Error() string {
+	if e.Message != "" {
+		return e.Message
+	}
+	if e.Err != nil {
+		return e.Err.Error()
+	}
+	return e.Code + ": " + e.AgentID
+}
+
+func (e *ForwardRefusal) Unwrap() error { return e.Err }
+
 // forwardToAgentWithTimeout sends a command to the agent via WebSocket and waits
 // for response with a custom timeout. This is the core request-response method —
 // forwardToAgent is a convenience wrapper with a 120s default. Every forwarded
 // command is logged to the audit logger with the operator, action, and result.
 // operatorID is the authenticated operator's ID (empty for server-initiated
 // commands such as tunnel setup or disconnect-time process kills).
+//
+// The two pre-send checks return *ForwardRefusal, never a bare error: callers
+// that treat errors as "the send timed out, work is in flight" must be able to
+// distinguish a refusal from a delivery that started.
 func (s *Server) forwardToAgentWithTimeout(agentID string, msgType string, params interface{}, timeout time.Duration, operatorID string) (interface{}, error) {
 	start := time.Now()
 	s.mu.RLock()
@@ -783,7 +821,11 @@ func (s *Server) forwardToAgentWithTimeout(agentID string, msgType string, param
 	s.mu.RUnlock()
 	if !ok || !wmuOk {
 		s.auditLog(agentID, msgType, params, "error", "agent not connected", start, false, operatorID)
-		return nil, fmt.Errorf("agent %s not connected", agentID)
+		return nil, &ForwardRefusal{
+			Code:    RefusalAgentNotConnected,
+			AgentID: agentID,
+			Message: fmt.Sprintf("agent %s not connected", agentID),
+		}
 	}
 
 	// Capability check: verify the agent advertises the required capability
@@ -792,7 +834,12 @@ func (s *Server) forwardToAgentWithTimeout(agentID string, msgType string, param
 	if rec, err := s.registry.GetHealth(agentID); err == nil {
 		if capErr := CheckAgentCapability(agentID, rec.Capabilities, msgType); capErr != nil {
 			s.auditLog(agentID, msgType, params, "error", "capability denied: "+capErr.Error(), start, false, operatorID)
-			return nil, capErr
+			return nil, &ForwardRefusal{
+				Code:    RefusalCapabilityMissing,
+				AgentID: agentID,
+				Message: capErr.Error(),
+				Err:     capErr,
+			}
 		}
 	}
 

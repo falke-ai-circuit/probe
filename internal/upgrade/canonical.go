@@ -21,6 +21,13 @@ const (
 	// manifest. The sequence refuses to swap (P8-11 gap 2).
 	CodeVersionMismatch = "VERSION_MISMATCH"
 	CodeRollbackFailed  = "ROLLBACK_FAILED"
+	// CodeRollbackRecovered: the swap did not complete, but the pre-update
+	// image was restored and its size+sha verified. This is a FAILED SWAP, not
+	// a failed rollback: the host is intact at the old version. Emitting
+	// CodeRollbackFailed here (P12-04 F3) contradicted the log line's own
+	// "(rolled back, sha … verified)" and raised a false alarm for operators and
+	// automated readers alike.
+	CodeRollbackRecovered = "ROLLBACK_RECOVERED"
 )
 
 // CanonicalSource records which input the canonical path came from.

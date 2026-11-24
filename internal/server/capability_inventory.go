@@ -31,7 +31,7 @@ const capInventoryTTL = 60 * time.Second
 // silently dropped — an agent build newer than this server must stay visible.
 var knownCapabilities = []string{
 	"exec", "filesystem", "process", "capture", "input", "clipboard",
-	"tunnel", "mitm", "debug", "exec.system", "credential",
+	"tunnel", "mitm", "debug", "exec.system", "credential", "update",
 }
 
 // versionGatedCapabilities maps a capability to the agent version that first

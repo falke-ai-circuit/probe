@@ -12,12 +12,22 @@ const CapExecSystem = "exec.system"
 // login, which is the silent false success the unit exists to prevent.
 const CapCredential = "credential"
 
+// CapUpdate is advertised by every v1.19+ agent. The server gates
+// agent_update on it (internal/server/enrollment.go capabilityForCommand), so a
+// build that implements self-update but omits the marker is refused before the
+// command reaches the wire — the node is then un-updatable while the operator
+// sees a refusal. The marker describes the binary, not operator policy.
+const CapUpdate = "update"
+
 // defaultCapabilities is what a v1.19 agent advertises when the config leaves
 // Capabilities empty (empty historically meant "all"). The list mirrors the
-// commands this binary implements plus the new contract marker.
+// commands this binary implements plus the contract markers. It must stay in
+// step with the shipped binary's default config in cmd/probe/config.go: the
+// server refuses agent_update for a node whose advertised list lacks "update",
+// so an omission here makes every stock agent un-updatable (P12-04 F1).
 var defaultCapabilities = []string{
 	"exec", "filesystem", "process", "tunnel", "mitm", "debug",
-	"capture", "input", "clipboard", CapExecSystem, CapCredential,
+	"capture", "input", "clipboard", CapExecSystem, CapCredential, CapUpdate,
 }
 
 // advertisedCapabilities returns the capability list to publish on connect.

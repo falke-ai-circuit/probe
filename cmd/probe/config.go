@@ -190,8 +190,12 @@ func (uc *UnifiedConfig) applyDefaults() {
 		// Ensure a default capability set is advertised when the config omits
 		// the capabilities list — otherwise the agent registers with null
 		// capabilities and the UI's capability management is empty (audit F6).
+		// "update" belongs here: the server refuses agent_update for a node
+		// that does not advertise it, so omitting it from the default makes a
+		// stock agent un-updatable (P12-04 F1). Keep in step with
+		// internal/agent/capabilities_elevation.go defaultCapabilities.
 		if len(uc.Client.Capabilities) == 0 {
-			uc.Client.Capabilities = []string{"exec", "filesystem", "process", "tunnel", "mitm", "debug", "capture", "input", "clipboard"}
+			uc.Client.Capabilities = []string{"exec", "filesystem", "process", "tunnel", "mitm", "debug", "capture", "input", "clipboard", "update"}
 		}
 		// Ensure WebSocket URL includes /ws path
 		if uc.Client.Server != "" && !strings.Contains(uc.Client.Server, "/ws") {

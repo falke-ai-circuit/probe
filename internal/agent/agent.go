@@ -261,6 +261,14 @@ type Agent struct {
 	// Held only in memory, zeroed after the child exits.
 	credMu      sync.Mutex
 	credPending map[string]*pendingCredential
+
+	// statusPub is the live run-state record this process published, or nil
+	// when publishing failed (read-only state dir). It is the same object the
+	// heartbeat rewrites, so an identity change applied after the canary swap
+	// (P12-04 F2: name/executable still named the -canary staging path) is not
+	// reverted by the next tick. Guarded by mu for the pointer, by its own
+	// mutex for the record contents.
+	statusPub *statusPublisher
 }
 
 // writeMessage sends a WebSocket message with write mutex protection.

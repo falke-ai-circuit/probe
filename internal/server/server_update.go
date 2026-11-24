@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -258,10 +259,34 @@ func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request, agent
 	// handleWebSocket will detect the new agent and auto-kill the old PID.
 	resp, err := s.forwardToAgentWithTimeout(agentID, protocol.TypeAgentUpdate, updateParams, 30*time.Second, operatorIDFromRequest(r))
 	if err != nil {
-		// Timeout is expected — the agent starts the new process and the old
-		// connection drops. The update result arrives via the agent_update_result
-		// message handler in handleMessages, and the new agent's connection
-		// triggers the auto-kill. Report "update in progress" to the caller.
+		// A refusal is NOT an update in progress. The forwarder refused before
+		// writing anything — the agent has no live connection, or its
+		// advertised capabilities do not include "update". Nothing was staged,
+		// nothing will restart, and answering 200 "update_in_progress" is the
+		// silent false success P12-04 F1 measured on a stock agent (0.089 s
+		// response, no [update] in the agent log, no .next, no registry change).
+		var refusal *ForwardRefusal
+		if errors.As(err, &refusal) {
+			status := http.StatusConflict
+			switch refusal.Code {
+			case RefusalCapabilityMissing:
+				status = http.StatusForbidden
+			case RefusalAgentNotConnected:
+				status = http.StatusServiceUnavailable
+			}
+			writeErrorDetail(w, status, refusal.Code, refusal.Message, map[string]interface{}{
+				"agent_id": refusal.AgentID,
+				"delivered": false,
+			})
+			return
+		}
+
+		// Not a refusal: the command was written and the response did not
+		// arrive before the deadline. That is the expected shape — the agent
+		// starts the new process and the old connection drops. The update
+		// result arrives via the agent_update_result handler in handleMessages,
+		// and the new agent's connection triggers the auto-kill. Report
+		// "update in progress" to the caller.
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"status":  "update_in_progress",

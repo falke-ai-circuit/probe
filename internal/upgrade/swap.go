@@ -264,7 +264,7 @@ func SwapRunningBinary(req SwapRequest) (SwapResult, error) {
 				fmt.Errorf("parked backup %s does not match pre-swap size=%d sha=%s; ROLLBACK FAILED: %v",
 					backup, preStat.Size, preSHA, rbErr))
 		}
-		return res, stepErr("SW-22", CodeRollbackFailed,
+		return res, stepErr("SW-22", CodeRollbackRecovered,
 			fmt.Errorf("parked backup %s does not match pre-swap size=%d sha=%s (rolled back, sha %s size %d verified)",
 				backup, preStat.Size, preSHA, preSHA, preStat.Size))
 	}
@@ -282,7 +282,7 @@ func SwapRunningBinary(req SwapRequest) (SwapResult, error) {
 				return res, stepErr("SW-23", CodeRollbackFailed,
 					fmt.Errorf("canonical %s is still occupied after park (running image not moved aside); ROLLBACK FAILED: %v", canonical, rbErr))
 			}
-			return res, stepErr("SW-23", CodeRollbackFailed,
+			return res, stepErr("SW-23", CodeRollbackRecovered,
 				fmt.Errorf("canonical %s is still occupied after park: a rename that replaces a running image silently does nothing on Windows; refusing to overwrite it (rolled back, sha %s size %d verified)",
 					canonical, preSHA, preStat.Size))
 		}
@@ -296,7 +296,7 @@ func SwapRunningBinary(req SwapRequest) (SwapResult, error) {
 				fmt.Errorf("rename new into place: %w; ROLLBACK FAILED: %v (expected pre-update sha %s size %d)",
 					err, rbErr, preSHA, preStat.Size))
 		}
-		return res, stepErr("SW-24", CodeRollbackFailed,
+		return res, stepErr("SW-24", CodeRollbackRecovered,
 			fmt.Errorf("rename new into place: %w (rolled back, sha %s size %d verified)", err, preSHA, preStat.Size))
 	}
 
