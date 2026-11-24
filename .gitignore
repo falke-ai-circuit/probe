@@ -20,3 +20,5 @@ gorizia-proxmox.json
 probe-client-gorizia.json
 runtime/
 test-agent.json
+# local probe API token, never committed
+.probe-token
