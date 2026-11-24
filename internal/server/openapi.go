@@ -63,6 +63,22 @@ func openapiSpec() map[string]interface{} {
 			"uptime_seconds":  map[string]interface{}{"type": "integer"},
 			"error_count":    map[string]interface{}{"type": "integer"},
 			"health_score":   map[string]interface{}{"type": "number"},
+			// P12-03 — agent-state visibility. `stale` is the one field a
+			// caller needs in order to know the agent is not serving; it is
+			// derived from last_seen against stale_threshold_seconds and,
+			// when the transport the exec path uses is gone, forced true.
+			"last_seen":                 map[string]interface{}{"type": "string", "format": "date-time"},
+			"last_seen_age_seconds":     map[string]interface{}{"type": "integer"},
+			"stale":                     map[string]interface{}{"type": "boolean"},
+			"stale_reason":              map[string]interface{}{"type": "string", "enum": []string{"ok", "no_transport", "inactive", "error", "never_seen", "heartbeat_age", "ping_unanswered"}, "description": "why stale is true; ok when it is false"},
+			"stale_threshold_seconds":   map[string]interface{}{"type": "integer", "description": "threshold stale was derived from (90s)"},
+			"reconnects":                map[string]interface{}{"type": "integer", "description": "monotonic count of re-registrations"},
+			"connection_started_at":     map[string]interface{}{"type": "string", "format": "date-time"},
+			"connection_uptime_seconds": map[string]interface{}{"type": "integer", "description": "age of the current connection"},
+			"execution_context":         map[string]interface{}{"type": "string", "description": "contract selector id the agent serves (P10-07 v3.1); agent_own until the agent advertises a concrete context"},
+			"ping_timeouts":             map[string]interface{}{"type": "integer", "description": "monotonic count of pings the agent did not answer"},
+			"ping_misses":               map[string]interface{}{"type": "integer", "description": "current consecutive unanswered pings"},
+			"last_ping_timeout_at":      map[string]interface{}{"type": "string", "format": "date-time"},
 		},
 	}
 

@@ -48,6 +48,11 @@ type Server struct {
 	conns       map[string]Conn        // agentID -> conn (direct *websocket.Conn or relayed *virtualConn)
 	connWriteMu map[string]*sync.Mutex // agentID -> write mutex (prevents parallel WS write corruption)
 
+	// P12-03 liveness probe tuning. Defaults are the package constants;
+	// tests may shorten them on a server they construct directly.
+	pingProbeInterval time.Duration
+	pingProbeTimeout  time.Duration
+
 	// pendingRequests maps request IDs to response channels for request-response
 	// over WebSocket. When handleAgentExec sends a command to an agent, it creates
 	// a channel and waits on it. handleMessages delivers the response.
@@ -489,6 +494,10 @@ func (s *Server) Start() error {
 	// Start the task scheduler background goroutine.
 	s.tasks.Start()
 
+	// P12-03: ask the agents, do not assume. The ping probe is what turns
+	// "the socket exists" into "the agent answers".
+	s.StartAgentPingProbe()
+
 	// Shutdown hook: when the http server returns (graceful shutdown or
 	// crash), drain the flow event store and stop the flow scheduler.
 	s.srv.RegisterOnShutdown(func() {
@@ -558,6 +567,10 @@ func (s *Server) StartTLS(certFile, keyFile string) error {
 
 	// Start the task scheduler background goroutine.
 	s.tasks.Start()
+
+	// P12-03: ask the agents, do not assume. The ping probe is what turns
+	// "the socket exists" into "the agent answers".
+	s.StartAgentPingProbe()
 
 	mode := "TLS"
 	if s.clientCAFile != "" {

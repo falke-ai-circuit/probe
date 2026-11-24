@@ -255,7 +255,10 @@ func (s *Server) handleMessages(agentID string, conn *websocket.Conn) {
 			s.registry.Heartbeat(agentID)
 
 		case protocol.TypePong:
-			s.registry.Heartbeat(agentID)
+			// P12-03: a pong may be the answer to the server's liveness
+			// probe — hand it to the waiting probe before recording it.
+			s.pongToPending(env)
+			s.registry.RecordPong(agentID)
 
 		case protocol.TypeHealthResult:
 			// Agent reported health; update resource usage and refresh heartbeat.

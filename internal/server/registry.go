@@ -19,6 +19,22 @@ const (
 	// which an agent is flagged NeedsAttention and its health score is capped
 	// below 0.5 (audit F4 — repeated same-error auto-update failures).
 	sameErrorThreshold = 5
+
+	// P12-03: liveness probe tuning. The server pings every connected agent
+	// and waits pingProbeTimeout for the pong. pingMissThreshold consecutive
+	// unanswered pings mark the agent stale immediately — a wedged process
+	// stops answering long before its TCP socket dies, which is the case
+	// where exec/fs-write returned 503 while /health answered "ok".
+	pingProbeInterval = 20 * time.Second
+	pingProbeTimeout  = 5 * time.Second
+	pingMissThreshold = 3
+
+	// ExecutionContextAgentOwn is the contract selector id (P10-07 v3.1 §5.1)
+	// for "no selector sent: the agent's own context". It is what an agent
+	// serves until it advertises a concrete context id; the agent wire
+	// protocol carries no context field today, so this is the honest value,
+	// not a placeholder for a number that was dropped.
+	ExecutionContextAgentOwn = "agent_own"
 )
 
 // ResourceInfo describes an agent's resource usage, typically reported
@@ -49,9 +65,27 @@ type AgentRecord struct {
 	HealthScore   float64       `json:"health_score"` // 0.0-1.0 composite
 	ResourceUsage *ResourceInfo `json:"resource_usage,omitempty"`
 
+	// P12-03 — agent-state visibility. These are derived on every read
+	// (applyLiveness), never trusted from the persisted file: a row that says
+	// "active" because a previous server process wrote it is not evidence
+	// that an agent is serving.
+	LastSeen                string `json:"last_seen"`                 // RFC3339, last moment the agent was actually heard from
+	LastSeenAgeSeconds      int64  `json:"last_seen_age_seconds"`     // -1 = never heard
+	Stale                   bool   `json:"stale"`                     // true = not currently serving; read this, do not infer
+	StaleReason             string `json:"stale_reason"`              // "ok" | "no_transport" | "inactive" | "heartbeat_age" | "ping_unanswered"
+	StaleThresholdSeconds   int64  `json:"stale_threshold_seconds"`   // the threshold `stale` was derived from
+	Reconnects              int    `json:"reconnects"`                // monotonic count of re-registrations
+	ConnectionStartedAt     string `json:"connection_started_at"`     // RFC3339 start of the CURRENT connection
+	ConnectionUptimeSeconds int64  `json:"connection_uptime_seconds"` // age of the current connection
+	ExecutionContext        string `json:"execution_context"`         // contract selector id the agent serves
+	PingTimeouts            int    `json:"ping_timeouts"`             // monotonic count of unanswered pings
+	PingMisses              int    `json:"ping_misses"`               // current consecutive unanswered pings
+	LastPingTimeoutAt       string `json:"last_ping_timeout_at,omitempty"`
+
 	// internal — not serialized; parsed from the string fields on load.
-	connectedAt   time.Time `json:"-"`
-	lastHeartbeat time.Time `json:"-"`
+	connectedAt         time.Time `json:"-"`
+	lastHeartbeat       time.Time `json:"-"`
+	connectionStartedAt time.Time `json:"-"`
 }
 
 // computeHealthScore calculates a 0.0-1.0 composite health score:
@@ -149,6 +183,16 @@ func (r *Registry) Register(agentID, name, version, goos, arch, mode string, cap
 		rec.LastHeartbeat = nowStr
 		rec.lastHeartbeat = now
 		rec.Status = "active"
+		// A re-registration is a new connection: the reconnect count is
+		// monotonic and the connection-scoped uptime restarts, so a caller
+		// can tell a fresh process from a long-lived one.
+		rec.Reconnects++
+		rec.connectionStartedAt = now
+		rec.ConnectionStartedAt = nowStr
+		rec.PingMisses = 0
+		if rec.ExecutionContext == "" {
+			rec.ExecutionContext = ExecutionContextAgentOwn
+		}
 		// A clean re-registration implies the agent recovered — clear the
 		// same-error attention flag (audit F4).
 		rec.SameErrorCount = 0
@@ -156,19 +200,22 @@ func (r *Registry) Register(agentID, name, version, goos, arch, mode string, cap
 		rec.HealthScore = rec.computeHealthScore(now)
 	} else {
 		rec := &AgentRecord{
-			AgentID:       agentID,
-			Name:          name,
-			Version:       version,
-			OS:            goos,
-			Arch:          arch,
-			Mode:          mode,
-			Capabilities:  capabilities,
-			ConnectedAt:   nowStr,
-			LastHeartbeat: nowStr,
-			Status:        "active",
+			AgentID:             agentID,
+			Name:                name,
+			Version:             version,
+			OS:                  goos,
+			Arch:                arch,
+			Mode:                mode,
+			Capabilities:        capabilities,
+			ConnectedAt:         nowStr,
+			LastHeartbeat:       nowStr,
+			Status:              "active",
+			ConnectionStartedAt: nowStr,
+			ExecutionContext:    ExecutionContextAgentOwn,
 		}
 		rec.connectedAt = now
 		rec.lastHeartbeat = now
+		rec.connectionStartedAt = now
 		rec.HealthScore = rec.computeHealthScore(now)
 		r.agents[agentID] = rec
 	}
@@ -195,14 +242,18 @@ func (r *Registry) UpdateCapabilities(agentID string, capabilities []string) {
 // Unregister marks an agent as inactive. It keeps the row: disconnect
 // bookkeeping wants the agent to remain visible with its history. Callers
 // that mean "delete this row" must use Remove instead.
+//
+// P12-03: a disconnect does NOT refresh last_seen. last_seen answers "when
+// was this agent last heard from", and the disconnect moment is not a
+// message from the agent — overwriting it would make a dead agent look
+// fresh for a whole staleThreshold.
 func (r *Registry) Unregister(agentID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if rec, ok := r.agents[agentID]; ok {
 		now := time.Now().UTC()
 		rec.Status = "inactive"
-		rec.LastHeartbeat = now.Format(time.RFC3339)
-		rec.lastHeartbeat = now
+		rec.PingMisses = 0
 		rec.HealthScore = rec.computeHealthScore(now)
 		r.save()
 	}
@@ -223,6 +274,61 @@ func (r *Registry) Remove(agentID string) bool {
 	return true
 }
 
+// applyLiveness fills the derived liveness fields from `now`. Every read
+// path calls it, so `stale` is always a statement about the present, never a
+// value that happened to be persisted. Caller may hold mu (it only touches
+// the caller's copy).
+func (rec *AgentRecord) applyLiveness(now time.Time) {
+	rec.StaleThresholdSeconds = int64(staleThreshold.Seconds())
+	age := int64(-1)
+	if !rec.lastHeartbeat.IsZero() {
+		d := now.Sub(rec.lastHeartbeat)
+		if d < 0 {
+			d = 0
+		}
+		age = int64(d.Seconds())
+		rec.LastSeen = rec.lastHeartbeat.UTC().Format(time.RFC3339)
+	} else if rec.LastHeartbeat != "" {
+		// Loaded from disk before the record was ever heard from in this
+		// process: report the stored stamp, never a synthesized one.
+		rec.LastSeen = rec.LastHeartbeat
+	}
+	rec.LastSeenAgeSeconds = age
+
+	if !rec.connectionStartedAt.IsZero() {
+		up := int64(now.Sub(rec.connectionStartedAt).Seconds())
+		if up < 0 {
+			up = 0
+		}
+		// A finished connection has no "current" uptime: report 0 and keep
+		// the start stamp as history. Reporting a growing age for a
+		// connection that is over is the same class of lie as a green
+		// health row for a dead agent.
+		if rec.Status == "inactive" {
+			up = 0
+		}
+		rec.ConnectionUptimeSeconds = up
+		rec.ConnectionStartedAt = rec.connectionStartedAt.UTC().Format(time.RFC3339)
+	}
+
+	switch {
+	case rec.Status == "inactive":
+		rec.Stale, rec.StaleReason = true, "inactive"
+	case rec.Status == "error":
+		rec.Stale, rec.StaleReason = true, "error"
+	case age < 0:
+		rec.Stale, rec.StaleReason = true, "never_seen"
+	case age > rec.StaleThresholdSeconds:
+		rec.Stale, rec.StaleReason = true, "heartbeat_age"
+	case rec.PingMisses >= pingMissThreshold:
+		rec.Stale, rec.StaleReason = true, "ping_unanswered"
+	case rec.Status != "active":
+		rec.Stale, rec.StaleReason = true, rec.Status
+	default:
+		rec.Stale, rec.StaleReason = false, "ok"
+	}
+}
+
 // ListAgents returns a slice of all agent records with fresh uptime and
 // health scores computed on read.
 func (r *Registry) ListAgents() []AgentRecord {
@@ -239,6 +345,7 @@ func (r *Registry) ListAgents() []AgentRecord {
 			}
 		}
 		snap.HealthScore = snap.computeHealthScore(now)
+		snap.applyLiveness(now)
 		result = append(result, snap)
 	}
 	return result
@@ -319,7 +426,53 @@ func (r *Registry) GetHealth(agentID string) (AgentRecord, error) {
 		}
 	}
 	rec.HealthScore = rec.computeHealthScore(now)
+	rec.applyLiveness(now)
 	return *rec, nil
+}
+
+// RecordPingTimeout counts one ping the agent failed to answer. PingTimeouts
+// is monotonic for the life of the record; PingMisses is the current
+// consecutive run, and at pingMissThreshold the agent is marked stale
+// immediately — past that point the health surface must not report it as
+// serving, because it demonstrably answers nothing.
+func (r *Registry) RecordPingTimeout(agentID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rec, ok := r.agents[agentID]
+	if !ok {
+		return
+	}
+	now := time.Now().UTC()
+	rec.PingTimeouts++
+	rec.PingMisses++
+	rec.LastPingTimeoutAt = now.Format(time.RFC3339)
+	if rec.PingMisses >= pingMissThreshold {
+		rec.Status = "stale"
+		log.Printf("[registry] agent %s did not answer %d consecutive pings — marked stale", agentID, rec.PingMisses)
+	}
+	rec.HealthScore = rec.computeHealthScore(now)
+	r.save()
+}
+
+// RecordPong records an answered ping: it clears the consecutive-miss run and
+// promotes a ping-marked agent back to active. Uptime and reconnect counters
+// are untouched — a pong is proof of life, not a new connection.
+func (r *Registry) RecordPong(agentID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rec, ok := r.agents[agentID]
+	if !ok {
+		return
+	}
+	now := time.Now().UTC()
+	rec.PingMisses = 0
+	rec.LastHeartbeat = now.Format(time.RFC3339)
+	rec.lastHeartbeat = now
+	if rec.PingMisses == 0 && rec.Status == "stale" {
+		rec.Status = "active"
+	}
+	rec.HealthScore = rec.computeHealthScore(now)
+	r.save()
 }
 
 // StartStaleDetector starts a background goroutine that marks agents
@@ -416,7 +569,17 @@ func (r *Registry) load() {
 	}
 	r.agents = agents
 	// Reconstruct internal time.Time fields from the serialized strings.
+	//
+	// P12-03: a row loaded from disk describes a PREVIOUS process. Whatever
+	// status it was written with, no agent is connected to this process yet,
+	// so status drops to "inactive" and `stale` reads true until a real
+	// handshake arrives. Reporting the persisted "active" is exactly the
+	// defect this unit exists to kill.
 	for _, rec := range r.agents {
+		rec.Status = "inactive"
+		if rec.ExecutionContext == "" {
+			rec.ExecutionContext = ExecutionContextAgentOwn
+		}
 		if rec.ConnectedAt != "" {
 			if t, err := time.Parse(time.RFC3339, rec.ConnectedAt); err == nil {
 				rec.connectedAt = t

@@ -361,7 +361,9 @@ func (s *Server) processAgentMessage(agentID string, env protocol.Envelope) {
 		s.registry.Heartbeat(agentID)
 
 	case protocol.TypePong:
-		s.registry.Heartbeat(agentID)
+		// P12-03: a pong may be the answer to the server's liveness probe.
+		s.pongToPending(env)
+		s.registry.RecordPong(agentID)
 
 	default:
 		// Check if this is a response to a pending request

@@ -148,6 +148,10 @@ func main() {
 		srv = server.NewServerWithRateLimit(*addr, *token, *registryPath, rlCfg)
 	}
 	srv.SetTokenTTL(*tokenTTL)
+	// F1: the version string was parsed for the banner but never handed to
+	// the server, so /api/v1/health served "server_version":"" on this
+	// binary while `probe serve` reported correctly. One line, same source.
+	srv.SetVersion(appVersion)
 	srv.SetRequireAPIAuth(*requireAPIAuth)
 	srv.SetEnrollmentPath(*enrollmentPath)
 	srv.SetCADir(*caDir)

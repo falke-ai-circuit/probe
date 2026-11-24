@@ -513,26 +513,33 @@ func (s *Server) registerV1Routes() {
 // ---------------------------------------------------------------------------
 
 // handleV1Health returns server health stats in v1 format.
+//
+// P12-03: the aggregate is derived from each agent's stale flag, not from
+// its stored status — an agent that cannot execute counts as not serving.
 func (s *Server) handleV1Health(w http.ResponseWriter, r *http.Request) {
 	agents := s.registry.ListAgents()
+	s.decorateAgentListLiveness(agents)
 	total := len(agents)
 	active := 0
 	stale := 0
+	pingTimeouts := 0
 	for _, a := range agents {
-		switch a.Status {
-		case "active":
-			active++
-		case "stale":
+		if a.Stale {
 			stale++
+		} else {
+			active++
 		}
+		pingTimeouts += a.PingTimeouts
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":         "ok",
-		"server_version": s.version,
-		"total_agents":   total,
-		"active_agents":  active,
-		"stale_agents":   stale,
-		"uptime_seconds": int64(time.Since(startTime).Seconds()),
+		"status":                 "ok",
+		"server_version":         s.version,
+		"total_agents":           total,
+		"active_agents":          active,
+		"stale_agents":           stale,
+		"ping_timeouts_total":    pingTimeouts,
+		"stale_threshold_seconds": int64(staleThreshold.Seconds()),
+		"uptime_seconds":         int64(time.Since(startTime).Seconds()),
 	})
 }
 
@@ -542,6 +549,7 @@ func (s *Server) handleV1ListAgents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	agents := s.registry.ListAgents()
+	s.decorateAgentListLiveness(agents)
 	writeJSON(w, http.StatusOK, agents)
 }
 
@@ -556,6 +564,7 @@ func (s *Server) handleV1GetAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", err.Error())
 		return
 	}
+	s.decorateAgentLiveness(&rec)
 	writeJSON(w, http.StatusOK, rec)
 }
 
@@ -599,6 +608,7 @@ func (s *Server) handleV1AgentHealth(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", err.Error())
 		return
 	}
+	s.decorateAgentLiveness(&rec)
 	writeJSON(w, http.StatusOK, rec)
 }
 
