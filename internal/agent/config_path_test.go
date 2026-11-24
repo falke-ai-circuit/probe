@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"bytes"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +19,24 @@ func writeCfg(t *testing.T, path, content string) string {
 		t.Fatalf("write %s: %v", path, err)
 	}
 	return path
+}
+
+// captureLog runs fn with the standard logger redirected into a buffer and
+// returns everything it printed, so a test can assert the operator-visible
+// warning text verbatim.
+func captureLog(t *testing.T, fn func()) string {
+	t.Helper()
+	var buf bytes.Buffer
+	prevOut := log.Writer()
+	prevFlags := log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	defer func() {
+		log.SetOutput(prevOut)
+		log.SetFlags(prevFlags)
+	}()
+	fn()
+	return buf.String()
 }
 
 // TestResolveConfigPathOrder pins the five-step resolution order that the
@@ -110,6 +130,121 @@ func TestResolveConfigPathOrder(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "config not found") {
 			t.Fatalf("error %q does not say config not found", err)
+		}
+	})
+}
+
+// TestResolveConfigPathFallsThroughWhenExplicitMissing reproduces the real
+// V6049A-EAS1 desktop directory - probe-V6049A-EAS1.exe, probe-V6049A-EAS1.json,
+// a stale .next and a .old - and pins the fall-through rule those files exposed:
+// the process that performs an update is the OLD client, which has no resolver
+// and synthesises <dir>\probe-client.json for the canary. That path never exists
+// on an agent-named install, so a missing explicit --config must warn loudly and
+// let rules 2-5 find the file that is actually there.
+func TestResolveConfigPathFallsThroughWhenExplicitMissing(t *testing.T) {
+	// fieldDir builds her install layout and returns the synthesised default
+	// the old updater hands over (a probe-client.json that is NOT there).
+	fieldDir := func(t *testing.T) (exe, named, synthesised string) {
+		t.Helper()
+		dir := t.TempDir()
+		exe = writeCfg(t, filepath.Join(dir, "probe-V6049A-EAS1.exe"), "current-binary")
+		writeCfg(t, exe+".next", "staged-binary")
+		writeCfg(t, exe+".old", "previous-binary")
+		named = writeCfg(t, filepath.Join(dir, "probe-V6049A-EAS1.json"),
+			`{"server":"ws://139.99.148.90:80/ws","mode":"silent","token":"V6049A-EAS1"}`)
+		return exe, named, filepath.Join(dir, "probe-client.json")
+	}
+
+	t.Run("missing explicit --config falls through to the agent-named file", func(t *testing.T) {
+		exe, named, synthesised := fieldDir(t)
+		var path, source string
+		var err error
+		warning := captureLog(t, func() {
+			path, source, err = ResolveConfigPath(synthesised, exe, false)
+		})
+		if err != nil {
+			t.Fatalf("ResolveConfigPath: %v", err)
+		}
+		if path != named || source != ConfigSourceExeNamed {
+			t.Fatalf("path=%q source=%q, want %q / %q", path, source, named, ConfigSourceExeNamed)
+		}
+		for _, want := range []string{"WARNING", "explicit --config", synthesised, "falling through"} {
+			if !strings.Contains(warning, want) {
+				t.Fatalf("warning %q missing %q", warning, want)
+			}
+		}
+	})
+
+	t.Run("missing explicit --config falls through to probe-client.json", func(t *testing.T) {
+		dir := t.TempDir()
+		exe := writeCfg(t, filepath.Join(dir, "probe-V6049A-EAS1.exe"), "current-binary")
+		beside := writeCfg(t, filepath.Join(dir, "probe-client.json"), `{"server":"ws://h/ws"}`)
+		synthesised := filepath.Join(dir, "operator-typo.json")
+
+		path, source, err := ResolveConfigPath(synthesised, exe, false)
+		if err != nil {
+			t.Fatalf("ResolveConfigPath: %v", err)
+		}
+		if path != beside || source != ConfigSourceProbeClientJSON {
+			t.Fatalf("path=%q source=%q, want %q / %q", path, source, beside, ConfigSourceProbeClientJSON)
+		}
+	})
+
+	t.Run("missing explicit --config with nothing beside it still fails and names every rule", func(t *testing.T) {
+		dir := t.TempDir()
+		exe := writeCfg(t, filepath.Join(dir, "probe-V6049A-EAS1.exe"), "current-binary")
+		synthesised := filepath.Join(dir, "probe-client.json")
+
+		path, _, err := ResolveConfigPath(synthesised, exe, false)
+		if err == nil {
+			t.Fatalf("ResolveConfigPath returned path %q, want error", path)
+		}
+		for _, want := range []string{
+			"config not found",
+			"--config " + synthesised + " does not exist",
+			"no probe-client.json beside " + dir,
+			"no probe-V6049A-EAS1.json beside it",
+			"refusing to start a canary",
+		} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("error %q missing %q", err.Error(), want)
+			}
+		}
+	})
+
+	t.Run("existing explicit --config still wins with no fall-through", func(t *testing.T) {
+		exe, named, _ := fieldDir(t)
+		explicit := writeCfg(t, filepath.Join(filepath.Dir(exe), "operator.json"), `{"server":"ws://explicit/ws"}`)
+
+		var path, source string
+		var err error
+		logged := captureLog(t, func() {
+			path, source, err = ResolveConfigPath(explicit, exe, false)
+		})
+		if err != nil {
+			t.Fatalf("ResolveConfigPath: %v", err)
+		}
+		if path != explicit || source != ConfigSourceFlag {
+			t.Fatalf("path=%q source=%q, want %q / %q", path, source, explicit, ConfigSourceFlag)
+		}
+		if path == named {
+			t.Fatalf("existing explicit --config lost to the agent-named file")
+		}
+		if logged != "" {
+			t.Fatalf("a resolvable explicit --config logged %q, want no warning", logged)
+		}
+	})
+
+	t.Run("stale .next load-time path still resolves beside the canonical exe", func(t *testing.T) {
+		exe, named, synthesised := fieldDir(t)
+		// Windows reports the load-time path, which is the .next name while the
+		// canary runs; the config lives beside the canonical binary.
+		path, source, err := ResolveConfigPath(synthesised, exe+".next", false)
+		if err != nil {
+			t.Fatalf("ResolveConfigPath: %v", err)
+		}
+		if path != named || source != ConfigSourceExeNamed {
+			t.Fatalf("path=%q source=%q, want %q / %q", path, source, named, ConfigSourceExeNamed)
 		}
 	})
 }
