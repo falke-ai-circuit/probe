@@ -31,6 +31,26 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Read app version (internal/version)
+        id: appver
+        # The image is labelled from the app's own Semver, not from the tag: a
+        # sha tag carries no version and a v* tag can disagree with the source.
+        # One read, one value, stamped into ldflags and the OCI label alike.
+        run: |
+          set -euo pipefail
+          v=$(sed -n 's/^var Semver = "\([^"]*\)"$/\1/p' internal/version/version.go)
+          if ! printf '%s' "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::no Semver parsed from internal/version/version.go (got '$v')"
+            exit 1
+          fi
+          echo "semver=$v" >> "$GITHUB_OUTPUT"
+          echo "app Semver: $v"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -55,19 +75,25 @@ jobs:
             type=semver,pattern={{version}}
             type=ref,event=tag
 
-      - name: Build and push (linux/amd64)
+      - name: Build and push (linux/amd64, linux/arm64)
         id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/amd64
+          # Both architectures in one build => one manifest list at one tag, so
+          # an amd64 host and an arm64 Radxa pull the same reference. The
+          # Dockerfile's every stage is a multi-arch base image, so no other
+          # change is needed for the second platform.
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          labels: |
+            ${{ steps.meta.outputs.labels }}
+            org.opencontainers.image.version=${{ steps.appver.outputs.semver }}
           build-args: |
             GIT_SHA=${{ github.sha }}
-            VERSION=${{ steps.meta.outputs.version }}
+            VERSION=${{ steps.appver.outputs.semver }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -77,6 +103,8 @@ jobs:
             echo "### PROBE image"
             echo ""
             echo "- digest: \`${{ steps.build.outputs.digest }}\`"
+            echo "- app version: \`${{ steps.appver.outputs.semver }}\` (from internal/version/version.go)"
+            echo "- platforms: linux/amd64, linux/arm64 (single manifest list)"
             echo "- source commit: \`${{ github.sha }}\`"
             echo "- tags:"
             printf '%s\n' '${{ steps.meta.outputs.tags }}' | sed 's/^/  - /'

@@ -18,15 +18,30 @@ RUN npm run build
 # ── Stage 2: Go binary ─────────────────────────────────────────
 FROM golang:1.23-bookworm AS builder
 WORKDIR /build
+# VERSION is the app Semver read from internal/version/version.go by CI — never
+# a git tag. The binary banner and /health server_version both derive from
+# version.Semver, so stamping the same value here is what makes the image, the
+# banner and the health endpoint agree by construction.
+ARG VERSION=dev
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=frontend /build/dist ./web/dist
 ENV CGO_ENABLED=0
-RUN go build -trimpath -o /probe ./cmd/probe/
+RUN go build -trimpath \
+      -ldflags "-X github.com/falke-ai-circuit/probe/internal/version.Semver=${VERSION}" \
+      -o /probe ./cmd/probe/
 
 # ── Stage 3: Runtime ───────────────────────────────────────────
 FROM debian:bookworm-slim
+# Same ARGs again in the final stage: a build ARG does not cross FROM lines, and
+# these feed the OCI labels below so `docker inspect` reports the same Semver the
+# running process does.
+ARG VERSION=dev
+ARG GIT_SHA=
+LABEL org.opencontainers.image.title="PROBE" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${GIT_SHA}"
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
