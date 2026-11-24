@@ -22,6 +22,35 @@ import (
 // canonical agent, so the suffixed row must not outlive the update.
 const canaryRegistrySuffix = "-canary"
 
+// downloadURL builds the absolute URL an agent is told to fetch a file from.
+//
+// Host resolution order: overrideHost (an explicit download_host), then the
+// host the API caller used to reach this server (req.Host, which is reachable
+// from that caller's network), then the server's own listen address. The token
+// query parameter is not optional: GET /download/{file} answers 401 without it
+// (handleFileDownload, server_download.go).
+//
+// req may be nil when the URL is built after the HTTP response has been sent
+// (redeploy polling runs in a goroutine); in that case the caller passes the
+// host it captured from the request as overrideHost.
+//
+// This is the single host-derivation helper in the tree. Both the update path
+// (handleAgentUpdate) and the builder redeploy path (deployRedeployUpdate) call
+// it so the fleet cannot derive two different download hosts.
+func (s *Server) downloadURL(req *http.Request, overrideHost, filename string) string {
+	host := overrideHost
+	if host == "" && req != nil {
+		host = req.Host
+	}
+	if host == "" {
+		host = s.addr
+		if host != "" && host[0] == ':' {
+			host = "localhost" + host
+		}
+	}
+	return fmt.Sprintf("http://%s/download/%s?token=%s", host, filename, s.token)
+}
+
 // pendingUpdates tracks agents that have been told to update.
 // When a new agent connects and the old one reports its PID, we kill the old.
 type pendingUpdate struct {
@@ -192,20 +221,7 @@ func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request, agent
 		s.registerArtifact(agentID, filename, filename, downloadPath, hash, size)
 	}
 
-	// Build the download URL. Use download_host from request if provided,
-	// otherwise use r.Host (the host the API caller used to reach us),
-	// otherwise fall back to s.addr.
-	host := params.DownloadHost
-	if host == "" {
-		host = r.Host
-	}
-	if host == "" {
-		host = s.addr
-		if host != "" && host[0] == ':' {
-			host = "localhost" + host
-		}
-	}
-	downloadURL := fmt.Sprintf("http://%s/download/%s?token=%s", host, filename, s.token)
+	downloadURL := s.downloadURL(r, params.DownloadHost, filename)
 
 	// Build the AgentUpdateParams message. If WSRemotePath is set, the agent
 	// uses the locally-pre-staged file at that path (already delivered via

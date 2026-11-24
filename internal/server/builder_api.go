@@ -327,8 +327,13 @@ func (s *Server) handleV1RedeployAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Capture the host the caller used to reach us: the build finishes after
+	// this response is sent, and the agent that downloads the artifact may not
+	// be able to reach the server's own listen address (P11-02).
+	callerHost := r.Host
+
 	// Start a goroutine to poll build status and trigger agent update when done.
-	go s.pollAndDeployRedeploy(agentID, build.ID, rec.Name)
+	go s.pollAndDeployRedeploy(agentID, build.ID, rec.Name, callerHost)
 
 	writeJSON(w, http.StatusAccepted, map[string]interface{}{
 		"build_id":  build.ID,
@@ -341,7 +346,7 @@ func (s *Server) handleV1RedeployAgent(w http.ResponseWriter, r *http.Request) {
 // pollAndDeployRedeploy polls the build status every 2s until complete or
 // failed. On success, copies the binary to the download directory, computes
 // SHA256, and sends an agent_update message to the agent.
-func (s *Server) pollAndDeployRedeploy(agentID, buildID, agentName string) {
+func (s *Server) pollAndDeployRedeploy(agentID, buildID, agentName, callerHost string) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
@@ -355,7 +360,7 @@ func (s *Server) pollAndDeployRedeploy(agentID, buildID, agentName string) {
 				return
 			}
 			if build.Status == BuildStatusComplete {
-				s.deployRedeployUpdate(agentID, buildID, agentName, build.BinaryPath)
+				s.deployRedeployUpdate(agentID, buildID, agentName, build.BinaryPath, callerHost)
 				return
 			}
 			if build.Status == BuildStatusFailed {
@@ -371,7 +376,7 @@ func (s *Server) pollAndDeployRedeploy(agentID, buildID, agentName string) {
 
 // deployRedeployUpdate copies the built binary to the download directory,
 // computes its SHA256, and sends an agent_update message to the agent.
-func (s *Server) deployRedeployUpdate(agentID, buildID, agentName, binaryPath string) {
+func (s *Server) deployRedeployUpdate(agentID, buildID, agentName, binaryPath, callerHost string) {
 	if binaryPath == "" {
 		log.Printf("[redeploy] build %s has no binary path", buildID)
 		return
@@ -395,12 +400,10 @@ func (s *Server) deployRedeployUpdate(agentID, buildID, agentName, binaryPath st
 		}
 	}
 
-	// Build the download URL using the server's address.
-	host := s.addr
-	if host != "" && host[0] == ':' {
-		host = "localhost" + host
-	}
-	downloadURL := fmt.Sprintf("http://%s/download/%s", host, filename)
+	// Download URL: same host derivation + token as the update path (P11-02).
+	// The caller's host was captured from the redeploy request, so the URL is
+	// reachable from the machine that asked for the rebuild, not just locally.
+	downloadURL := s.downloadURL(nil, callerHost, filename)
 
 	version := fmt.Sprintf("redeploy-%s-%d", buildID, time.Now().Unix())
 
