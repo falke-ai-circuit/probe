@@ -2,7 +2,8 @@
 
 **Unit:** P14-06 · **Workflow:** wf_probe1 · **Branch:** `r119-build`
 **Commit:** `ee5e97a` — `P14-05: fix §9.1 wire decode — TranslateCoordinates offsets and the reply-tail drain` (the code gated; the gate's own commit follows this file)
-**Review:** reviewed_by: `architect` · verdict: `PASS` · verdict_sha_of_head: `48bef390b763785e85d53c8c24bb1f66b7482fe3` (code-identical to `ee5e97a4`: `git diff --stat ee5e97a4 HEAD -- internal/` empty, 0 commits in `ee5e97a4..HEAD` touching `internal/`)
+**Review:** reviewed_by: `architect` · verdict: `PASS` · verdict_sha_of_head: `ee5e97a4c666330e8450640c7154415a4b02273f`
+**Head-move waiver:** the verdict binds to `ee5e97a`, the code commit it rules on. `48bef39` and the gate's own document commit sit above it and change no code — `git diff --stat ee5e97a HEAD -- internal/` is empty and 0 commits in `ee5e97a..HEAD` touch `internal/`. The original row named `48bef39`, the head at verification time, which is not the sha the fix lives in — corrected so the verdict binds to the tree it judged.
 **Scope:** §9.1 item 1 only — R1 `PointIn` reply offsets, R2 reply-tail drain, wire coverage. R3-R6 remain open and are named as later work, not closed; R7 (live desktop) stays UNPROVEN-ON-HOST.
 **Artefact:** `/opt/data/tmp/probe119/P14-06_VERIFICATION.md`
 **Suite:** `GOTOOLCHAIN=local GOFLAGS=-mod=vendor go test ./... -count=1` → 4 runs, exit 0 each, **739 pass / 0 fail / 2 skip** (`-v` count run)
