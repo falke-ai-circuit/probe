@@ -250,14 +250,52 @@ func TestP1402GapEchoTracksMeasuredInterval(t *testing.T) {
 	}
 }
 
+// clickSpacingJitterBudget is how far ABOVE the expected interval one
+// measurement may sit before this test calls it wrong.
+//
+// The expectation is not what a quiet host measures; it is what the gesture
+// OWES: the spacing derived from the window, plus the two wire calls the
+// interval spans. Every term after that is scheduler overshoot — the measured
+// interval spans three sleeps (release of press 1, the spacing, the press of
+// press 2), and a busy host legitimately returns from each of them late.
+// Recorded: 113.883 ms against a 100 ms expectation at load ~10 (P14B-03),
+// 120 ms against the same expectation at load 15.4 (this unit), and 246 ms
+// against a 160 ms expectation on the 400 ms window in the same run. A point
+// assertion therefore reports the host's load, not the code's behaviour.
+//
+// The budget is half the derived spacing, which is the largest value that
+// still discriminates. For the 200 ms window the two answers are 60 ms apart:
+// derived spacing measures ~100 ms, a hardcoded 120 ms measures ~160 ms. Half
+// the spacing (30 ms) sits between the worst recorded overshoot (+20 ms) and
+// the nearest wrong answer (-30 ms from the ceiling), so lateness up to 130 ms
+// is allowed and nothing wrong is.
+func clickSpacingJitterBudget(spacing time.Duration) time.Duration {
+	return spacing / 2
+}
+
 // TestP1402ConfiguredWindowSetsSpacing is R3's second half: 400 ms is a
 // fallback, not a universal. A seat configured at seatWindow must receive
 // presses spaced for ITS window, and the emitted gap must sit below ITS
 // threshold — the assertion is against the configured value, never a literal.
+//
+// The interval is compared against a BAND, not a point. The lower edge is the
+// defect this test exists for (spacing that was never derived, or no spacing
+// at all); the upper edge is scheduler jitter, which a loaded host is allowed
+// to spend. Nothing early is ever allowed; only lateness is.
 func TestP1402ConfiguredWindowSetsSpacing(t *testing.T) {
-	const latency = 20 * time.Millisecond
-	seatWindow := 200 * time.Millisecond // a seat configured below the default
-	seatMS := int(seatWindow / time.Millisecond)
+	const (
+		latency = 20 * time.Millisecond
+		// The windows are pinned here, not read from the code: the expectation
+		// this test judges must not move when the thing it judges moves.
+		window400 = 400 * time.Millisecond // the contract's fallback interval
+		window200 = 200 * time.Millisecond // a seat configured below the default
+		// The contract's share of the window the gesture's spacing occupies.
+		// Pinned for the same reason: a fraction is part of the contract, and a
+		// change to it is a contract change that must revisit this test.
+		spacingNum = 3
+		spacingDen = 10
+	)
+	seatMS := int(window200 / time.Millisecond)
 
 	measure := func(name string, window time.Duration) protocol.ClickResult {
 		inj := newFakeInput()
@@ -276,8 +314,51 @@ func TestP1402ConfiguredWindowSetsSpacing(t *testing.T) {
 		return res
 	}
 
-	def := measure("default window", defaultDoubleClick)
-	seat := measure("configured window", seatWindow)
+	def := measure("default window", window400)
+	seat := measure("configured window", window200)
+
+	// The band. Two edges, two different defects, and only one of them is the
+	// code's:
+	//
+	//   lower = spacing + the two wire calls the interval spans. The measured
+	//           gap covers the release of press 1, the spacing, and press 2,
+	//           so anything shorter means the spacing was not emitted at all
+	//           (an unimplemented spacing, or a count>1 handled as a loop of
+	//           single clicks). Time.Sleep never returns early, so this edge
+	//           needs no allowance and a shorter measurement is always a bug.
+	//   upper = lower + clickSpacingJitterBudget. Lateness is the host's, not
+	//           the code's: a loaded scheduler returns from each of the three
+	//           sleeps late, and the target still reads the pair as one
+	//           double-click. Allowed, bounded, and not read as a defect.
+	//
+	// Both edges are computed from the window and the pinned fraction, NOT by
+	// calling clickSpacing. That distinction is the band's whole strength: an
+	// implementation that hardcoded its spacing would otherwise move the
+	// expectation with the defect. Measured on a throwaway copy with
+	// clickSpacing hardcoded to 120 ms, the edges computed from the function
+	// slid to floor=160/ceiling=220 and the 161 ms measurement passed the band,
+	// leaving only an ordering assertion to report it. With the expectation
+	// computed here, the same copy measures 161 ms against floor=100/ceiling=130
+	// and the band is what goes red.
+	//
+	// The band runs before the threshold checks below so that a spacing which
+	// is not derived from the window is reported as the band violation it is,
+	// rather than as whichever ordering assertion happens to trip first.
+	wantSeat := window200 * spacingNum / spacingDen
+	floor := gapMillis(wantSeat + 2*latency)
+	ceiling := floor + gapMillis(clickSpacingJitterBudget(wantSeat))
+	t.Logf("configured window band: window=%v test-derived spacing=%v (code's clickSpacing=%v) floor=%dms ceiling=%dms (jitter budget %v) measured gap=%dms",
+		window200, wantSeat, clickSpacing(window200), floor, ceiling,
+		clickSpacingJitterBudget(wantSeat), seat.GapMS)
+	if seat.GapMS < floor {
+		t.Fatalf("configured gap_ms = %d is below the band's floor %dms (spacing %v + 2×%v wire cost): the spacing was not derived from the configured window, or was not emitted",
+			seat.GapMS, floor, wantSeat, latency)
+	}
+	if seat.GapMS > ceiling {
+		t.Fatalf("configured gap_ms = %d is above the band's ceiling %dms (floor %d + %v jitter budget): the emitted interval is not the %v spacing this window derives under the contract's %d/%d fraction (a hardcoded %v spacing measures %dms)",
+			seat.GapMS, ceiling, floor, clickSpacingJitterBudget(wantSeat), wantSeat, spacingNum, spacingDen,
+			multiClickGap, gapMillis(wantSeat+2*latency)+gapMillis(multiClickGap-wantSeat))
+	}
 
 	if seat.GapMS >= seatMS {
 		t.Fatalf("gap_ms = %d is not below the seat's own %d ms double-click window: the presses would not read as one double-click", seat.GapMS, seatMS)
@@ -285,10 +366,18 @@ func TestP1402ConfiguredWindowSetsSpacing(t *testing.T) {
 	if seat.GapMS >= def.GapMS {
 		t.Fatalf("configured gap_ms = %d is not below the default window's %d: the configured threshold did not change the emitted spacing", seat.GapMS, def.GapMS)
 	}
-	// The spacing itself moved with the window, not only the echo: spacing plus
-	// the two wire costs the measured gap must span.
-	if want := gapMillis(clickSpacing(seatWindow)) + 2*gapMillis(latency); seat.GapMS < want-5 || seat.GapMS > want+5 {
-		t.Fatalf("configured gap_ms = %d, want ≈%d (spacing %v + 2×%v wire cost): spacing was not derived from the configured window", seat.GapMS, want, clickSpacing(seatWindow), latency)
+
+	// The 400 ms window gets the same floor and NO ceiling, deliberately. Its
+	// floor proves the default window's spacing was emitted; an upper edge
+	// there could not discriminate, because a hardcoded 120 ms produces the
+	// same interval the 400 ms window derives. The only upper edge that carries
+	// information is the 200 ms one above, where the two answers are 60 ms
+	// apart — and it is quoted as such: 246 ms was measured against this
+	// window's 160 ms expectation at load 15.4, so a ceiling here would report
+	// the host again.
+	if want := gapMillis(window400*spacingNum/spacingDen + 2*latency); def.GapMS < want {
+		t.Fatalf("default gap_ms = %d is below the %dms this window derives (spacing %v + 2×%v wire cost): the fallback window emitted no spacing",
+			def.GapMS, want, window400*spacingNum/spacingDen, latency)
 	}
 }
 
