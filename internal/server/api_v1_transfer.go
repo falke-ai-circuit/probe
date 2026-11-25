@@ -301,16 +301,13 @@ func (s *Server) handleV1StreamStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Check for agent-side error
-	if m, ok := resp.(map[string]interface{}); ok {
-		if errMsg, hasErr := m["error"]; hasErr {
-			writeError(w, http.StatusServiceUnavailable, "AGENT_ERROR", errMsg.(string))
-			return
-		}
+	if writeAgentRefusal(w, resp) {
+		return
 	}
 	if !s.assertContextRef(w, agentID, params, resp) {
 		return
 	}
-	writeJSON(w, http.StatusOK, resp)
+	writeInputOutcome(w, resp)
 }
 
 // handleV1StreamStop stops screen streaming on an agent.
@@ -359,11 +356,8 @@ func (s *Server) handleV1StreamStop(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if m, ok := resp.(map[string]interface{}); ok {
-		if errMsg, hasErr := m["error"]; hasErr {
-			writeError(w, http.StatusServiceUnavailable, "AGENT_ERROR", errMsg.(string))
-			return
-		}
+	if writeAgentRefusal(w, resp) {
+		return
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -428,10 +422,13 @@ func (s *Server) handleV1PointerClick(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if writeAgentRefusal(w, resp) {
+		return
+	}
 	if !s.assertContextRef(w, agentID, params, resp) {
 		return
 	}
-	writeJSON(w, http.StatusOK, resp)
+	writeInputOutcome(w, resp)
 }
 
 // handleV1KeyPress sends a single key press to an agent.
@@ -458,10 +455,13 @@ func (s *Server) handleV1KeyPress(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if writeAgentRefusal(w, resp) {
+		return
+	}
 	if !s.assertContextRef(w, agentID, params, resp) {
 		return
 	}
-	writeJSON(w, http.StatusOK, resp)
+	writeInputOutcome(w, resp)
 }
 
 // handleV1KeyCombo sends a key combination to an agent.
@@ -488,10 +488,13 @@ func (s *Server) handleV1KeyCombo(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if writeAgentRefusal(w, resp) {
+		return
+	}
 	if !s.assertContextRef(w, agentID, params, resp) {
 		return
 	}
-	writeJSON(w, http.StatusOK, resp)
+	writeInputOutcome(w, resp)
 }
 
 // handleV1TextInput sends text input to an agent.
@@ -518,8 +521,11 @@ func (s *Server) handleV1TextInput(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if writeAgentRefusal(w, resp) {
+		return
+	}
 	if !s.assertContextRef(w, agentID, params, resp) {
 		return
 	}
-	writeJSON(w, http.StatusOK, resp)
+	writeInputOutcome(w, resp)
 }

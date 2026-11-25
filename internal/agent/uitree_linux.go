@@ -15,10 +15,6 @@ import (
 	"github.com/falke-ai-circuit/probe/internal/protocol"
 )
 
-// noWMRemediation is §7.1's remediation text: it tells the operator what to
-// change and why probe will not fall back to XQueryTree(root).
-const noWMRemediation = "This X server has no window manager, so it publishes no client list and no stacking order. Start an EWMH-compliant WM on this display (e.g. openbox, fluxbox, i3, mutter) and retry; a bare Xvfb session is an exec/input substrate, not an enumerable desktop. probe will not fall back to XQueryTree(root) here, because that list has different semantics (no WM_STATE, no _NET_ACTIVE_WINDOW, override-redirect windows included) and would answer a different question than the one asked."
-
 // uiTree answers §7 on linux. The context is resolved the same way the
 // selector gate resolved it: an explicit `context` wins, otherwise the agent's
 // own $DISPLAY. The result echoes both, so a caller can see which display

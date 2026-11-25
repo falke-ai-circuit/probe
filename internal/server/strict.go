@@ -5,6 +5,7 @@ package server
 // a single byte reaches an agent, whether a request is well-formed.
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -272,7 +273,55 @@ func forwardedErrorStatus(code string) int {
 		return http.StatusConflict
 	case protocol.ErrInvalidParams:
 		return http.StatusBadRequest
+	case protocol.ErrWindowNotFound:
+		// §9.1: the window is not in the resolved context's tree. 404, and the
+		// agent refused before any injection.
+		return http.StatusNotFound
+	case protocol.ErrPrimitiveRefused:
+		// §11 403 class: the platform's security model (or the missing
+		// `focus:true`) denied the primitive before it ran.
+		return http.StatusForbidden
 	default:
 		return http.StatusServiceUnavailable
 	}
+}
+
+// writeAgentRefusal renders an agent error payload with the status its code
+// owns (§11). It reports whether the payload was an error at all, so a caller
+// keeps one success path: an OCCLUDED answer is a RESULT (HTTP 200, ok:false),
+// not an error, and must reach the caller unchanged.
+func writeAgentRefusal(w http.ResponseWriter, resp interface{}) bool {
+	m, ok := resp.(map[string]interface{})
+	if !ok {
+		return false
+	}
+	errMsg, has := m["error"]
+	if !has {
+		return false
+	}
+	code := "AGENT_ERROR"
+	if c, isStr := m["code"].(string); isStr && c != "" {
+		code = c
+	}
+	detail, _ := m["detail"].(map[string]interface{})
+	writeErrorDetail(w, forwardedErrorStatus(code), code, toString(errMsg), detail)
+	return true
+}
+
+// writeInputOutcome renders a §9 input result. An observed failure (§8.1: HTTP
+// 200, ok:false) is a RESULT the caller must see at the top level — wrapping it
+// in the ok:true envelope would turn a refusal into a success, which is the
+// class of lie this contract exists to kill.
+func writeInputOutcome(w http.ResponseWriter, resp interface{}) {
+	if m, ok := resp.(map[string]interface{}); ok {
+		if v, has := m["ok"]; has {
+			if b, isBool := v.(bool); isBool && !b {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(m)
+				return
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }

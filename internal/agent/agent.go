@@ -225,6 +225,12 @@ type Agent struct {
 	pingMisses     int
 	backoffAttempt int
 	plat           platform.Platform
+
+	// openDisplay opens the display a window-scoped input request resolves
+	// against (§9.1). It is a field so the acceptance tests drive the X11 path
+	// through the same treeDisplay seam the window tree uses; nil means the
+	// platform's own opener.
+	openDisplay    func(num int) (windowProbe, error)
 	server         *protocol.Server
 	stopped        chan struct{}
 	tunnelMgr      *tunnelManager
@@ -1108,7 +1114,16 @@ func (a *Agent) handleClick(env protocol.Envelope) protocol.Envelope {
 	if err != nil {
 		return protocol.NewError(env.ID, protocol.ErrInvalidParams, err.Error())
 	}
-	if err := a.plat.Click(params.X, params.Y, params.Button); err != nil {
+	// §9.1: the window-relative resolution and the occlusion hit-test run
+	// BEFORE the injection, on the same display the tree reads.
+	pt, refusal := a.resolveInputPoint(env, "pointer-click", params.Context, params.Window, params.X, params.Y)
+	if refusal != nil {
+		return *refusal
+	}
+	if pt.Probe != nil {
+		defer pt.Probe.Close()
+	}
+	if err := a.plat.Click(pt.X, pt.Y, params.Button); err != nil {
 		return protocol.NewError(env.ID, protocol.ErrInternal, err.Error())
 	}
 	return protocol.NewResult(env.ID, protocol.TypePointerClickResult, protocol.InputResult{Success: true})
@@ -1118,6 +1133,16 @@ func (a *Agent) handleType(env protocol.Envelope) protocol.Envelope {
 	params, err := protocol.ParseCommandStrict[protocol.InputParams](env, protocol.AllowTextInput)
 	if err != nil {
 		return protocol.NewError(env.ID, protocol.ErrInvalidParams, err.Error())
+	}
+	target, refusal := a.resolveInputTarget(env, "text-input", params.Context, params.Window)
+	if refusal != nil {
+		return *refusal
+	}
+	if target.Probe != nil {
+		defer target.Probe.Close()
+	}
+	if ref := focusGate(env, "text-input", target, params.Focus); ref != nil {
+		return *ref
 	}
 	if err := a.plat.TypeText(params.Text); err != nil {
 		return protocol.NewError(env.ID, protocol.ErrInternal, err.Error())
@@ -1130,6 +1155,16 @@ func (a *Agent) handleKey(env protocol.Envelope) protocol.Envelope {
 	if err != nil {
 		return protocol.NewError(env.ID, protocol.ErrInvalidParams, err.Error())
 	}
+	target, refusal := a.resolveInputTarget(env, "key-press", params.Context, params.Window)
+	if refusal != nil {
+		return *refusal
+	}
+	if target.Probe != nil {
+		defer target.Probe.Close()
+	}
+	if ref := focusGate(env, "key-press", target, params.Focus); ref != nil {
+		return *ref
+	}
 	if err := a.plat.KeyPress(params.Key); err != nil {
 		return protocol.NewError(env.ID, protocol.ErrInternal, err.Error())
 	}
@@ -1140,6 +1175,16 @@ func (a *Agent) handleKeyCombo(env protocol.Envelope) protocol.Envelope {
 	params, err := protocol.ParseCommandStrict[protocol.InputParams](env, protocol.AllowKeyCombo)
 	if err != nil {
 		return protocol.NewError(env.ID, protocol.ErrInvalidParams, err.Error())
+	}
+	target, refusal := a.resolveInputTarget(env, "key-combo", params.Context, params.Window)
+	if refusal != nil {
+		return *refusal
+	}
+	if target.Probe != nil {
+		defer target.Probe.Close()
+	}
+	if ref := focusGate(env, "key-combo", target, params.Focus); ref != nil {
+		return *ref
 	}
 	if err := a.plat.KeyCombo(params.Keys); err != nil {
 		return protocol.NewError(env.ID, protocol.ErrInternal, err.Error())

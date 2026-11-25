@@ -37,16 +37,8 @@ func v1StrictForward[T any](s *Server, action, msgType string, allowed []string)
 			}
 			return
 		}
-		if m, isMap := resp.(map[string]interface{}); isMap {
-			if errMsg, hasErr := m["error"]; hasErr {
-				code := "AGENT_ERROR"
-				if c, isStr := m["code"].(string); isStr && c != "" {
-					code = c
-				}
-				detail, _ := m["detail"].(map[string]interface{})
-				writeErrorDetail(w, forwardedErrorStatus(code), code, toString(errMsg), detail)
-				return
-			}
+		if writeAgentRefusal(w, resp) {
+			return
 		}
 		if !s.assertContextRef(w, agentID, params, resp) {
 			return

@@ -26,6 +26,12 @@ import (
 // grows with the desktop.
 const maxTreeWindows = 500
 
+// noWMRemediation is §7.1's remediation text: it tells the operator what to
+// change and why probe will not fall back to XQueryTree(root). It lives here
+// (untagged) because both refusal paths quote it: the tree's and §9.1's
+// window-scoped input, which cannot place a point without a client list.
+const noWMRemediation = "This X server has no window manager, so it publishes no client list and no stacking order. Start an EWMH-compliant WM on this display (e.g. openbox, fluxbox, i3, mutter) and retry; a bare Xvfb session is an exec/input substrate, not an enumerable desktop. probe will not fall back to XQueryTree(root) here, because that list has different semantics (no WM_STATE, no _NET_ACTIVE_WINDOW, override-redirect windows included) and would answer a different question than the one asked."
+
 // treeDisplay is the seam. Every method is an observation of the X server, so
 // a test can state a display and read the rows back.
 type treeDisplay interface {
@@ -260,18 +266,7 @@ func treeRow(d treeDisplay, id uint32, visibleOnly bool) (protocol.UITreeRow, bo
 	if err != nil {
 		return protocol.UITreeRow{}, false
 	}
-	rect := protocol.UITreeRect{X: x, Y: y, W: g.W, H: g.H}
-	// Outer rect: a reparenting WM stores the frame around the client, so the
-	// client's own geometry under-reports the window the operator sees.
-	if p, err := d.Property(id, "_NET_FRAME_EXTENTS"); err == nil {
-		if v := propUint32s(p); len(v) >= 4 {
-			left, right, top, bottom := int(v[0]), int(v[1]), int(v[2]), int(v[3])
-			rect.X -= left
-			rect.Y -= top
-			rect.W += left + right
-			rect.H += top + bottom
-		}
-	}
+	rect := outerRect(d, id, g, x, y)
 
 	row := protocol.UITreeRow{
 		ID:     fmt.Sprintf("0x%x", id),
@@ -292,6 +287,19 @@ func treeRow(d treeDisplay, id uint32, visibleOnly bool) (protocol.UITreeRow, bo
 		}
 	}
 	return row, true
+}
+
+// ownerPIDOf is the one _NET_WM_PID read: §7's row and §9.1's occlusion `hit`
+// report the same owner, and an unknown owner stays 0 (omitted on the wire).
+func ownerPIDOf(d treeDisplay, id uint32) int {
+	p, err := d.Property(id, "_NET_WM_PID")
+	if err != nil {
+		return 0
+	}
+	if v := propUint32s(p); len(v) > 0 {
+		return int(v[0])
+	}
+	return 0
 }
 
 // titleOf returns the full title. §7 is explicit: no truncation. _NET_WM_NAME
