@@ -212,6 +212,16 @@ func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request, agent
 	// P9-11 retention: the delivered artifact is registered under
 	// (agent|name) and pinned while the update is in flight, so a concurrent
 	// prune cannot delete the file the agent is downloading.
+	//
+	// These are the arm half of the request and they must precede the frame:
+	// the pin has to be held before registration (registration prunes its own
+	// bucket, artifacts.go:283) and before the agent can start fetching. A
+	// refusal releases the pin again, below. The staged file and its ledger row
+	// are the one piece of state a refused request leaves behind — they are not
+	// rolled back, because the caller asked for the deliverable to live in the
+	// managed directory; the refusal body names the path (detail.staged_artifact)
+	// instead of claiming nothing was staged.
+	stagedArtifact := ""
 	if params.BinaryPath != "" {
 		var size int64
 		if fi, statErr := os.Stat(downloadPath); statErr == nil {
@@ -220,6 +230,7 @@ func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request, agent
 		s.markArtifactInFlight(downloadPath)
 		s.setUpdateArtifact(agentID, downloadPath)
 		s.registerArtifact(agentID, filename, filename, downloadPath, hash, size)
+		stagedArtifact = downloadPath
 	}
 
 	downloadURL := s.downloadURL(r, params.DownloadHost, filename)
@@ -238,11 +249,6 @@ func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request, agent
 		updateParams.DownloadURL = "" // empty tells agent not to HTTP-fetch
 	}
 
-	// An update start supersedes any canary row left behind by an earlier
-	// attempt: from here the only rows that should exist are the old agent and
-	// (once it connects) the promoted agent under its canonical name.
-	s.purgeCanaryRegistryRow(agentID)
-
 	shortHash := hash
 	if len(shortHash) > 16 {
 		shortHash = shortHash[:16]
@@ -259,14 +265,30 @@ func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request, agent
 	// handleWebSocket will detect the new agent and auto-kill the old PID.
 	resp, err := s.forwardToAgentWithTimeout(agentID, protocol.TypeAgentUpdate, updateParams, 30*time.Second, operatorIDFromRequest(r))
 	if err != nil {
-		// A refusal is NOT an update in progress. The forwarder refused before
-		// writing anything — the agent has no live connection, or its
-		// advertised capabilities do not include "update". Nothing was staged,
-		// nothing will restart, and answering 200 "update_in_progress" is the
-		// silent false success P12-04 F1 measured on a stock agent (0.089 s
-		// response, no [update] in the agent log, no .next, no registry change).
+		// A refusal is NOT an update in progress, and it is not a start that
+		// committed either. The forwarder refused before writing anything — no
+		// live connection, the advertised capabilities do not include
+		// "update", or (P14A-01) the frame could not be written to the link.
+		// Nothing will restart, the canary row is untouched (the purge sits
+		// below the write and has not run), and the retention pin armed above is
+		// released here: its only other release is the completion path, which a
+		// refused delivery never reaches.
+		//
+		// What a refusal does leave behind is the deliverable staged into the
+		// managed directory and recorded in the retention ledger. That is the
+		// destination the caller asked for, so it is not rolled back — the
+		// refusal names the path in detail.staged_artifact instead of claiming
+		// nothing was staged. Answering 200 "update_in_progress" for this state
+		// is the silent false success P12-04 F1 measured on a stock agent
+		// (0.089 s response, no [update] in the agent log, no .next, no
+		// registry change).
 		var refusal *ForwardRefusal
 		if errors.As(err, &refusal) {
+			// Undo the arm half: the download this pin was protecting will not
+			// happen, so no update may stay pinned (or recorded as in flight).
+			if pinned := s.takeUpdateArtifact(agentID); pinned != "" {
+				s.clearArtifactInFlight(pinned)
+			}
 			status := http.StatusConflict
 			switch refusal.Code {
 			case RefusalCapabilityMissing:
@@ -279,12 +301,24 @@ func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request, agent
 				status = http.StatusBadGateway
 			}
 			writeErrorDetail(w, status, refusal.Code, refusal.Message, map[string]interface{}{
-				"agent_id": refusal.AgentID,
-				"delivered": false,
+				"agent_id":          refusal.AgentID,
+				"delivered":         false,
+				"canary_row_purged": false,
+				"staged_artifact":   stagedArtifact,
 			})
 			return
 		}
+	}
 
+	// The frame left the server: written and answered, or written and unanswered
+	// because the agent's connection dropped as the new process took over. Only
+	// now does the update start commit. An update start supersedes any canary
+	// row left behind by an earlier attempt: from here the only rows that should
+	// exist are the old agent and (once it connects) the promoted agent under
+	// its canonical name.
+	s.purgeCanaryRegistryRow(agentID)
+
+	if err != nil {
 		// Not a refusal: the command was written and the response did not
 		// arrive before the deadline. That is the expected shape — the agent
 		// starts the new process and the old connection drops. The update
