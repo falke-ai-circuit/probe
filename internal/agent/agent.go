@@ -197,6 +197,15 @@ type Config struct {
 	// directory, then <exe dir>/state. The agent and the status command share
 	// that resolver so they cannot disagree about which file they mean.
 	StatusPath string
+	// DoubleClickMS is the EFFECTIVE double-click interval of the seat this
+	// agent runs on, in milliseconds. §9.2's 400 ms is a fallback, not a
+	// universal: a desktop configured for 200 ms would not read presses spaced
+	// for a 400 ms window as one double-click, so the gesture's spacing is
+	// derived from this value. Zero means "not configured" and resolves to the
+	// contract default. Nothing reads this from the JSON config file yet —
+	// cmd/probe/config.go is outside this unit's scope — so it is the seam a
+	// config mapper (or a caller that knows the seat) sets at construction.
+	DoubleClickMS int
 }
 
 // Version is the wire form of the version this build reports when Config.Version
@@ -231,7 +240,13 @@ type Agent struct {
 	// against (§9.1). It is a field so the acceptance tests drive the X11 path
 	// through the same treeDisplay seam the window tree uses; nil means the
 	// platform's own opener.
-	openDisplay    func(num int) (windowProbe, error)
+	openDisplay func(num int) (windowProbe, error)
+	// clickWindow is this agent's effective double-click interval, resolved
+	// once at construction from Config.DoubleClickMS. The gesture's spacing is
+	// derived from it (clickSpacing), so a seat configured below the 400 ms
+	// contract default still receives presses inside its own window. Zero means
+	// "nothing configured" and effectiveClickWindow answers the default.
+	clickWindow time.Duration
 	server         *protocol.Server
 	stopped        chan struct{}
 	tunnelMgr      *tunnelManager
@@ -314,6 +329,7 @@ func New(cfg Config) *Agent {
 		cfg:          cfg,
 		stopped:      make(chan struct{}),
 		plat:         platform.New(cfg.Name),
+		clickWindow:  clickWindowFor(cfg.DoubleClickMS),
 		tunnelMgr:    newTunnelManager(),
 		mitmMgr:      newMitmManager(),
 		debugMgr:     newDebugManager(),
@@ -1127,7 +1143,8 @@ func (a *Agent) handleClick(env protocol.Envelope) protocol.Envelope {
 	// §9.2: one gesture, one call. A count>1 click is NOT a loop of the
 	// single-click path — the app decides on the gap between the presses.
 	if inj, ok := injectorFor(&pt.inputTarget); ok {
-		gap, gerr := emitClickGesture(inj, pt.X, pt.Y, params.Button, count)
+		win := a.effectiveClickWindow()
+		gap, gerr := emitClickGesture(inj, pt.X, pt.Y, params.Button, count, win)
 		if gerr != nil {
 			return clickBackendError(env, gerr)
 		}
@@ -1148,7 +1165,7 @@ func (a *Agent) handleClick(env protocol.Envelope) protocol.Envelope {
 		if probe, ref, oref := a.openContextDisplay(env, "pointer-click", params.Context, params.Window); oref == nil {
 			defer probe.Close()
 			if inj, ok := probe.(inputSeam); ok {
-				gap, gerr := emitClickGesture(inj, pt.X, pt.Y, params.Button, count)
+				gap, gerr := emitClickGesture(inj, pt.X, pt.Y, params.Button, count, a.effectiveClickWindow())
 				if gerr != nil {
 					return clickBackendError(env, gerr)
 				}
@@ -1160,7 +1177,10 @@ func (a *Agent) handleClick(env protocol.Envelope) protocol.Envelope {
 		}
 	}
 	if mc, ok := a.plat.(multiClicker); ok {
-		ms, merr := mc.ClickCount(pt.X, pt.Y, params.Button, count, multiClickGap)
+		// The platform layer times the gesture itself, so it is handed the
+		// spacing derived from the same effective window rather than a fixed
+		// 120 ms: a seat configured at 200 ms must still see one double-click.
+		ms, merr := mc.ClickCount(pt.X, pt.Y, params.Button, count, clickSpacing(a.effectiveClickWindow()))
 		if merr != nil {
 			return clickBackendError(env, merr)
 		}

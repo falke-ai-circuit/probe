@@ -24,10 +24,14 @@ import (
 // --- the injection seam -----------------------------------------------------
 
 // fakeInput records every wire event the gesture emits, with the time it was
-// emitted, and models the keymap §9.4 borrows and restores.
+// emitted, and models the keymap §9.4 borrows and restores. `latency` is what
+// one Button call costs at the wire; the event is stamped when the call
+// returns, i.e. when it is actually on the wire, so a gesture measured through
+// this fake sees the wire cost in its inter-press interval.
 type fakeInput struct {
 	spare    byte
 	noSpare  bool
+	latency  time.Duration
 	bound    map[byte]uint32
 	events   []string
 	times    []time.Time
@@ -52,6 +56,9 @@ func (f *fakeInput) Button(name string, press bool) error {
 	edge := "up"
 	if press {
 		edge = "down"
+	}
+	if f.latency > 0 {
+		time.Sleep(f.latency)
 	}
 	f.record("btn" + name + ":" + edge)
 	return nil
@@ -198,6 +205,89 @@ func TestP1402DoubleClickIsOneGesture(t *testing.T) {
 	}
 	if res1.Count != 1 || res1.GapMS != 0 {
 		t.Fatalf("count=1 result = %+v, want count 1 and no gap_ms", res1)
+	}
+}
+
+// --- R3: the echo must be able to be wrong ---------------------------------
+
+// TestP1402GapEchoTracksMeasuredInterval is R3 (§9.2). The seam's Button call
+// costs real time here, so the interval the target perceives is the gesture's
+// spacing PLUS that cost. An implementation that echoed a constant — the
+// nominal spacing, or a hardcoded 120 — disagrees with the stamps the seam
+// booked, so this assertion can tell an echo from a constant. The pre-R3 test
+// could not: every term in it derived from the same injected constant.
+func TestP1402GapEchoTracksMeasuredInterval(t *testing.T) {
+	const latency = 25 * time.Millisecond // what ONE Button wire call costs
+	inj := newFakeInput()
+	inj.latency = latency
+	a := p1402Agent(inj)
+
+	env := a.handleClick(p1401Envelope(t, "g1", map[string]interface{}{
+		"context": "x11::0", "window": "0x3c00007", "x": 10, "y": 20, "button": "left", "count": 2,
+	}))
+	res := p1402ClickResult(t, env)
+
+	// times: [0]=move [1]=down#1 [2]=up#1 [3]=down#2 [4]=up#2, stamped when the
+	// event reached the wire.
+	measured := inj.times[3].Sub(inj.times[1])
+	window := a.effectiveClickWindow()
+	nominal := clickSpacing(window)
+	t.Logf("R3 numbers: window=%v nominal spacing=%v injected latency=%v/press measured gap=%v gap_ms=%d measured_ms=%d",
+		window, nominal, latency, measured, res.GapMS, gapMillis(measured))
+
+	if measured < nominal+2*latency-5*time.Millisecond {
+		t.Fatalf("measured gap %v is not materially above the nominal spacing %v with %v/press latency: the injected wire cost never reached the interval, so this test could not tell an echo from a constant", measured, nominal, latency)
+	}
+	if res.GapMS != gapMillis(measured) {
+		t.Fatalf("gap_ms = %d but the seam booked %d ms (%v): the response is not echoing the interval this gesture took", res.GapMS, gapMillis(measured), measured)
+	}
+	if res.GapMS == gapMillis(nominal) {
+		t.Fatalf("gap_ms = %d equals the nominal spacing %v: the echo is a constant, not a measurement", res.GapMS, nominal)
+	}
+	if measured > window/2 {
+		t.Fatalf("measured gap %v exceeds half the effective %v window: the pair would not read as one double-click", measured, window)
+	}
+}
+
+// TestP1402ConfiguredWindowSetsSpacing is R3's second half: 400 ms is a
+// fallback, not a universal. A seat configured at seatWindow must receive
+// presses spaced for ITS window, and the emitted gap must sit below ITS
+// threshold — the assertion is against the configured value, never a literal.
+func TestP1402ConfiguredWindowSetsSpacing(t *testing.T) {
+	const latency = 20 * time.Millisecond
+	seatWindow := 200 * time.Millisecond // a seat configured below the default
+	seatMS := int(seatWindow / time.Millisecond)
+
+	measure := func(name string, window time.Duration) protocol.ClickResult {
+		inj := newFakeInput()
+		inj.latency = latency
+		a := p1402Agent(inj)
+		a.clickWindow = window
+		env := a.handleClick(p1401Envelope(t, name, map[string]interface{}{
+			"context": "x11::0", "window": "0x3c00007", "x": 10, "y": 20, "button": "left", "count": 2,
+		}))
+		res := p1402ClickResult(t, env)
+		measured := inj.times[3].Sub(inj.times[1])
+		t.Logf("%s: window=%v spacing=%v measured gap=%v gap_ms=%d", name, window, clickSpacing(window), measured, res.GapMS)
+		if res.GapMS != gapMillis(measured) {
+			t.Fatalf("%s: gap_ms = %d, seam booked %d ms: echo is not the measurement", name, res.GapMS, gapMillis(measured))
+		}
+		return res
+	}
+
+	def := measure("default window", defaultDoubleClick)
+	seat := measure("configured window", seatWindow)
+
+	if seat.GapMS >= seatMS {
+		t.Fatalf("gap_ms = %d is not below the seat's own %d ms double-click window: the presses would not read as one double-click", seat.GapMS, seatMS)
+	}
+	if seat.GapMS >= def.GapMS {
+		t.Fatalf("configured gap_ms = %d is not below the default window's %d: the configured threshold did not change the emitted spacing", seat.GapMS, def.GapMS)
+	}
+	// The spacing itself moved with the window, not only the echo: spacing plus
+	// the two wire costs the measured gap must span.
+	if want := gapMillis(clickSpacing(seatWindow)) + 2*gapMillis(latency); seat.GapMS < want-5 || seat.GapMS > want+5 {
+		t.Fatalf("configured gap_ms = %d, want ≈%d (spacing %v + 2×%v wire cost): spacing was not derived from the configured window", seat.GapMS, want, clickSpacing(seatWindow), latency)
 	}
 }
 

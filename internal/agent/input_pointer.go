@@ -35,15 +35,24 @@ import (
 )
 
 const (
-	// §9.2 X11's multi-click interval. The core protocol has no request that
-	// reads it back (XGetPointerControl answers acceleration, not the
-	// multi-click time), so the contract's 400 ms default is the interval this
-	// build judges itself against unless the platform answers its own.
+	// defaultDoubleClick is the contract's FALLBACK multi-click interval. It is
+	// not universal: X11 has no request that reads the seat's own value back
+	// (XGetPointerControl answers acceleration, not the multi-click time), so
+	// 400 ms is only what answers when nothing configured the agent. A seat
+	// configured lower (200 ms is common) would never read two presses spaced
+	// for a 400 ms window as a double-click, so the effective interval is a
+	// per-agent field (Agent.clickWindow) and the spacing derives from it.
 	defaultDoubleClick = 400 * time.Millisecond
 
-	// multiClickGap is what the gesture waits between the two press/release
-	// pairs: 30% of the interval, comfortably inside §9.2's 50% ceiling.
-	multiClickGap = 120 * time.Millisecond
+	// multiClickFraction is the share of the EFFECTIVE double-click window the
+	// gesture's spacing occupies: 30%, comfortably inside §9.2's 50% ceiling.
+	multiClickFractionNum = 3
+	multiClickFractionDen = 10
+
+	// multiClickGap is what an UNCONFIGURED agent spaces its presses by: 30% of
+	// the contract default. It is computed from the same fraction, so it cannot
+	// drift; a configured seat gets clickSpacing(window) instead.
+	multiClickGap = defaultDoubleClick * multiClickFractionNum / multiClickFractionDen
 
 	// maxClickCount bounds what "one click gesture" can mean. Three is a
 	// triple-click (same mechanism); beyond that the app is selecting a range
@@ -54,6 +63,37 @@ const (
 	// unbounded burst of wheel events against a hostile server.
 	maxScrollNotches = 100
 )
+
+// clickSpacing is the inter-press spacing for a double-click window: 30% of it,
+// in integer nanoseconds so the value is exact. Spacing is DERIVED from the
+// window, never a fixed duration — a seat configured below the default would
+// otherwise receive presses outside its own double-click window.
+func clickSpacing(window time.Duration) time.Duration {
+	if window <= 0 {
+		window = defaultDoubleClick
+	}
+	return window * multiClickFractionNum / multiClickFractionDen
+}
+
+// clickWindowFor resolves the effective double-click interval from a configured
+// millisecond value. Zero or negative means "not configured": the contract
+// default answers, which is the value this build judged itself against before
+// the window was configurable.
+func clickWindowFor(ms int) time.Duration {
+	if ms <= 0 {
+		return defaultDoubleClick
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
+// effectiveClickWindow is the interval this agent judges the gesture against:
+// its configured window, or the contract default when none was configured.
+func (a *Agent) effectiveClickWindow() time.Duration {
+	if a != nil && a.clickWindow > 0 {
+		return a.clickWindow
+	}
+	return defaultDoubleClick
+}
 
 // errNoSpareKeycode is §9.4's keycode range being full: there is no key to
 // borrow for the remap, so the codepoint cannot be carried.
@@ -108,22 +148,30 @@ func injectorFor(t *inputTarget) (inputSeam, bool) {
 // --- §9.2 multi-click -------------------------------------------------------
 
 // emitClickGesture is ONE primitive call emitting `count` press/release pairs
-// with the inter-click gap §9.2 requires. It returns the gap it MEASURED
-// between the first and second press (zero for count==1), so the number in the
-// response is an observation of this gesture, not a constant echoed back.
-func emitClickGesture(inj inputSeam, x, y int, button string, count int) (time.Duration, error) {
+// with the inter-click gap §9.2 requires, spaced inside `window` — the seat's
+// effective double-click interval, not a build constant. It returns the gap it
+// MEASURED between the first and second press (zero for count==1), so the
+// number in the response is an observation of this gesture, not a constant
+// echoed back: the stamps are taken AFTER the seam returns, so a seam whose
+// wire call costs time widens the measured interval and the echo follows it.
+func emitClickGesture(inj inputSeam, x, y int, button string, count int, window time.Duration) (time.Duration, error) {
 	if err := inj.Pointer(x, y); err != nil {
 		return 0, err
 	}
+	spacing := clickSpacing(window)
 	var presses []time.Time
 	for i := 0; i < count; i++ {
 		if i > 0 {
-			time.Sleep(multiClickGap)
+			time.Sleep(spacing)
 		}
-		presses = append(presses, time.Now())
 		if err := inj.Button(button, true); err != nil {
 			return 0, err
 		}
+		// Stamped after the press left the seam: the call's own cost is part of
+		// the interval the target perceives. A stamp taken before the call would
+		// report the sleep and hide the wire, which is what made the old echo
+		// indistinguishable from a hardcoded 120.
+		presses = append(presses, time.Now())
 		if err := inj.Button(button, false); err != nil {
 			return 0, err
 		}
