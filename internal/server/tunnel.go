@@ -171,20 +171,21 @@ func (t *Tunnel) Close() {
 	t.connMu.Unlock()
 }
 
-// sendToAgent sends a WebSocket message to the tunnel's agent.
-// Uses the per-agent write mutex to prevent concurrent WriteJSON corruption.
+// sendToAgent sends a WebSocket message to the tunnel's agent. Uses the single
+// resolver (P21-05): a relayed agent is reachable by its own id, and the write
+// lock discipline comes with the transport.
 func (t *Tunnel) sendToAgent(env protocol.Envelope) {
 	s := t.Server
-	s.mu.RLock()
-	conn, ok := s.conns[t.AgentID]
-	writeMu, wmuOk := s.connWriteMu[t.AgentID]
-	s.mu.RUnlock()
-	if !ok || !wmuOk {
+	tr, err := s.resolveAgentTransport(t.AgentID)
+	if err != nil {
+		log.Printf("[tunnel] send to agent %s refused: %v", t.AgentID, err)
 		return
 	}
-	writeMu.Lock()
-	defer writeMu.Unlock()
-	if err := conn.WriteJSON(env); err != nil {
+	if tr.NeedsWriteLock {
+		tr.WriteMu.Lock()
+		defer tr.WriteMu.Unlock()
+	}
+	if err := tr.Conn.WriteJSON(env); err != nil {
 		log.Printf("[tunnel] send to agent failed: %v", err)
 	}
 }

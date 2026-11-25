@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -35,49 +36,50 @@ const (
 // dispatchable is true; otherwise it is the sentence a client shows instead of
 // a generic refusal.
 //
-// It reads the conn-map first (the same map every dispatch path reads), then
-// any live relay channel that has not reached the conn-map yet, then falls back
-// to the registry alone. Only the first case can be dispatchable: a promise the
-// dispatch path cannot keep is the defect this unit removes, not a nicety.
+// P21-05: the verdict comes from resolveAgentTransport — the same call every
+// control path makes — so the predicate and the router cannot disagree. A
+// route that exists is dispatchable; a route that died is refused BY NAME; an
+// id with neither path is a registry-only answer that says no route exists.
 func (s *Server) AgentDispatchability(agentID string) (bool, string, string) {
-	s.mu.RLock()
-	conn, ok := s.conns[agentID]
-	_, wmuOk := s.connWriteMu[agentID]
-	s.mu.RUnlock()
-
-	if ok {
-		if _, isVirtual := conn.(*virtualConn); isVirtual {
-			// A relayed channel carries its own write mutex inside the
-			// virtualConn, so the conn-map entry is the whole requirement.
-			return true, LivenessSourceRelay, ""
+	if tr, err := s.resolveAgentTransport(agentID); err == nil {
+		return true, tr.Source, ""
+	} else if route, found := s.relayRouteFor(agentID); found {
+		// A route entry is present but its transport is not live.
+		return false, LivenessSourceRelay, refRouteNotLive(agentID, route.RelayID, route.ChannelID).Error()
+	} else {
+		if tomb, ok := s.lastRelayRoute(agentID); ok {
+			// The route is gone (swept with its socket). The answer names the
+			// link and channel that closed rather than pretending the agent
+			// never existed.
+			return false, LivenessSourceRelay, refRouteGone(agentID, tomb.RelayID, tomb.ChannelID).Error()
 		}
-		if wmuOk {
-			return true, LivenessSourceWS, ""
+		if relayID, found := s.relayChannelOwner(agentID); found {
+			// A channel exists but its registration never wrote a route, so
+			// nothing may be dispatched from it. Naming the holder is the
+			// honest middle answer: not a green row, not a silent absence.
+			return false, LivenessSourceRelay,
+				fmt.Sprintf("relay %s holds a channel for agent %s but no route entry was written for it; nothing can be dispatched", relayID, agentID)
 		}
-		// A transport with no write mutex cannot be framed safely: forwarding
-		// would either race another writer or deadlock. Refusing here rather
-		// than promising a dispatch that the writer lock would block.
-		return false, LivenessSourceRegistryOnly,
-			"agent has a transport but no per-agent write mutex; dispatch would race another writer"
-	}
-
-	if relayID, found := s.relayChannelOwner(agentID); found {
-		return false, LivenessSourceRelay,
-			fmt.Sprintf("relay %s holds a channel for this agent but the agent is not registered for dispatch (no conn-map entry)", relayID)
+		if _, direct := s.conns[agentID]; direct {
+			// A transport with no write mutex cannot be framed safely.
+			return false, LivenessSourceRegistryOnly,
+				"agent has a transport but no per-agent write mutex; dispatch would race another writer"
+		}
 	}
 
 	if s.registry == nil {
 		// A Server without a registry has no second truth to fall back to:
-		// the conn-map is the whole answer, and it said no.
+		// the conn-map and the route map are the whole answer, and both said no.
 		return false, LivenessSourceRegistryOnly,
-			fmt.Sprintf("agent %s has no live ws connection and this server has no registry", agentID)
+			fmt.Sprintf("agent %s has no route: not in the direct conn-map and no relay channel carries it (this server has no registry)", agentID)
 	}
 	rec, err := s.registry.GetHealth(agentID)
 	if err != nil {
 		return false, LivenessSourceRegistryOnly,
-			fmt.Sprintf("agent %s is in neither the conn-map nor the registry", agentID)
+			fmt.Sprintf("agent %s has no route: not in the direct conn-map and no relay channel carries it, and it is not in the registry", agentID)
 	}
-	return false, LivenessSourceRegistryOnly, registryOnlyReason(rec)
+	return false, LivenessSourceRegistryOnly,
+		fmt.Sprintf("agent %s has no route: not in the direct conn-map and no relay channel carries it; %s", agentID, registryOnlyReason(rec))
 }
 
 // relayChannelOwner reports which connected relay holds a channel for agentID.
@@ -141,13 +143,30 @@ type DispatchRefusal struct {
 // and it is passed through as such (502 AGENT_ERROR). Answering
 // AGENT_UNAVAILABLE there is the lie this unit removes.
 func (s *Server) dispatchRefusal(agentID, call string, err error) DispatchRefusal {
-	dispatchable, source, reason := s.AgentDispatchability(agentID)
 	detail := map[string]interface{}{
-		"call":            call,
-		"agent_id":        agentID,
-		"dispatchable":    dispatchable,
-		"liveness_source": source,
+		"call":        call,
+		"agent_id":    agentID,
 	}
+	// P21-05: a routing failure names its code and its link. An id that never
+	// had a route is NOT this case — it stays the predicate's absence answer.
+	var re *RouteError
+	if errors.As(err, &re) && (re.RelayID != "" || s.hasRouteTombstone(agentID)) {
+		detail["route_code"] = re.Code
+		detail["relay_id"] = re.RelayID
+		detail["channel_id"] = re.ChannelID
+		if err != nil {
+			detail["error"] = err.Error()
+		}
+		return DispatchRefusal{
+			Status:  http.StatusServiceUnavailable,
+			Code:    re.Code,
+			Message: re.Reason,
+			Detail:  detail,
+		}
+	}
+	dispatchable, source, reason := s.AgentDispatchability(agentID)
+	detail["dispatchable"] = dispatchable
+	detail["liveness_source"] = source
 	if err != nil {
 		detail["error"] = err.Error()
 	}
@@ -160,6 +179,19 @@ func (s *Server) dispatchRefusal(agentID, call string, err error) DispatchRefusa
 			Status:  http.StatusBadGateway,
 			Code:    "AGENT_ERROR",
 			Message: msg,
+			Detail:  detail,
+		}
+	}
+	// The route was known and died: answer by name, not as an absence.
+	if tomb, ok := s.lastRelayRoute(agentID); ok {
+		gone := refRouteGone(agentID, tomb.RelayID, tomb.ChannelID)
+		detail["route_code"] = RefusalRouteGone
+		detail["relay_id"] = tomb.RelayID
+		detail["channel_id"] = tomb.ChannelID
+		return DispatchRefusal{
+			Status:  http.StatusServiceUnavailable,
+			Code:    RefusalRouteGone,
+			Message: gone.Error(),
 			Detail:  detail,
 		}
 	}

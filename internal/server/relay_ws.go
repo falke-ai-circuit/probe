@@ -288,6 +288,12 @@ func (s *Server) handleRelayConnection(conn *websocket.Conn, firstData []byte) {
 					s.connWriteMu[agentID] = &session.writeMu
 					s.mu.Unlock()
 
+					// P21-05: the routing truth for a relayed agent, keyed by
+					// the registry id AND the agent's published name (the id an
+					// operator can actually address). Written here, at
+					// registration, and dropped with the channel.
+					s.setRelayRoute(agentID, info.Name, session.relayID, chanID, vc)
+
 					if s.tokenTTL > 0 {
 						s.SetTokenExpiry(agentID, time.Now().Add(s.tokenTTL))
 					}
@@ -369,6 +375,9 @@ func (s *Server) handleRelayControl(session *relaySession, payload []byte) {
 			delete(s.conns, vc.agentID)
 			delete(s.connWriteMu, vc.agentID)
 			s.mu.Unlock()
+			// P21-05: the socket is gone, so the route must be too. A stale
+			// route may never answer for a closed channel.
+			s.dropRelayRoute(vc.agentID)
 			s.registry.Unregister(vc.agentID)
 			s.sessions.RemoveSession(vc.agentID)
 			s.ClearTokenExpiry(vc.agentID)
@@ -395,6 +404,9 @@ func (s *Server) cleanupRelaySession(session *relaySession) {
 			delete(s.conns, vc.agentID)
 			delete(s.connWriteMu, vc.agentID)
 			s.mu.Unlock()
+			// P21-05: a link that dies takes every route it carried with it.
+			// The map is swept here, before the sockets' owners can be asked.
+			s.dropRelayRoute(vc.agentID)
 			s.registry.Unregister(vc.agentID)
 			s.sessions.RemoveSession(vc.agentID)
 			s.ClearTokenExpiry(vc.agentID)

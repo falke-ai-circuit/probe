@@ -53,6 +53,11 @@ type Server struct {
 	pingProbeInterval time.Duration
 	pingProbeTimeout  time.Duration
 
+	// P21-05: agentID -> relay link + channel, written at registration and
+	// swept the instant the channel or link closes. The routing truth for a
+	// relayed agent, exactly as conns is the truth for a direct one.
+	routeStore routeStore
+
 	// pendingRequests maps request IDs to response channels for request-response
 	// over WebSocket. When handleAgentExec sends a command to an agent, it creates
 	// a channel and waits on it. handleMessages delivers the response.

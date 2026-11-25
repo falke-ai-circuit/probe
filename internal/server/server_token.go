@@ -192,12 +192,11 @@ func (s *Server) checkAPIAuthWithHeader(w http.ResponseWriter, r *http.Request, 
 // manually (e.g. from an admin endpoint). Returns an error if the agent is not
 // connected.
 func (s *Server) InitiateTokenRotation(agentID string, newToken string) error {
-	s.mu.RLock()
-	conn, ok := s.conns[agentID]
-	s.mu.RUnlock()
-	if !ok {
-		return fmt.Errorf("agent %s not connected", agentID)
+	tr, rerr := s.resolveAgentTransport(agentID)
+	if rerr != nil {
+		return rerr
 	}
+	conn := tr.Conn
 	params := protocol.TokenRotateParams{
 		NewToken: newToken,
 	}

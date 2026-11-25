@@ -204,13 +204,11 @@ func (s *Server) sealCredentialForExec(agentID, name, jobID, mode string) (strin
 // sendCredentialDelivery writes the handle envelope as its own WS frame,
 // serialized behind the same per-agent write mutex as every other frame.
 func (s *Server) sendCredentialDelivery(agentID string, h *credHandle, mode string) error {
-	s.mu.RLock()
-	conn, ok := s.conns[agentID]
-	writeMu, wmuOk := s.connWriteMu[agentID]
-	s.mu.RUnlock()
-	if !ok || !wmuOk {
-		return fmt.Errorf("agent %s not connected", agentID)
+	tr, rerr := s.resolveAgentTransport(agentID)
+	if rerr != nil {
+		return rerr
 	}
+	conn := tr.Conn
 	delivery := protocol.CredentialDelivery{
 		Handle:       h.Handle,
 		Name:         h.Name,
@@ -229,12 +227,12 @@ func (s *Server) sendCredentialDelivery(agentID string, h *credHandle, mode stri
 		Type:   protocol.TypeCredentialDeliver,
 		Params: raw,
 	}
-	if _, isVirtual := conn.(*virtualConn); !isVirtual {
-		writeMu.Lock()
+	if tr.NeedsWriteLock {
+		tr.WriteMu.Lock()
 	}
 	err = conn.WriteJSON(env)
-	if _, isVirtual := conn.(*virtualConn); !isVirtual {
-		writeMu.Unlock()
+	if tr.NeedsWriteLock {
+		tr.WriteMu.Unlock()
 	}
 	if err != nil {
 		return err

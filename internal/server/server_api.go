@@ -837,28 +837,35 @@ func (e *ForwardRefusal) Unwrap() error { return e.Err }
 // distinguish a refusal from a delivery that started.
 func (s *Server) forwardToAgentWithTimeout(agentID string, msgType string, params interface{}, timeout time.Duration, operatorID string) (interface{}, error) {
 	start := time.Now()
-	s.mu.RLock()
-	conn, ok := s.conns[agentID]
-	writeMu, wmuOk := s.connWriteMu[agentID]
-	s.mu.RUnlock()
-	if !ok || !wmuOk {
-		// P21-01: the refusal states the predicate's reason, not a generic
-		// "not connected". If the predicate says the agent IS dispatchable,
-		// this is a link failure on a live agent, never an absence — the
-		// caller must not be told the agent is gone.
-		dispatchable, _, reason := s.AgentDispatchability(agentID)
+	// P21-05: one resolver for every control path. Direct connection first,
+	// relay route second; a route that is gone or not live refuses by name
+	// before a byte is written.
+	tr, rerr := s.resolveAgentTransport(agentID)
+	if rerr != nil {
+		reason := rerr.Error()
 		code := RefusalAgentNotConnected
-		if dispatchable {
-			code = RefusalDeliveryFailed
-			reason = fmt.Sprintf("agent %s is dispatchable but its transport could not be opened for %s", agentID, msgType)
+		if re, ok := rerr.(*RouteError); ok {
+			// Only a route that existed may be reported as a route: a swept
+			// channel names its link, a live-but-dead entry names itself, and
+			// an id that never had a route stays the absence answer.
+			if tomb, found := s.lastRelayRoute(agentID); found {
+				code = RefusalRouteGone
+				reason = refRouteGone(agentID, tomb.RelayID, tomb.ChannelID).Error()
+			} else if re.RelayID != "" {
+				code, reason = re.Code, re.Reason
+			} else {
+				_, _, reason = s.AgentDispatchability(agentID)
+			}
 		}
 		s.auditLog(agentID, msgType, params, "error", reason, start, false, operatorID)
 		return nil, &ForwardRefusal{
 			Code:    code,
 			AgentID: agentID,
 			Message: reason,
+			Err:     rerr,
 		}
 	}
+	conn := tr.Conn
 
 	// Capability check: verify the agent advertises the required capability
 	// for this command type. Agents with no capabilities advertised are
@@ -904,15 +911,15 @@ func (s *Server) forwardToAgentWithTimeout(agentID string, msgType string, param
 	// Serialize WebSocket writes per-agent to prevent parallel write corruption.
 	// Concurrent WriteJSON calls on the same WebSocket connection can interleave
 	// frames, corrupting data — this was the root cause of binary upload corruption.
-	// For relayed agents (virtualConn), the Conn implementation handles its own
-	// locking internally (vc.session.writeMu), so we must NOT double-lock here
-	// — Go mutexes are non-reentrant and double-locking causes a self-deadlock.
-	if _, isVirtual := conn.(*virtualConn); !isVirtual {
-		writeMu.Lock()
+	// A resolved virtualConn carries its own lock (vc.session.writeMu), so the
+	// resolver hands back WriteMu=nil for it and the lock is NOT taken here —
+	// Go mutexes are non-reentrant and double-locking self-deadlocks.
+	if tr.NeedsWriteLock {
+		tr.WriteMu.Lock()
 	}
 	err := conn.WriteJSON(env)
-	if _, isVirtual := conn.(*virtualConn); !isVirtual {
-		writeMu.Unlock()
+	if tr.NeedsWriteLock {
+		tr.WriteMu.Unlock()
 	}
 	if err != nil {
 		s.auditLog(agentID, msgType, params, "error", "send to agent failed: "+err.Error(), start, false, operatorID)
@@ -955,6 +962,28 @@ func (s *Server) forwardToAgentWithTimeout(agentID string, msgType string, param
 		}
 		s.auditLog(agentID, msgType, params, "success", "", start, false, operatorID)
 		return result, nil
+	case <-tr.Dead:
+		// P21-05 requirement 4: the relay route died while the command was in
+		// flight. This fires on the socket's own teardown, so the caller gets
+		// the named route error immediately instead of waiting out the
+		// command timeout (exec default 60s, forwardToAgent 120s).
+		var goneErr error = &RouteError{
+			Code:    RefusalRouteGone,
+			AgentID: agentID,
+			Reason: fmt.Sprintf(
+				"relay route for agent %s is gone: the link closed while %s was in flight, the command may not have run",
+				agentID, msgType),
+		}
+		if tr.route != nil {
+			goneErr = refRouteGone(agentID, tr.route.RelayID, tr.route.ChannelID)
+		}
+		s.auditLog(agentID, msgType, params, "error", goneErr.Error(), start, false, operatorID)
+		return nil, &ForwardRefusal{
+			Code:    RefusalRouteGone,
+			AgentID: agentID,
+			Message: goneErr.Error(),
+			Err:     goneErr,
+		}
 	case <-time.After(timeout):
 		s.auditLog(agentID, msgType, params, "error", "timed out", start, false, operatorID)
 		return nil, fmt.Errorf("agent did not respond within %v (timed out)", timeout)

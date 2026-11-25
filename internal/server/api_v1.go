@@ -267,6 +267,10 @@ func (s *Server) v1Forward(action, msgType string, readBody bool) http.HandlerFu
 		if err != nil {
 			if strings.Contains(err.Error(), "timed out") {
 				writeError(w, http.StatusGatewayTimeout, "TIMEOUT", err.Error())
+			} else if d := s.dispatchRefusal(agentID, action, err); d.Code != "" {
+				// P21-05: one refusal derivation. A route that died answers
+				// ROUTE_GONE through every control path, not only exec.
+				writeErrorDetail(w, d.Status, d.Code, d.Message, d.Detail)
 			} else {
 				writeError(w, http.StatusServiceUnavailable, "AGENT_UNREACHABLE", err.Error())
 			}
@@ -604,9 +608,19 @@ func (s *Server) handleV1DeleteAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "agent id required")
 		return
 	}
+	// P21-05: presence in the conn-map OR a live relay route both mean the
+	// agent still owns a transport, and neither may be deleted underneath.
+	// (The conn-map check is deliberately a presence check, not the dispatch
+	// resolver: deleting a row is unsafe whenever a transport exists, even
+	// one the dispatcher would refuse for want of a write mutex.)
 	s.mu.RLock()
 	_, connected := s.conns[agentID]
 	s.mu.RUnlock()
+	if !connected {
+		if route, found := s.relayRouteFor(agentID); found && route.live() {
+			connected = true
+		}
+	}
 	if connected {
 		writeError(w, http.StatusConflict, "AGENT_CONNECTED",
 			fmt.Sprintf("agent %s is connected; disconnect it before deleting", agentID))
