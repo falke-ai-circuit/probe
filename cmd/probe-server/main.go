@@ -45,6 +45,7 @@ func main() {
 	operatorPath := flag.String("operator-db", "", "operator database file path (default: PROBE_OPERATOR_DB env or /tmp/probe-operators.json)")
 	relayStatus := flag.String("relay-status", "", "loopback address (host:port) of the relay serving this server's uplink; enables the uplink edge in /api/v1/topology (default: PROBE_RELAY_STATUS env). Empty = no uplink configured.")
 	advertisedAddr := flag.String("advertised-addr", "", "address peers should dial for this server, pushed in peer_hello (default: PROBE_ADVERTISED_ADDR env, else host name + listen port)")
+	serverName := flag.String("server-name", "", "human label for this server, published in /api/v1/servers and the pre-auth identity block (default: PROBE_SERVER_NAME env, else the OS host name). The bind address is never used as a name.")
 	// P21-07: installed relay allowlist + fingerprint-only identity records.
 	relayAllowlist := flag.String("relay-allowlist", "", "comma-separated relay identities admitted to forward downstream clients: id, id:token_fp8, or *:token_fp8. Omitted = allow all; given empty = deny all.")
 	relayIdentityPath := flag.String("relay-identity-db", "", "relay identity records file (fingerprints only; default: PROBE_RELAY_IDENTITY_DB env or /tmp/probe-relay-identities.json)")
@@ -118,6 +119,9 @@ func main() {
 	if *advertisedAddr == "" {
 		*advertisedAddr = os.Getenv("PROBE_ADVERTISED_ADDR")
 	}
+	if *serverName == "" {
+		*serverName = os.Getenv("PROBE_SERVER_NAME")
+	}
 	if *vtAPIKey == "" {
 		*vtAPIKey = os.Getenv("PROBE_VT_API_KEY")
 	}
@@ -165,6 +169,9 @@ func main() {
 	srv.SetVersion(appVersion)
 	srv.SetUplinkRelayStatus(*relayStatus)
 	srv.SetAdvertisedAddr(*advertisedAddr)
+	// P22-02 §7.2: one naming rule. Empty leaves the builder's chain to the
+	// host name; the bind address is never a name.
+	srv.SetServerIdentity("", *serverName)
 	// P21-07: fail loud on a malformed allowlist entry — never a silent pass.
 	allowlistProvided := false
 	flag.Visit(func(f *flag.Flag) { if f.Name == "relay-allowlist" { allowlistProvided = true } })

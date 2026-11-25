@@ -326,6 +326,10 @@ func (s *Server) registerV1Routes() {
 
 	// Agent endpoints — read
 	s.mux.HandleFunc("GET /api/v1/agents", s.handleV1ListAgents)
+
+	// P22-02 (spec P1): one inventory endpoint. servers[0] is this process.
+	// There is deliberately no second endpoint for the badge.
+	s.mux.HandleFunc("GET /api/v1/servers", s.handleV1Servers)
 	s.mux.HandleFunc("GET /api/v1/agents/{id}", s.handleV1GetAgent)
 	s.mux.HandleFunc("DELETE /api/v1/agents/{id}", s.handleV1DeleteAgent)
 	s.mux.HandleFunc("GET /api/v1/agents/{id}/health", s.handleV1AgentHealth)
@@ -575,6 +579,10 @@ func (s *Server) handleV1Health(w http.ResponseWriter, r *http.Request) {
 		"ping_timeouts_total":     pingTimeouts,
 		"stale_threshold_seconds": int64(staleThreshold.Seconds()),
 		"uptime_seconds":          int64(time.Since(startTime).Seconds()),
+		// P22-02 §3.1: a four-key projection of the SAME builder that
+		// produces servers[0], so the login screen and the authenticated
+		// badge cannot disagree. Nothing here reads a request header.
+		"identity": s.preAuthIdentity(),
 	})
 }
 

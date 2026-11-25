@@ -244,6 +244,11 @@ type Server struct {
 	// P8-10 (P8-02 §8.2): capability inventory cache, keyed by agent id.
 	capsMu    sync.Mutex
 	capsCache map[string]*capabilityInventory
+
+	// P22-02: server inventory (GET /api/v1/servers). Lazy so Server literals
+	// in tests keep working unchanged; one store, one lock, one document.
+	invMu sync.Mutex
+	inv   *serversStore
 }
 
 // startTime records when the server process began, used by /health for uptime.

@@ -43,6 +43,54 @@ type relaySession struct {
 	// looked up from the server's store, not created here, so a reconnect
 	// inherits the counts of the session it replaced.
 	link *linkStat
+
+	// P22-02: the last positive evidence that this peer is alive — session
+	// creation, any inbound frame, or a pong. Never stamped by a read from
+	// disk or by generating a response (§8.2). downReason is set only when
+	// the liveness watchdog is the thing taking the link down, so the record
+	// can name pong_timeout instead of a generic close.
+	seenMu     sync.Mutex
+	lastSeen   time.Time
+	downReason string
+	done       chan struct{}
+	doneOnce   sync.Once
+}
+
+// touch stamps positive evidence that the peer is alive.
+func (rs *relaySession) touch() {
+	rs.seenMu.Lock()
+	rs.lastSeen = time.Now().UTC()
+	rs.seenMu.Unlock()
+}
+
+// seenAt returns the last positive evidence, zero when none was ever stamped.
+func (rs *relaySession) seenAt() time.Time {
+	rs.seenMu.Lock()
+	defer rs.seenMu.Unlock()
+	return rs.lastSeen
+}
+
+func (rs *relaySession) setDownReason(reason string) {
+	rs.seenMu.Lock()
+	rs.downReason = reason
+	rs.seenMu.Unlock()
+}
+
+func (rs *relaySession) reasonForDown() string {
+	rs.seenMu.Lock()
+	defer rs.seenMu.Unlock()
+	if rs.downReason != "" {
+		return rs.downReason
+	}
+	return stateReasonSocketClosed
+}
+
+// stop releases the watchdog. Safe on sessions built literally in tests.
+func (rs *relaySession) stop() {
+	if rs.done == nil {
+		return
+	}
+	rs.doneOnce.Do(func() { close(rs.done) })
 }
 
 // virtualConn represents a single agent behind a relay. It implements
@@ -207,6 +255,7 @@ func (s *Server) handleRelayConnection(conn *websocket.Conn, firstData []byte) {
 		tokenFP:   ident.TokenFP,
 		startedAt: time.Now().UTC().Format(time.RFC3339),
 		link:      s.linkStats.forRelay(relayID),
+		done:      make(chan struct{}),
 	}
 	if meta != nil {
 		// P21-08: the link is up and this is where the chain read finds it.
@@ -216,8 +265,20 @@ func (s *Server) handleRelayConnection(conn *websocket.Conn, firstData []byte) {
 
 	// Store relay session in server's relay registry
 	s.relayMu.Lock()
+	displaced := s.relays[relayID]
 	s.relays[relayID] = session
 	s.relayMu.Unlock()
+
+	// P22-02: the peer is a record from the moment its socket is up. A
+	// displaced session of the same id is marked replaced so an operator sees
+	// the collision instead of a silent swap (F4).
+	if displaced != nil && displaced != session {
+		displaced.setDownReason(stateReasonDuplicateID)
+	}
+	session.touch()
+	s.peerRegistered(session)
+	s.watchRelayLiveness(session)
+	defer session.stop()
 
 	log.Printf("[server] relay connected: id=%s, magic=0x%02X", relayID, magic)
 
@@ -244,6 +305,8 @@ func (s *Server) handleRelayConnection(conn *websocket.Conn, firstData []byte) {
 			return
 		}
 		_ = msgType
+		// P22-02: an inbound frame is positive evidence the peer is alive.
+		session.touch()
 
 		_, chanID, payload, err := parseRelayFrame(data)
 		if err != nil {
@@ -467,12 +530,64 @@ func (s *Server) cleanupRelaySession(session *relaySession) {
 		delete(session.channels, chanID)
 	}
 
-	// Remove relay from server's relay registry
+	// P22-02: the record is written BEFORE the session leaves the map. The
+	// session is deleted here; the peer is not — a killed relay flips to
+	// state=down with its last_seen intact instead of vanishing (§6.3).
 	s.relayMu.Lock()
-	delete(s.relays, session.relayID)
+	current := s.relays[session.relayID] == session
 	s.relayMu.Unlock()
+	if current {
+		s.peerLost(session, session.reasonForDown())
+		s.relayMu.Lock()
+		delete(s.relays, session.relayID)
+		s.relayMu.Unlock()
+	} else {
+		// A newer socket took this id; its record is the truth now.
+		log.Printf("[server] relay %s: displaced session closed, inventory record untouched", session.relayID)
+	}
+	session.stop()
 
 	log.Printf("[server] relay %s: cleaned up %d channels", session.relayID, len(session.channels))
+}
+
+// watchRelayLiveness keeps the peer's state honest while the socket is open.
+//
+// Ping/pong, not silence: an idle relay with no agents sends no traffic, and a
+// "no frames for 2× interval" rule would mark it down while it is healthy
+// (§8.3, D7). A pong is answered by the peer's WebSocket stack with no
+// application involvement, so the measurement costs the peer nothing.
+//
+// Any inbound frame counts as the same evidence (session.touch in the read
+// loop), which only ever makes the rule more forgiving. On timeout the link is
+// closed with pong_timeout recorded, so the down record names what happened
+// rather than a generic close.
+func (s *Server) watchRelayLiveness(session *relaySession) {
+	interval := s.pingProbeInterval
+	if interval <= 0 {
+		interval = pingProbeInterval
+	}
+	timeout := 2 * interval
+	ticker := time.NewTicker(interval)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-session.done:
+				return
+			case <-ticker.C:
+				if age := time.Since(session.seenAt()); age > timeout {
+					session.setDownReason(stateReasonPongTimeout)
+					log.Printf("[server] relay %s: no pong within %s (%s since last evidence) — taking the link down", session.relayID, timeout, age.Round(time.Second))
+					_ = session.conn.Close()
+					return
+				}
+				if err := session.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(interval)); err != nil {
+					_ = session.conn.Close()
+					return
+				}
+			}
+		}
+	}()
 }
 
 // sendPeerHello pushes this server's identity down the uplink on the
