@@ -579,6 +579,9 @@ var cmdTable = map[string]func(*Agent, protocol.Envelope) protocol.Envelope{
 	protocol.TypePointerDrag: (*Agent).handlePointerDrag,
 	protocol.TypeUITree: (*Agent).handleUITree,
 	protocol.TypeUIWindow: (*Agent).handleUIWindow,
+	// P13-02 (§6): read-only context enumeration. Body-less: it answers from
+	// the host, it does not act on a context.
+	protocol.TypeContexts: (*Agent).handleContexts,
 	protocol.TypeTextInput: (*Agent).handleType,
 	protocol.TypeKeyPress: (*Agent).handleKey,
 	protocol.TypeKeyCombo: (*Agent).handleKeyCombo,
@@ -664,6 +667,17 @@ func (a *Agent) handleCommand(conn *websocket.Conn, env protocol.Envelope) {
 		resp = protocol.NewError(env.ID, "permission_denied",
 			fmt.Sprintf("command type '%s' is not allowed under permissions '%s'", env.Type, a.cfg.Permissions))
 		if err := a.writeMessage(conn, resp); err != nil {
+			log.Printf("write error: %v", err)
+		}
+		return
+	}
+
+	// P13-02 (§6): a selector must name a context this agent enumerated and
+	// classifies addressable. The gate runs before dispatch, so a refused
+	// selector cannot leave a half-acted command behind. It reads the row's
+	// verdict from the same enumeration /contexts returns.
+	if refusal := a.selectorGate(env); refusal != nil {
+		if err := a.writeMessage(conn, *refusal); err != nil {
 			log.Printf("write error: %v", err)
 		}
 		return

@@ -328,6 +328,10 @@ func (s *Server) registerV1Routes() {
 	s.mux.HandleFunc("GET /api/v1/agents/{id}/audit", s.handleV1AgentAudit)
 	s.mux.HandleFunc("GET /api/v1/agents/{id}/capabilities", s.handleV1GetAgentCapabilities)
 
+	// P13-02 §6: read-only context enumeration. No selector: it reports which
+	// contexts exist and what can be done in each, it does not act on one.
+	s.mux.HandleFunc("GET /api/v1/agents/{id}/contexts", s.handleV1Contexts)
+
 	// Agent endpoints — redeploy
 	s.mux.HandleFunc("POST /api/v1/agents/{id}/redeploy", s.handleV1RedeployAgent)
 

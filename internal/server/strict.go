@@ -104,6 +104,26 @@ func writeStrictRefusal(w http.ResponseWriter, serr *protocol.StrictError) {
 	writeErrorDetail(w, http.StatusBadRequest, protocol.ErrInvalidParams, serr.Error(), detail)
 }
 
+// refuseQueryParams is the §5.6/§6 rule for a GET that cannot carry a
+// selector: the query string is where an operator would put one, so a key that
+// appears there is UNKNOWN_FIELD — refused, never silently dropped. Returns
+// false when the refusal has been written and the handler must return.
+func refuseQueryParams(w http.ResponseWriter, r *http.Request, allowed []string) bool {
+	if r.URL.RawQuery == "" {
+		return true
+	}
+	field := strings.SplitN(r.URL.RawQuery, "=", 2)[0]
+	writeErrorDetail(w, http.StatusBadRequest, protocol.ErrInvalidParams,
+		fmt.Sprintf("this route accepts no query parameters; %q was not read", field),
+		map[string]interface{}{
+			"reason":  protocol.ReasonUnknownField,
+			"field":   field,
+			"allowed": allowed,
+			"ran":     false,
+		})
+	return false
+}
+
 // selectorPresent reports whether the params carry a selector at all. Absent =
 // the agent's own context = today's behaviour byte-for-byte (§5.1 invariant).
 func selectorPresent(params interface{}) bool {

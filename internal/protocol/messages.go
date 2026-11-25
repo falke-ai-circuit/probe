@@ -209,6 +209,9 @@ const (
 	// P13-01 (§11): the primitive has no implementation in this build. 501 —
 	// distinct from a policy refusal (403) and from an observed failure (200).
 	ErrPrimitiveUnsupported = "PRIMITIVE_UNSUPPORTED"
+	// P13-02 (§11): the platform's own security model forbids the primitive for
+	// this principal. 403 — a policy answer, not a missing backend.
+	ErrPrimitiveRefused = "PRIMITIVE_REFUSED"
 )
 
 // Envelope is the top-level message wrapper.

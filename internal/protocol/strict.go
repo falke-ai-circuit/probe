@@ -109,6 +109,12 @@ var (
 	AllowTextInput = []string{"context", "session", "text", "encoding", "window", "focus"}
 	AllowUITree    = []string{"context", "session", "visible_only", "window", "max"}
 	AllowUIWindow  = []string{"context", "session", "window", "action", "x", "y", "w", "h"}
+
+	// AllowContextsQuery is §6's GET: it enumerates, it does not act, so it
+	// carries no selector and accepts no query key at all. It exists as a
+	// named empty list so the refusal can print `detail.allowed: []` instead of
+	// leaving a caller to guess whether some key was legal.
+	AllowContextsQuery = []string{}
 )
 
 // StrictError is a refusal decided before any dispatch: it names the contract
