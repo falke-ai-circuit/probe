@@ -367,21 +367,24 @@ func TestP2108_DeadHopStaysNamed(t *testing.T) {
 	// Kill the middle hop: relay-A's listener and its uplink socket.
 	relayA.Stop()
 
-	var after p2108Chain
-	var rawAfter string
-	elapsed := time.Duration(0)
-	p2108WaitFor(t, 5*time.Second, "dead hop rendered as degraded and named", func() bool {
-		start := time.Now()
-		chains, raw := p2108Fetch(t, srv)
-		elapsed = time.Since(start)
-		rawAfter = raw
-		if len(chains) != 1 {
-			return false
-		}
-		after = chains[0]
-		return after.State == chainStateDegraded && after.Failing != nil && after.Failing.ID == "relay-A"
+	// Deterministic synchronisation, not a sleep and not a timing guess: the
+	// server removes the relay from its registry under relayMu in
+	// cleanupRelaySession. Waiting on that condition pins the read below to the
+	// retained-snapshot branch, whose output is fully determined by the
+	// snapshot the last successful read stored.
+	p2108WaitFor(t, 5*time.Second, "server to drop relay-A's session", func() bool {
+		srv.relayMu.RLock()
+		_, live := srv.relays["relay-A"]
+		srv.relayMu.RUnlock()
+		return !live
 	})
+
+	chains, rawAfter := p2108Fetch(t, srv)
 	t.Logf("CHAIN AFTER KILL: %s", rawAfter)
+	if len(chains) != 1 {
+		t.Fatalf("dead hop must leave one chain object, got %d: %s", len(chains), rawAfter)
+	}
+	after := chains[0]
 
 	if strings.Join(after.Path, "->") != pathBefore {
 		t.Errorf("path changed when a hop died: %q → %q", pathBefore, strings.Join(after.Path, "->"))
@@ -396,13 +399,107 @@ func TestP2108_DeadHopStaysNamed(t *testing.T) {
 	if hopA.Error == "" {
 		t.Errorf("dead hop carries no error text: %s", rawAfter)
 	}
+	if after.Failing == nil || after.Failing.ID != "relay-A" {
+		t.Fatalf("failing_hop must name the dead hop relay-A, got %+v (%s)", after.Failing, rawAfter)
+	}
 	if after.Failing.Error == "" {
 		t.Errorf("failing_hop names %q with no error text", after.Failing.ID)
 	}
-	if elapsed > 500*time.Millisecond {
-		t.Errorf("chain read took %v after the hop died; it must not wait on a dead hop", elapsed)
+	// The hop behind the dead one keeps its identity in the path, last-known.
+	if hopB := after.hop("relay-B"); hopB == nil {
+		t.Errorf("hop behind the dead middle hop vanished from the chain: %s", rawAfter)
+	} else if hopB.Observed || hopB.State == chainStateUp {
+		t.Errorf("hop behind a dead hop must be last-known, not up: %+v", *hopB)
 	}
-	t.Logf("degraded chain answered in %v, failing_hop=%s (%s)", elapsed, after.Failing.ID, after.Failing.Error)
+	// The endpoint did not wait on the dead hop: no status read was made, so
+	// probe_latency_ms is exactly the value measured before the kill. This is
+	// the deterministic form of "must not block on a dead hop" — no clock.
+	if beforeA := before[0].hop("relay-A"); beforeA != nil && beforeA.Link != nil && hopA.Link != nil {
+		if got := hopA.Link.ProbeLatencyMs; got != beforeA.Link.ProbeLatencyMs {
+			t.Errorf("dead hop was probed again after it died: probe_latency_ms %d → %d",
+				beforeA.Link.ProbeLatencyMs, got)
+		}
+	}
+	if hopA.Observed {
+		t.Errorf("dead hop reported observed=true: %s", rawAfter)
+	}
+	t.Logf("degraded chain: failing_hop=%s (%s)", after.Failing.ID, after.Failing.Error)
+}
+
+// TestP2108_UnreadableHopIsDownNotDegraded pins the other ordering of the same
+// defect: the relay is still in the server's registry while its status endpoint
+// no longer answers. Making that window permanent instead of racing it is what
+// makes the assertion deterministic — the read below never depends on how
+// quickly the server's read loop notices the socket.
+func TestP2108_UnreadableHopIsDownNotDegraded(t *testing.T) {
+	srv, cleanup := newV1TestServer(t)
+	defer cleanup()
+
+	// A port reserved and released: every status read is refused immediately,
+	// with no scheduling dependency.
+	deadAddr := p2108FreeAddr(t)
+
+	agentID := "relay/relay-A/p2108-unreadable"
+	sess := &relaySession{
+		relayID:  "relay-A",
+		channels: map[uint32]*virtualConn{},
+		metadata: &relayMetadata{ListenAddr: deadAddr},
+		link:     srv.linkStats.forRelay("relay-A"),
+	}
+	sess.channels[2] = &virtualConn{channelID: 2, session: sess, agentID: agentID}
+	srv.relayMu.Lock()
+	srv.relays["relay-A"] = sess
+	srv.relayMu.Unlock()
+
+	// The tail the last successful read stored: relay-B was behind relay-A.
+	sess.link.setNested([]chainHop{{
+		ID:       "relay-B",
+		Role:     "relay",
+		State:    chainStateUp,
+		Channels: 1,
+		Link: &LinkCounters{
+			AgentsCarried:     1,
+			AgentsCurrent:     1,
+			UpstreamLatencyMs: latencyUnmeasured,
+			ProbeLatencyMs:    latencyUnmeasured,
+		},
+		Observed: true,
+	}})
+
+	chains, raw := p2108Fetch(t, srv)
+	if len(chains) != 1 {
+		t.Fatalf("one live link must render one chain, got %d: %s", len(chains), raw)
+	}
+	chain := chains[0]
+
+	wantPath := "server->relay-A->relay-B->" + agentID
+	if got := strings.Join(chain.Path, "->"); got != wantPath {
+		t.Errorf("path: got %q, want %q (%s)", got, wantPath, raw)
+	}
+	if chain.State != chainStateDegraded {
+		t.Errorf("chain state: got %q, want degraded", chain.State)
+	}
+	if chain.Failing == nil || chain.Failing.ID != "relay-A" {
+		t.Fatalf("failing_hop must name the unreadable hop relay-A, got %+v (%s)", chain.Failing, raw)
+	}
+	hopA := chain.hop("relay-A")
+	if hopA == nil {
+		t.Fatalf("unreadable hop missing from the chain: %s", raw)
+	}
+	if hopA.State != chainStateDown {
+		t.Errorf("hop that answers nothing must be down, got %q", hopA.State)
+	}
+	if !strings.Contains(hopA.Error, "unreadable") {
+		t.Errorf("unreadable hop carries no read failure: %q", hopA.Error)
+	}
+	hopB := chain.hop("relay-B")
+	if hopB == nil {
+		t.Fatalf("hop behind the unreadable hop dropped from the path: %s", raw)
+	}
+	if hopB.State != chainStateDegraded || hopB.Observed {
+		t.Errorf("hop behind the unreadable hop must be last-known degraded: %+v", *hopB)
+	}
+	t.Logf("UNREADABLE HOP: %s", raw)
 }
 
 // TestP2108_BlackHoledHopBounded proves the endpoint answers while a hop

@@ -92,6 +92,12 @@ type linkStat struct {
 	agents map[string]int
 	live   map[string]bool
 	chains []chainView
+	// nested is the hop tail observed beyond this relay at the last status
+	// read that succeeded. When the relay stops answering, the read yields no
+	// doc at all — without this the path would silently end at the hop that
+	// failed and the hops behind it would disappear. Last-known, labelled
+	// Observed=false; never presented as a live reading.
+	nested []chainHop
 	// lastSeen is the last moment this link registered or moved bytes.
 	lastSeen time.Time
 }
@@ -254,6 +260,25 @@ func (l *linkStat) chainsSnapshot() []chainView {
 	defer l.mu.Unlock()
 	out := make([]chainView, len(l.chains))
 	copy(out, l.chains)
+	return out
+}
+
+// setNested records the hop tail observed beyond this relay on a read that
+// succeeded. Called with the tail of the chain just composed, so the next read
+// that cannot reach this relay still knows what was behind it.
+func (l *linkStat) setNested(hops []chainHop) {
+	l.mu.Lock()
+	l.nested = append([]chainHop(nil), hops...)
+	l.mu.Unlock()
+}
+
+// nestedSnapshot returns the last observed tail, in path order. The caller
+// re-labels it as last-known; nothing here knows whether it is current.
+func (l *linkStat) nestedSnapshot() []chainHop {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]chainHop, len(l.nested))
+	copy(out, l.nested)
 	return out
 }
 
@@ -469,42 +494,62 @@ func (s *Server) observeChains(lr liveRelay) []chainView {
 	}
 
 	var nested []nestedHopStatus
+	var nestedHops []chainHop
 	if err != nil {
-		relayHop.State = chainStateDegraded
+		// A hop that does not answer is DOWN. "degraded" in this tree is a hop
+		// that answered and reported impairment — the topology uplink edge
+		// resolves an unreadable hop to down (api_v1_phase4.go, "if err != nil
+		// { state = down }"). A hop whose status read failed has no evidence of
+		// answering at all, so it is down here too.
+		relayHop.State = chainStateDown
 		relayHop.Error = "hop status unreadable: " + err.Error()
-		// The hop is present but not answering: the chain is degraded here.
+		// The hops behind it were observed before it went silent. Keep them in
+		// the path as last-known, with their identity intact: a dead middle hop
+		// must not shorten the path to the neighbour that is still serving.
+		nestedHops = lr.link.nestedSnapshot()
+		for i := range nestedHops {
+			h := &nestedHops[i]
+			h.State = chainStateUp
+			h.Error = ""
+			h.Observed = false
+		}
 	} else if doc != nil {
 		nested = doc.Downstream.Nested
+		for _, n := range nested {
+			state := chainStateUp
+			if n.State != "" && n.State != chainStateUp {
+				state = chainStateDown
+			}
+			nestedHops = append(nestedHops, chainHop{
+				ID:       n.ID,
+				Role:     "relay",
+				State:    state,
+				Error:    n.LastError,
+				Channels: len(n.Channels),
+				Link: &LinkCounters{
+					AgentsCarried:     n.AgentsCarried,
+					AgentsCurrent:     len(n.Channels),
+					BytesRelayed:      n.BytesRelayed,
+					BytesFromRelay:    n.BytesFromRelay,
+					BytesToRelay:      n.BytesToRelay,
+					Reconnects:        n.Reconnects,
+					LastError:         n.LastError,
+					UpstreamLatencyMs: latencyUnmeasured,
+					ProbeLatencyMs:    latencyUnmeasured,
+				},
+				Observed: true,
+			})
+		}
+		// This read succeeded: it is the tail the next failed read falls back
+		// to. Nothing is retained from a read that answered nothing.
+		lr.link.setNested(nestedHops)
 	}
 
 	hops := []chainHop{rootHop, relayHop}
 	path := []string{"server", lr.relayID}
-	for _, n := range nested {
-		n := n
-		state := chainStateUp
-		if n.State != "" && n.State != chainStateUp {
-			state = chainStateDown
-		}
-		hops = append(hops, chainHop{
-			ID:       n.ID,
-			Role:     "relay",
-			State:    state,
-			Error:    n.LastError,
-			Channels: len(n.Channels),
-			Link: &LinkCounters{
-				AgentsCarried:     n.AgentsCarried,
-				AgentsCurrent:     len(n.Channels),
-				BytesRelayed:      n.BytesRelayed,
-				BytesFromRelay:    n.BytesFromRelay,
-				BytesToRelay:      n.BytesToRelay,
-				Reconnects:        n.Reconnects,
-				LastError:         n.LastError,
-				UpstreamLatencyMs: latencyUnmeasured,
-				ProbeLatencyMs:    latencyUnmeasured,
-			},
-			Observed: true,
-		})
-		path = append(path, n.ID)
+	for _, h := range nestedHops {
+		hops = append(hops, h)
+		path = append(path, h.ID)
 	}
 
 	// Which nested hop owns each channel, so an agent is placed behind the hop
