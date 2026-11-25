@@ -287,6 +287,23 @@ func keysymFor(r rune) uint32 {
 	return 0x01000000 | uint32(r)
 }
 
+// codepointFailure is planText's typed refusal: the rune the plan stopped on and
+// its position in the string. `at < 0` is a failure that belongs to no rune —
+// an invalid byte, or a keycode range that ran out for a string whose runes are
+// all carryable — and the refusal must then say nothing about a codepoint
+// instead of guessing the first character.
+type codepointFailure struct {
+	r   rune
+	at  int
+	why error
+}
+
+func (c *codepointFailure) Error() string { return c.why.Error() }
+func (c *codepointFailure) Unwrap() error { return c.why }
+
+// identified reports whether the mapper actually knows which rune it stopped on.
+func (c *codepointFailure) identified() bool { return c != nil && c.at >= 0 }
+
 // planText is the whole-string validation §9.4 demands: the string is mapped to
 // keysyms BEFORE anything is remapped or typed, so a codepoint that cannot be
 // carried refuses the request with no prefix on the display.
@@ -305,26 +322,39 @@ func planText(inj inputSeam, text string) ([]uint32, byte, error) {
 	}
 	runes := []rune(text)
 	syms := make([]uint32, 0, len(runes))
-	for _, r := range runes {
+	for i, r := range runes {
 		switch {
-		case r < 0x20 && r != '\n' && r != '\r' && r != '\t':
-			return nil, 0, fmt.Errorf("codepoint U+%04X has no keysym: the string cannot be typed in full", r)
+		case r < 0x20 && r != '\n' && r != '\r' && r != '	':
+			return nil, 0, &codepointFailure{r: r, at: i,
+				why: fmt.Errorf("codepoint U+%04X has no keysym: the string cannot be typed in full", r)}
 		case r >= 0xD800 && r <= 0xDFFF:
-			return nil, 0, fmt.Errorf("codepoint U+%04X is a lone surrogate: the string cannot be typed in full", r)
+			return nil, 0, &codepointFailure{r: r, at: i,
+				why: fmt.Errorf("codepoint U+%04X is a lone surrogate: the string cannot be typed in full", r)}
 		case r > 0x10FFFF:
-			return nil, 0, fmt.Errorf("codepoint U+%04X is outside Unicode", r)
+			return nil, 0, &codepointFailure{r: r, at: i,
+				why: fmt.Errorf("codepoint U+%04X is outside Unicode", r)}
 		}
 		syms = append(syms, keysymFor(r))
 	}
 	// One keycode is borrowed for the whole string, so it must exist before the
-	// first remap: this is the "keycode range cannot carry it" branch, and it
-	// names the first codepoint that would have needed the key.
+	// first remap. When the range cannot spare one, the rune at fault is the
+	// first one beyond UCS-2: a Unicode keysym there is what the borrowed
+	// keycode would have had to hold, and §9.4's carriage rule is "astral where
+	// the keycode range allows". A string of carryable runes has no such rune,
+	// so the failure belongs to the borrow itself and names none.
 	kc, err := inj.SpareKeycode()
 	if err != nil {
 		if len(runes) == 0 {
 			return syms, 0, nil
 		}
-		return nil, 0, fmt.Errorf("codepoint U+%04X: %v", runes[0], err)
+		for i, r := range runes {
+			if r > 0xFFFF {
+				return nil, 0, &codepointFailure{r: r, at: i,
+					why: fmt.Errorf("codepoint U+%04X is beyond UCS-2 and the keycode range cannot carry it: %v", r, err)}
+			}
+		}
+		return nil, 0, &codepointFailure{at: -1,
+			why: fmt.Errorf("the keycode range cannot carry the string: %v", err)}
 	}
 	return syms, kc, nil
 }
@@ -352,21 +382,23 @@ func emitText(inj inputSeam, syms []uint32, kc byte) error {
 	return nil
 }
 
-// codepointUnsupported is §9.4's refusal: 501, the codepoint named, the whole
-// string not typed.
-func codepointUnsupported(env protocol.Envelope, text, why string) protocol.Envelope {
-	var named string
-	for _, r := range text {
-		named = fmt.Sprintf("U+%04X", r)
-		break
+// codepointUnsupported is §9.4's refusal: 501, the rune the mapper identified
+// (with its position), and the whole string not typed. A failure that belongs
+// to no rune carries neither key: a client told "U+0061" for a string whose
+// fault was the borrowed keycode would be sent to the wrong character.
+func codepointUnsupported(env protocol.Envelope, why error) protocol.Envelope {
+	detail := map[string]interface{}{
+		"reason": protocol.ReasonCodepointUnsupported,
+		"ran":    false,
+	}
+	var cf *codepointFailure
+	if errors.As(why, &cf) && cf.identified() {
+		detail["codepoint"] = fmt.Sprintf("U+%04X", cf.r)
+		detail["index"] = cf.at
 	}
 	return protocol.NewErrorDetail(env.ID, protocol.ErrPrimitiveUnsupported,
-		"text-input: "+why,
-		map[string]interface{}{
-			"reason":    protocol.ReasonCodepointUnsupported,
-			"codepoint": named,
-			"ran":       false,
-		})
+		"text-input: "+why.Error(),
+		detail)
 }
 
 // textEncodingOK normalises the caller's encoding. Only utf8 (the default) and

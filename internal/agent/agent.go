@@ -1243,11 +1243,13 @@ func (a *Agent) handleType(env protocol.Envelope) protocol.Envelope {
 	if inj, ok := injectorFor(target); ok {
 		syms, kc, perr := planText(inj, params.Text)
 		if perr != nil {
-			return codepointUnsupported(env, params.Text, perr.Error())
+			return codepointUnsupported(env, perr)
 		}
 		if terr := emitText(inj, syms, kc); terr != nil {
 			if errors.Is(terr, errNoSpareKeycode) || errors.Is(terr, errXTestMissing) {
-				return codepointUnsupported(env, params.Text, terr.Error())
+				// The keystroke failed after the plan was accepted: no rune in
+				// particular can be pointed at, so the refusal names none.
+				return codepointUnsupported(env, &codepointFailure{at: -1, why: terr})
 			}
 			return protocol.NewError(env.ID, protocol.ErrInternal, terr.Error())
 		}

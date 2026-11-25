@@ -15,6 +15,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -414,31 +415,101 @@ func TestP1402TextRoundTripsThroughRemap(t *testing.T) {
 
 func TestP1402AstralRefusalNamesCodepointAndTypesNothing(t *testing.T) {
 	// The range cannot carry it: no spare keycode. The refusal must NAME the
-	// astral codepoint, and a string that begins with a typeable character must
-	// still not reach the display as a prefix.
-	for _, text := range []string{"\U0001F600", "a\U0001F600"} {
-		inj := newFakeInput()
-		inj.noSpare = true
-		a := p1402Agent(inj)
-		env := a.handleType(p1401Envelope(t, "ta", map[string]interface{}{
-			"context": "x11::0", "window": "0x3c00007", "text": text,
-		}))
-		if env.Error == nil || env.Error.Code != protocol.ErrPrimitiveUnsupported {
-			t.Fatalf("%q: error = %+v, want PRIMITIVE_UNSUPPORTED", text, env.Error)
-		}
-		if env.Error.Detail["reason"] != protocol.ReasonCodepointUnsupported {
-			t.Fatalf("%q: reason = %v, want CODEPOINT_UNSUPPORTED", text, env.Error.Detail["reason"])
-		}
-		named := env.Error.Detail["codepoint"]
-		if named != "U+1F600" && named != "U+0061" {
-			t.Fatalf("%q: codepoint = %v, want the codepoint that could not be carried", text, named)
-		}
-		if text == "\U0001F600" && named != "U+1F600" {
-			t.Fatalf("codepoint = %v, want the astral codepoint named (U+1F600)", named)
-		}
-		if len(inj.events) != 0 {
-			t.Fatalf("%q: a partial string was typed before the refusal: %v", text, inj.events)
-		}
+	// rune that could not be carried, wherever it sits in the string, and a
+	// string that begins with a typeable character must still not reach the
+	// display as a prefix. Every row states ONE expected codepoint: an "either"
+	// that also accepts U+0061 accepts the string's first character, which is
+	// the defect this test exists to catch.
+	for _, tc := range []struct {
+		name string
+		text string
+		want string
+		at   int
+	}{
+		{"lone astral", "\U0001F600", "U+1F600", 0},
+		{"astral mid-string", "a\U0001F600", "U+1F600", 1},
+		{"astral last of three", "aé\U0001F600", "U+1F600", 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inj := newFakeInput()
+			inj.noSpare = true
+			a := p1402Agent(inj)
+			env := a.handleType(p1401Envelope(t, "ta", map[string]interface{}{
+				"context": "x11::0", "window": "0x3c00007", "text": tc.text,
+			}))
+			if env.Error == nil || env.Error.Code != protocol.ErrPrimitiveUnsupported {
+				t.Fatalf("%q: error = %+v, want PRIMITIVE_UNSUPPORTED", tc.text, env.Error)
+			}
+			if env.Error.Detail["reason"] != protocol.ReasonCodepointUnsupported {
+				t.Fatalf("%q: reason = %v, want CODEPOINT_UNSUPPORTED", tc.text, env.Error.Detail["reason"])
+			}
+			if named := env.Error.Detail["codepoint"]; named != tc.want {
+				t.Fatalf("%q: codepoint = %v, want %s (the rune the mapper could not carry)", tc.text, named, tc.want)
+			}
+			if at := env.Error.Detail["index"]; at != tc.at {
+				t.Fatalf("%q: index = %v, want %d", tc.text, at, tc.at)
+			}
+			if len(inj.events) != 0 {
+				t.Fatalf("%q: a partial string was typed before the refusal: %v", tc.text, inj.events)
+			}
+		})
+	}
+}
+
+func TestP1402FailedBorrowNamesNoRune(t *testing.T) {
+	// Every rune here is carryable on its own; what ran out is the borrowed
+	// keycode for the whole string. No character can be blamed, so the refusal
+	// must carry no codepoint at all rather than naming the first one.
+	inj := newFakeInput()
+	inj.noSpare = true
+	a := p1402Agent(inj)
+	env := a.handleType(p1401Envelope(t, "tn", map[string]interface{}{
+		"context": "x11::0", "window": "0x3c00007", "text": "abc",
+	}))
+	if env.Error == nil || env.Error.Code != protocol.ErrPrimitiveUnsupported {
+		t.Fatalf("error = %+v, want PRIMITIVE_UNSUPPORTED", env.Error)
+	}
+	if env.Error.Detail["reason"] != protocol.ReasonCodepointUnsupported {
+		t.Fatalf("reason = %v, want CODEPOINT_UNSUPPORTED", env.Error.Detail["reason"])
+	}
+	if named, ok := env.Error.Detail["codepoint"]; ok {
+		t.Fatalf("codepoint = %v, want the field absent: the failure is not rune-specific", named)
+	}
+	if idx, ok := env.Error.Detail["index"]; ok {
+		t.Fatalf("index = %v, want the field absent: the failure is not rune-specific", idx)
+	}
+	if strings.Contains(env.Error.Message, "U+") {
+		t.Fatalf("message %q names a codepoint the mapper did not identify", env.Error.Message)
+	}
+	if len(inj.events) != 0 {
+		t.Fatalf("a partial string was typed before the refusal: %v", inj.events)
+	}
+}
+
+func TestP1402InvalidUTF8NamesNoRune(t *testing.T) {
+	// planText refuses invalid bytes before the rune loop runs, so there is no
+	// rune to point at: the refusal must leave the codepoint field out instead
+	// of borrowing the first character of a string it never decoded.
+	inj := newFakeInput()
+	_, _, perr := planText(inj, "a\xffb")
+	if perr == nil {
+		t.Fatal("planText accepted invalid UTF-8")
+	}
+	env := codepointUnsupported(p1401Envelope(t, "ti", nil), perr)
+	if env.Error == nil || env.Error.Code != protocol.ErrPrimitiveUnsupported {
+		t.Fatalf("error = %+v, want PRIMITIVE_UNSUPPORTED", env.Error)
+	}
+	if env.Error.Detail["reason"] != protocol.ReasonCodepointUnsupported {
+		t.Fatalf("reason = %v, want CODEPOINT_UNSUPPORTED", env.Error.Detail["reason"])
+	}
+	if named, ok := env.Error.Detail["codepoint"]; ok {
+		t.Fatalf("codepoint = %v, want the field absent: an invalid byte is not a rune", named)
+	}
+	if strings.Contains(env.Error.Message, "U+") {
+		t.Fatalf("message %q names a codepoint the mapper did not identify", env.Error.Message)
+	}
+	if len(inj.events) != 0 {
+		t.Fatalf("invalid UTF-8 reached the display: %v", inj.events)
 	}
 }
 
