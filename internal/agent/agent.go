@@ -234,6 +234,11 @@ type Agent struct {
 	lastPing       time.Time
 	pingMisses     int
 	backoffAttempt int
+	// P22-03: set when the peer answered this connection with a policy
+	// refusal. A refusal arrives after a successful upgrade, so without it the
+	// success-path backoff reset would turn a full relay into a hot reconnect
+	// loop — the frame would name the reason and then be re-sent forever.
+	policyRefused bool
 	plat           platform.Platform
 
 	// openDisplay opens the display a window-scoped input request resolves
@@ -402,6 +407,19 @@ func (a *Agent) runOutbound() error {
 		a.backoffAttempt = 0
 		a.mu.Unlock()
 		a.handleConnection(conn)
+		// P22-03: an admission refusal arrives on a socket that upgraded, so
+		// the success path above zeroed the backoff. Reinstate it: a full
+		// relay must not become a hot reconnect loop.
+		if a.takePolicyRefused() {
+			a.backoffAttempt++
+			backoff := a.computeBackoff()
+			log.Printf("retrying in %v (refused by policy, not a connection fault)", backoff)
+			select {
+			case <-a.stopped:
+				return nil
+			case <-time.After(backoff):
+			}
+		}
 		// disconnected — reconnect (unless this is a canary that aborted before
 		// committing: in that case the old process is still running and must be
 		// left untouched, so the canary exits without reconnecting).
@@ -656,7 +674,43 @@ var cmdTable = map[string]func(*Agent, protocol.Envelope) protocol.Envelope{
 	protocol.TypeCredentialDeliver: (*Agent).handleCredentialDeliver,
 }
 
+// policyRefusalLine turns a refusal frame into the one line an operator reads.
+// Its whole job is to keep "refused by policy" separable from "handshake/auth/
+// TLS broke": before P22-03 the two were identical on the agent side, because a
+// policy refusal arrived as an HTTP status and gorilla reduced it to
+// ErrBadHandshake. The typed frame is only worth sending if this line says what
+// it was.
+func policyRefusalLine(env protocol.Envelope) (string, bool) {
+	if env.Type != "error" || env.Error == nil || !protocol.IsForwardRefusalCode(env.Error.Code) {
+		return "", false
+	}
+	limit, _ := env.Error.DetailInt("limit")
+	current, _ := env.Error.DetailInt("current")
+	return fmt.Sprintf("[policy] admission refused: %s — %s (limit=%d current=%d); refused by policy, not a handshake/auth/TLS failure",
+		env.Error.Code, env.Error.Message, limit, current), true
+}
+
+// takePolicyRefused reports (and clears) whether the last connection ended in a
+// policy refusal. runOutbound uses it to keep the reconnect backoff that an
+// admission refusal would otherwise reset.
+func (a *Agent) takePolicyRefused() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	v := a.policyRefused
+	a.policyRefused = false
+	return v
+}
+
 func (a *Agent) handleCommand(conn *websocket.Conn, env protocol.Envelope) {
+	// P22-03: a refusal that arrived as a frame is a policy answer, not a
+	// broken handshake. Name it and answer nothing — the peer is closing.
+	if line, ok := policyRefusalLine(env); ok {
+		log.Printf("%s", line)
+		a.mu.Lock()
+		a.policyRefused = true
+		a.mu.Unlock()
+		return
+	}
 	var resp protocol.Envelope
 
 	// Permission check: extract command string (for exec destructive filter)

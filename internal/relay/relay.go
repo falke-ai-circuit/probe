@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/falke-ai-circuit/probe/internal/protocol"
 )
 
 // Config holds relay configuration.
@@ -411,6 +413,58 @@ func (r *Relay) reregisterChannels() {
 	log.Printf("[relay] re-registered %d channels after reconnect", len(channels))
 }
 
+// refusalDrain bounds how long a refused upgrade is held open so the client can
+// read the frame. Closing a socket that still has unread inbound bytes resets
+// the connection, and a reset can discard the refusal we just wrote.
+const refusalDrain = 2 * time.Second
+
+// refuseMaxAgents answers an over-limit agent with the typed refusal instead of
+// a bare 429. A pre-upgrade 429 is invisible to a WebSocket client: the
+// handshake never completes, so the agent logs "websocket: bad handshake" and an
+// operator cannot tell a full relay from a broken one. The upgrade therefore
+// completes, one typed envelope naming the code, the configured limit and the
+// live count goes over the socket, and only then is the connection closed.
+func (r *Relay) refuseMaxAgents(w http.ResponseWriter, req *http.Request) {
+	limit := r.cfg.MaxAgents
+	current := r.channels.Count()
+	reason := fmt.Sprintf("max_agents limit %d reached on link %s (current %d)", limit, r.relayID(), current)
+
+	if !websocket.IsWebSocketUpgrade(req) {
+		// A plain HTTP caller (curl, a probe) gets the same code as status
+		// text: still refused, still named, still no silent cap.
+		http.Error(w, protocol.CodeForwardMaxAgents+": "+reason, http.StatusTooManyRequests)
+		return
+	}
+
+	conn, err := upgrader.Upgrade(w, req, nil)
+	if err != nil {
+		log.Printf("[relay] refusal upgrade failed from %s: %v", clientIP(req), err)
+		return
+	}
+	frame, _ := json.Marshal(protocol.AdmissionRefusal(protocol.CodeForwardMaxAgents, reason, limit, current))
+	if err := conn.WriteMessage(websocket.TextMessage, frame); err != nil {
+		log.Printf("[relay] refusal frame to %s failed: %v", clientIP(req), err)
+		conn.Close()
+		return
+	}
+	log.Printf("[relay] refused agent from %s: %s limit=%d current=%d (typed frame sent)",
+		clientIP(req), protocol.CodeForwardMaxAgents, limit, current)
+
+	conn.SetReadDeadline(time.Now().Add(refusalDrain))
+	_, _, _ = conn.ReadMessage()
+	conn.Close()
+}
+
+// relayID is this relay's identity as the upstream records it. Registration
+// assigns it before the downstream listener starts; the fallback keeps a
+// refusal reason from ending in "link " with nothing after it.
+func (r *Relay) relayID() string {
+	if id := r.cfg.RelayID; id != "" {
+		return id
+	}
+	return "relay"
+}
+
 // handleDownstream accepts WebSocket connections from agents OR nested relays.
 // Detection: read the first message. If it's BinaryMessage with a relay_register
 // control frame (channel 0, type "relay_register"), it's a nested relay —
@@ -422,9 +476,11 @@ func (r *Relay) handleDownstream(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// Rate limit: max agents
+	// Rate limit: max agents. The refusal leaves as a typed frame (P22-03):
+	// a pre-upgrade 429 reaches a WebSocket client as "bad handshake" and
+	// carries no reason at all.
 	if r.channels.Count() >= r.cfg.MaxAgents {
-		http.Error(w, "too many agents", http.StatusTooManyRequests)
+		r.refuseMaxAgents(w, req)
 		return
 	}
 
