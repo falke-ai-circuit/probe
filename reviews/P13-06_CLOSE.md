@@ -5,7 +5,8 @@ at verification `d9fc1cba13fb53acedf12ec40a0f6ba4fb95124d` (documentation commit
 `git diff --stat 495df34 HEAD` = `reviews/P13-05_CLOSE.md`, `reviews/P13-05_REGATE.md`).
 **Review:** reviewed_by: `architect` · verdict: `PASS` (V1-V5 all PASS; F1 closed, F2 harness
 fixed and the `-noreset` mechanism reproduced directly) · verdict_sha_of_head:
-`d9fc1cba13fb53acedf12ec40a0f6ba4fb95124d`
+`495df34ebb82e6c78c5acdc73b3a02fb39569e93`
+**Head-move waiver:** the tree measured is `495df34` (the fix commit). `d9fc1cb` and this unit's own document commit sit above it and change no code; `git diff --stat 495df34 HEAD` = files under `reviews/` only. The original row named `d9fc1cb`, the head at verification time, which is not the sha the fix lives in — corrected so the verdict binds to the code it rules on.
 **Scope:** verification only. No code, no test, no contract touched by this unit; the negative
 mutation ran in a `git archive HEAD` copy at
 `/opt/data/profiles/architect/cache/scratch/p1306/tree`, never in the worktree.
