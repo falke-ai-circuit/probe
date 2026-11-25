@@ -38,9 +38,12 @@ func (x *x11Conn) PointIn(win uint32, px, py int) (int32, int32, uint32, error) 
 	if reply[1] != 1 {
 		return 0, 0, 0, nil // different screens: nothing of interest here
 	}
-	child := binary.LittleEndian.Uint32(reply[4:8])
-	dx := int32(int16(binary.LittleEndian.Uint16(reply[8:10])))
-	dy := int32(int16(binary.LittleEndian.Uint16(reply[10:12])))
+	// Reply layout: [0]=1, [1]=same-screen, [4:8]=length (0 here), [8:12]=child
+	// of dst containing the point, [12:14]/[14:16]=x/y in dst's space (INT16).
+	// Reading the child out of [4:8] reads the length word, which is always 0.
+	child := binary.LittleEndian.Uint32(reply[8:12])
+	dx := int32(int16(binary.LittleEndian.Uint16(reply[12:14])))
+	dy := int32(int16(binary.LittleEndian.Uint16(reply[14:16])))
 	return dx, dy, child, nil
 }
 

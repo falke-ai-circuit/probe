@@ -214,9 +214,16 @@ func xauthorityCookie(num int) (string, []byte) {
 	return "", nil
 }
 
-// do sends one request and returns the 32-byte reply body. An X error packet
-// (reply byte 0) is returned as *x11Error: it is the platform answering
-// "that window is gone", not a transport failure.
+// do sends one request and returns the whole reply: the 32-byte fixed header
+// followed by the reply's own variable-length tail, whose size the header's
+// length word (reply[4:8], in 4-byte units) declares. Draining the tail here is
+// what keeps the stream in step — a reply is not always 32 bytes (a
+// GetWindowAttributes reply carries 44), and bytes left unread are read as the
+// next reply's header, so the connection desynchronises on the following call.
+// Callers index the header from offset 0 and read the tail from offset 32.
+//
+// An X error packet (reply byte 0) is returned as *x11Error: it is the platform
+// answering "that window is gone", not a transport failure.
 func (x *x11Conn) do(req []byte, want string) ([]byte, error) {
 	x.seq++
 	if _, err := x.c.Write(req); err != nil {
@@ -231,6 +238,17 @@ func (x *x11Conn) do(req []byte, want string) ([]byte, error) {
 	}
 	if reply[0] != 1 {
 		return nil, fmt.Errorf("x11: unexpected reply type %d for %s", reply[0], want)
+	}
+	extra := 4 * int(binary.LittleEndian.Uint32(reply[4:8]))
+	if extra > 1<<20 {
+		return nil, fmt.Errorf("x11: implausible reply length %d for %s", extra, want)
+	}
+	if extra > 0 {
+		tail := make([]byte, extra)
+		if _, err := io.ReadFull(x.c, tail); err != nil {
+			return nil, err
+		}
+		reply = append(reply, tail...)
 	}
 	return reply, nil
 }
@@ -302,11 +320,11 @@ func (x *x11Conn) property(win uint32, name string) (propValue, error) {
 			unit = 4
 		}
 		need := nItems * unit
-		buf := make([]byte, need+((4-need%4)%4))
-		if _, err := io.ReadFull(x.c, buf); err != nil {
-			return propValue{}, err
+		if len(reply) < 32+need {
+			return propValue{}, fmt.Errorf("x11: %s reply carried %d data bytes, wanted %d", name, len(reply)-32, need)
 		}
-		data = buf[:need]
+		// do() already drained the reply's tail; the data is there, not on the wire.
+		data = reply[32 : 32+need]
 	}
 	if typ == 0 {
 		return propValue{}, errPropAbsent
