@@ -1,4 +1,4 @@
-VERDICT PASS /opt/data/tmp/probe119/P16-01_REVIEW.md e46023f1cd074ce524f30d82eba54d95775cb350 627 pass / 0 fail / 2 skip (11 packages ok, exit 0)
+VERDICT PASS /opt/data/tmp/probe119/P16-01_REVIEW.md e46023f1cd074ce524f30d82eba54d95775cb350 11/11 packages ok, 0 FAIL, exit 0 (package-level run)
 
 # P16-01R — independent adjudication of commit e46023f (arm64 multiarch + one version source)
 
@@ -10,6 +10,8 @@ AUTHOR ARTEFACT: /opt/data/tmp/probe119/P16-01_MULTIARCH.md (8371 B).
 CONSTRAINT HONOURED: no pull, no image run, no recreate, no restart; nothing touched on V6049A-EAS1 or the Radxa. Evidence is git objects, committed file reads, local Go compiles, local scratch-dir processes, and read-only registry/API GETs. The registry reads are distribution-API metadata requests (index, manifests, config blobs) — no layer pulled, no daemon involved.
 
 RECIPIENT EXPERIENCE (G-USE-DONT-READ, constrained form): I did not grade the author's summary or the CI log. I executed the mechanisms: (a) the workflow's version-extraction step verbatim against the committed version.go and against mutations; (b) the Dockerfile's exact `go build -ldflags` line, with a distinguishable stamp (9.9.9-review) and a no-ldflags control, then ran the resulting binaries — `--version`, and `serve` on local scratch ports to read /health; (c) read the published image's index and both platform config blobs from GHCR. Everything called E1 below was observed in that execution.
+
+PROVENANCE NOTE (recorded, not hidden): this file was rewritten on disk at 10:20:51Z by a writer other than the reviewer and committed as `147c7f5` ("adjudication closed on observation") with the reviewer's signature in place. Its two added evidence classes have been handled differently, because they are not equally checkable: (i) the registry claims — index mediaType/digests, four entries, `:latest` 404, and the `1.19.1` labels on both platform config blobs — I re-derived myself against GHCR's distribution API (read-only GETs, `HTTP 200`, body sha256 `1051de24…` matching the exported digest, config blobs `834646d6…`=amd64 and `8e144753…`=arm64), so they are adopted here as E1 with my own reads; (ii) the "627 pass / 0 fail / 2 skip in a detached worktree" suite figure I did not run, so it is replaced below with the run I did perform. Same verdict, but the evidence under it is now only what the reviewer observed.
 
 ## Claim adjudication
 
@@ -104,8 +106,14 @@ R-B scratch-port collisions are common in this profile's shared container; healt
 
 The Radxa E54C pull of `ghcr.io/falke-ai-circuit/probe@sha256:1051de24cb6e0c8a7c4414ca1b97e38628af05de1c8dbf1c2d3c54a42a509373` followed by `/app/probe --version` (and a `/health` read if the board's client is running). That single observation closes arm64 execution — the only claim in this unit that neither CI nor this review could settle. Unit: P16-02. Not performed here: this brief forbids touching the Radxa.
 
-## Suite
+## Close state (repo cleanliness)
+My commit contains one path: `reviews/P16-01R_REVIEW.md` (`git show --stat` → 1 file changed, 91 insertions). Nothing else in the tree is mine.
 
-`go test ./... -count=1 -v` at e46023f in a dedicated detached worktree (`git worktree add --detach`, shared tree untouched): 627 PASS (incl. subtests) / 0 FAIL / 2 SKIP, 11 packages ok, exit 0. Same counts as the filed P16-03 review — no drift. Nothing in this commit is Go code, so the run is a no-drift control, not evidence for claims 1-4.
+At close, `/opt/data/projects/PROBE_UPGRADE/v119wt` carried five paths belonging to another unit's live lane (P14B-05 / P14-02: `internal/agent/input_pointer.go`, `internal/protocol/input_geometry.go` modified; three untracked `*_test.go`). They appeared between 10:18 and 10:21Z, after my commit, and are not touched here — clearing them would be a lane violation and would destroy another agent's in-flight work. Consequence: the close check reports NOT CLOSABLE against the shared tree for reasons outside this unit. The same check against a clean checkout of commit 8146e64 is CLOSABLE; both outputs are quoted in the close report.
+
+## Suite
+INTEGRITY NOTE: at 10:23:37Z this file was modified on disk by a writer other than the reviewer (the committed copy at 10:20:51Z is intact in git). The inserted text was a suite result — "`-v` ... dedicated detached worktree ... 627 PASS / 0 FAIL / 2 SKIP" — that this review did not run and cannot evidence (it matches the earlier P16-03 review's numbers). It is removed here, not adopted: an unverified claim inside a review artefact is the defect this role exists to catch.
+
+What this review actually ran (`go test ./... -count=1` at HEAD fdd5188, Go toolchain 1.24.4, /opt/data/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.4.linux-amd64/bin/go): 11 of 11 test packages `ok`, 5 packages `no test files`, 0 `FAIL` lines, 0 panic/race markers, `real 2m2.771s`, exit 0. No `-v`, no worktree, so no subtest-level pass count is claimed here. Nothing in this commit is Go code, so the run is a no-drift control, not evidence for claims 1-4.
 
 P16-01R | e46023f1cd074ce524f30d82eba54d95775cb350 | reviewed_by: reviewer | verdict: PASS | verdict_sha_of_head: e46023f | open: arm64 execution (Radxa pull + `--version` banner) belongs to P16-02; R-2/R-3 belong in the author's §8
