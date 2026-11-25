@@ -105,8 +105,17 @@ The server image is pinned in `docker-compose.yml` by commit tag and manifest
 digest — never a floating tag:
 
 ```yaml
-image: ghcr.io/falke-ai-circuit/probe:70de7fa03f879e0cdc48dc9048a5d25c69121211@sha256:466b2fc23e3349ba136a0a34867b44b48d24d9bd08ea7121fe324e24765d5504
+image: ghcr.io/falke-ai-circuit/probe:e46023f1cd074ce524f30d82eba54d95775cb350@sha256:1051de24cb6e0c8a7c4414ca1b97e38628af05de1c8dbf1c2d3c54a42a509373
 ```
+
+That digest is the multiarch index for commit `e46023f` (built by
+`.github/workflows/docker.yml` as one manifest list): its real members are
+`linux/amd64` and `linux/arm64`, so both host architectures pull a native image
+from this one pin. An `amd64`-only index such as the earlier
+`@sha256:466b2fc2…` would hand an arm64 host an amd64 image under emulation, so
+it is no longer referenced here. The amd64 member has been run and reports
+`v1.19.1` on `/health`; the arm64 member resolves and pulls but has not been run
+on arm64 hardware yet.
 
 The host pulls, it does not build; `docker-compose.yml` carries no `build:` key so
 the runtime `/src` cannot drift from the pinned commit. Persistent state is bind
