@@ -457,7 +457,7 @@ func (fm *FlowManager) saveLocked() error {
 		fmt.Fprintf(os.Stderr, "[flows] save marshal error: %v\n", err)
 		return err
 	}
-	if err := os.WriteFile(fm.savePath, data, 0644); err != nil {
+	if err := writeFileAtomic(fm.savePath, data, 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "[flows] save write error: %v\n", err)
 		return err
 	}
@@ -489,12 +489,10 @@ func readFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
-// writeFile writes data, creating parent dirs.
+// writeFile writes data, creating parent dirs. Atomic: readers see the old
+// file or the new one, never a truncated one (see writeFileAtomic).
 func writeFile(path string, data []byte) error {
-	if dir := pathDir(path); dir != "" {
-		_ = os.MkdirAll(dir, 0o755)
-	}
-	return os.WriteFile(path, data, 0o644)
+	return writeFileAtomic(path, data, 0o644)
 }
 
 func pathDir(p string) string {

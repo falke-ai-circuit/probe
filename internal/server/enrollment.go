@@ -133,7 +133,7 @@ func (em *EnrollmentManager) save() {
 		log.Printf("[enrollment] save marshal error: %v", err)
 		return
 	}
-	if err := os.WriteFile(em.savePath, data, 0644); err != nil {
+	if err := writeFileAtomic(em.savePath, data, 0644); err != nil {
 		log.Printf("[enrollment] save write error: %v", err)
 	}
 }
@@ -338,11 +338,16 @@ func (cm *CAManager) generateCA(persistDir string) error {
 	cm.caKey = caKey
 	cm.caCertPEM = certPEM
 
-	// Persist to disk.
+	// Persist to disk. Atomic writes: a truncated CA cert or key would be an
+	// unparseable file that reports as "present" on the next boot.
 	if persistDir != "" {
-		os.MkdirAll(persistDir, 0755)
-		os.WriteFile(persistDir+"/ca.crt", certPEM, 0644)
-		os.WriteFile(persistDir+"/ca.key", keyPEM, 0600)
+		_ = os.MkdirAll(persistDir, 0755)
+		if err := writeFileAtomic(persistDir+"/ca.crt", certPEM, 0644); err != nil {
+			return fmt.Errorf("persist CA cert: %w", err)
+		}
+		if err := writeFileAtomic(persistDir+"/ca.key", keyPEM, 0600); err != nil {
+			return fmt.Errorf("persist CA key: %w", err)
+		}
 	}
 
 	return nil

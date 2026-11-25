@@ -123,13 +123,8 @@ func (st *idempotencyStore) saveLocked() {
 	if dir != "" && dir != "." {
 		_ = os.MkdirAll(dir, 0o755)
 	}
-	tmp := st.path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		log.Printf("[idempotency] write %s: %v", tmp, err)
-		return
-	}
-	if err := os.Rename(tmp, st.path); err != nil {
-		log.Printf("[idempotency] rename: %v", err)
+	if err := writeFileAtomic(st.path, raw, 0o600); err != nil {
+		log.Printf("[idempotency] write %s: %v", st.path, err)
 	}
 }
 

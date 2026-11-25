@@ -523,7 +523,7 @@ func (bm *BuilderManager) save() {
 		log.Printf("[builder] save marshal error: %v", err)
 		return
 	}
-	if err := os.WriteFile(bm.savePath, data, 0644); err != nil {
+	if err := writeFileAtomic(bm.savePath, data, 0644); err != nil {
 		log.Printf("[builder] save write error: %v", err)
 	}
 }

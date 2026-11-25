@@ -174,7 +174,7 @@ func (pm *ProfileManager) save() {
 		log.Printf("[profiles] save marshal error: %v", err)
 		return
 	}
-	if err := os.WriteFile(pm.savePath, data, 0644); err != nil {
+	if err := writeFileAtomic(pm.savePath, data, 0644); err != nil {
 		log.Printf("[profiles] save write error: %v", err)
 	}
 }

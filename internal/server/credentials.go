@@ -114,7 +114,7 @@ func credentialKey(dir string) ([]byte, error) {
 	if _, err := rand.Read(b); err != nil {
 		return nil, fmt.Errorf("generate secret key: %w", err)
 	}
-	if err := os.WriteFile(keyPath, b, 0600); err != nil {
+	if err := writeFileAtomic(keyPath, b, 0600); err != nil {
 		return nil, fmt.Errorf("write secret key: %w", err)
 	}
 	_ = os.Chmod(keyPath, 0600)
@@ -253,11 +253,10 @@ func (s *CredentialStore) flushLocked() error {
 	if err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0600); err != nil {
+	if err := writeFileAtomic(s.path, raw, 0600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.path)
+	return nil
 }
 
 // ---------------------------------------------------------------------------

@@ -315,7 +315,7 @@ func (om *OperatorManager) save() {
 		fmt.Fprintf(os.Stderr, "[operator] save marshal error: %v\n", err)
 		return
 	}
-	if err := os.WriteFile(om.savePath, data, 0644); err != nil {
+	if err := writeFileAtomic(om.savePath, data, 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "[operator] save write error: %v\n", err)
 	}
 }

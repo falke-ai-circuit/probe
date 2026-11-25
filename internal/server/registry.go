@@ -550,7 +550,7 @@ func (r *Registry) save() {
 		fmt.Fprintf(os.Stderr, "[registry] save marshal error: %v\n", err)
 		return
 	}
-	if err := os.WriteFile(r.savePath, data, 0644); err != nil {
+	if err := writeFileAtomic(r.savePath, data, 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "[registry] save write error: %v\n", err)
 	}
 }

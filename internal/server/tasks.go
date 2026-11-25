@@ -362,7 +362,7 @@ func (tm *TaskManager) saveLocked() {
 		fmt.Fprintf(os.Stderr, "[tasks] save marshal error: %v\n", err)
 		return
 	}
-	if err := os.WriteFile(tm.savePath, data, 0644); err != nil {
+	if err := writeFileAtomic(tm.savePath, data, 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "[tasks] save write error: %v\n", err)
 	}
 }

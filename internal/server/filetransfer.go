@@ -591,7 +591,7 @@ func (tm *TransferManager) saveLocked() {
 		log.Printf("[transfer] failed to marshal state: %v", err)
 		return
 	}
-	if err := os.WriteFile(tm.savePath, data, 0644); err != nil {
+	if err := writeFileAtomic(tm.savePath, data, 0644); err != nil {
 		log.Printf("[transfer] failed to persist state: %v", err)
 	}
 }
