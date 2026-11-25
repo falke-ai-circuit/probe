@@ -18,6 +18,9 @@ type relayMetadata struct {
 	MaxAgents  int    `json:"max_agents,omitempty"`
 	Upstream   string `json:"upstream,omitempty"`
 	AgentCount int    `json:"agent_count,omitempty"`
+	// P21-04: the forwarding chain this relay's clients arrived through. The
+	// receiving server refuses a registration whose chain already names it.
+	Chain Chain `json:"chain,omitempty"`
 }
 
 // relaySession represents a connected relay and its virtual channels.
@@ -29,6 +32,7 @@ type relaySession struct {
 	channels   map[uint32]*virtualConn
 	channelsMu sync.RWMutex
 	metadata   *relayMetadata
+	chain      Chain // P21-04: chain carried by this relay's registration
 }
 
 // virtualConn represents a single agent behind a relay. It implements
@@ -38,6 +42,13 @@ type virtualConn struct {
 	channelID uint32
 	session   *relaySession
 	agentID   string
+	// P21-04: sink carries this channel's inbound frames further up the
+	// uplink when the policy re-forwards a relayed client. nil means the
+	// client is served here.
+	sink func([]byte)
+	// onClose releases whatever the channel owns upstream (a forwarded link,
+	// if the policy re-forwarded it). nil when nothing is owned.
+	onClose func()
 }
 
 // WriteJSON writes a JSON value as a framed message on the relay's
@@ -98,10 +109,11 @@ func (s *Server) handleRelayConnection(conn *websocket.Conn, firstData []byte) {
 	}
 
 	var reg struct {
-		Type     string          `json:"type"`
-		RelayID  string          `json:"relay_id"`
-		Token    string          `json:"token"`
-		Metadata json.RawMessage `json:"metadata,omitempty"`
+		Type        string          `json:"type"`
+		RelayID     string          `json:"relay_id"`
+		Token       string          `json:"token"`
+		Fingerprint string          `json:"fingerprint,omitempty"`
+		Metadata    json.RawMessage `json:"metadata,omitempty"`
 	}
 	if err := json.Unmarshal(payload, &reg); err != nil {
 		log.Printf("[server] relay registration parse error: %v", err)
@@ -131,12 +143,35 @@ func (s *Server) handleRelayConnection(conn *websocket.Conn, firstData []byte) {
 		relayID = fmt.Sprintf("relay-%d", time.Now().UnixMilli())
 	}
 
+	// P21-04: the chain this relay's clients arrived through. Two refusals
+	// happen before a session exists, because neither can be repaired later:
+	//   - an id that is not in the allowlist is not admitted at all (P7 owns
+	//     the allowlist mechanics; this is the call and the distinct error);
+	//   - a chain that already names this server is a cycle. Forwarding into
+	//     it would loop, so the registration is refused and the socket closed.
+	chain := Chain{}
+	if meta != nil {
+		chain = meta.Chain
+	}
+	if err := s.relayAllowed(relayID, refFingerprint(reg.Fingerprint)); err != nil {
+		log.Printf("[server] relay %s refused: %v", relayID, err)
+		s.refuseRelayRegistration(conn, magic, err)
+		return
+	}
+	if chain.Has(s.serverChainID()) || chain.Has(s.forwardLinkID()) {
+		err := refLoop(relayID, chain)
+		log.Printf("[server] relay %s refused: %v", relayID, err)
+		s.refuseRelayRegistration(conn, magic, err)
+		return
+	}
+
 	session := &relaySession{
 		relayID:  relayID,
 		magic:    magic,
 		conn:     conn,
 		channels: make(map[uint32]*virtualConn),
 		metadata: meta,
+		chain:    chain,
 	}
 
 	// Store relay session in server's relay registry
@@ -188,6 +223,13 @@ func (s *Server) handleRelayConnection(conn *websocket.Conn, firstData []byte) {
 			continue
 		}
 
+		// P21-04: a channel the policy re-forwarded belongs upstream, not to
+		// this server. Its frames leave here and return through the link.
+		if vc.sink != nil {
+			vc.sink(payload)
+			continue
+		}
+
 		// Parse payload as protocol.Envelope
 		var env protocol.Envelope
 		if err := json.Unmarshal(payload, &env); err != nil {
@@ -208,7 +250,35 @@ func (s *Server) handleRelayConnection(conn *websocket.Conn, firstData []byte) {
 					}
 					// Prefix with relay path for topology visibility
 					agentID = fmt.Sprintf("relay/%s/%s", session.relayID, agentID)
+					// P21-04: a relayed client is subject to the same
+					// admission as a direct one. Asserted here, at the point
+					// the client would become live, not assumed from the
+					// transport.
+					if !s.admitInbound(agentID, true) {
+						log.Printf("[server] relayed agent %s: rate/concurrency limit refused (link %s)", agentID, session.relayID)
+						continue
+					}
 					vc.agentID = agentID
+					// P21-04: policy decides whether this relayed client is
+					// served here or carried further up OUR uplink. relay_all
+					// recurses; relay and local stop at this server — that is
+					// the whole difference between the two policies.
+					if s.forwardPolicyFor(agentID) == PolicyRelayAll {
+						link, ferr := s.forwardArrival(agentID, session.chain, func(p []byte) {
+							_ = vc.WriteMessage(websocket.TextMessage, p)
+						}, payload)
+						if ferr != nil {
+							s.refuseRelayChannel(session, chanID, ferr)
+							log.Printf("[server] relayed agent %s refused: %v", agentID, ferr)
+							continue
+						}
+						if link != nil {
+							vc.sink = func(p []byte) { _ = link.Send(p) }
+							vc.onClose = link.Close
+							log.Printf("[server] relayed agent %s re-forwarded upstream via %s", agentID, link.Via)
+							continue
+						}
+					}
 					s.registry.Register(agentID, info.Name, info.Version, info.OS, info.Arch, info.Mode, info.Capabilities)
 					s.sessions.CreateSession(agentID)
 
@@ -250,6 +320,23 @@ func (s *Server) handleRelayControl(session *relaySession, payload []byte) {
 
 	switch ctrl.Type {
 	case "channel_open":
+		// P21-04: max_agents is enforced PER LINK, against the limit the
+		// relay declared (falling back to the relay default of 100). The
+		// refusal names the limit and carries its own code, so the relay can
+		// tell "this link is full" from "this relay is not allowed".
+		limit := DefaultLinkMaxAgents
+		if session.metadata != nil && session.metadata.MaxAgents > 0 {
+			limit = session.metadata.MaxAgents
+		}
+		session.channelsMu.RLock()
+		open := len(session.channels)
+		session.channelsMu.RUnlock()
+		if open >= limit {
+			err := refLinkMaxAgents(session.relayID, limit)
+			s.refuseRelayChannel(session, ctrl.ChannelID, err)
+			log.Printf("[server] link %s channel %d refused: %v", session.relayID, ctrl.ChannelID, err)
+			return
+		}
 		// A new agent connected behind the relay.
 		// The agent's first message (AgentInfo) will come as the first
 		// data frame on this channel. For now, create a placeholder
@@ -285,6 +372,9 @@ func (s *Server) handleRelayControl(session *relaySession, payload []byte) {
 			s.registry.Unregister(vc.agentID)
 			s.sessions.RemoveSession(vc.agentID)
 			s.ClearTokenExpiry(vc.agentID)
+			if vc.onClose != nil {
+				vc.onClose()
+			}
 			log.Printf("[server] relay %s: channel %d closed (agent %s)", session.relayID, ctrl.ChannelID, vc.agentID)
 		} else {
 			log.Printf("[server] relay %s: channel %d closed (no agent registered)", session.relayID, ctrl.ChannelID)

@@ -124,8 +124,29 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	// Check if agent has been revoked — reject the connection.
 	if s.IsAgentRevoked(agentID) {
-		log.Printf("[server] revoked agent %s attempted to connect — rejecting", agentID)
+		log.Printf("[server] server: revoked agent %s attempted to connect — rejecting", agentID)
 		conn.Close()
+		return
+	}
+
+	// P21-04: the policy decides where this client registers. `local` (and any
+	// server without an uplink, i.e. a chain root) registers here; `relay` and
+	// `relay_all` register upstream and leave a read-only mirror behind. A
+	// refused forward is answered with its named code and the socket closes —
+	// never a silent local registration the policy did not ask for.
+	link, ferr := s.forwardArrival(agentID, Chain{}, func(p []byte) {
+		_ = conn.WriteMessage(websocket.TextMessage, p)
+	}, firstData)
+	if ferr != nil {
+		code, _ := isForwardRefusal(ferr)
+		log.Printf("[server] agent %s refused at arrival: %v", agentID, ferr)
+		writeForwardRefusal(conn, code, ferr)
+		conn.Close()
+		return
+	}
+	if link != nil {
+		log.Printf("[server] agent %s forwarded upstream via %s (policy enforced, not mirrored live here)", agentID, link.Via)
+		go s.pipeForwardedAgent(agentID, conn, link)
 		return
 	}
 
@@ -238,6 +259,14 @@ func (s *Server) handleMessages(agentID string, conn *websocket.Conn) {
 				log.Printf("[server] json decode error from %s: %v", agentID, err)
 				continue
 			}
+		}
+
+		// P21-04: the direct path goes through the same admission as a
+		// relayed one. Parity is asserted here and in the relay loop, not
+		// inherited from the transport.
+		if !s.admitInbound(agentID, false) {
+			log.Printf("[server] agent %s: rate/concurrency limit refused", agentID)
+			continue
 		}
 
 		switch env.Type {

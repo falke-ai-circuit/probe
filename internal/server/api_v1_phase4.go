@@ -115,6 +115,7 @@ func (s *Server) handleV1Topology(w http.ResponseWriter, r *http.Request) {
 		Version       string         `json:"version,omitempty"`
 		Modes         string         `json:"modes,omitempty"`
 		Relayed       bool           `json:"relayed,omitempty"`
+		Via           string         `json:"via,omitempty"` // P21-04: relay id for a mirrored agent
 		Active        bool           `json:"active"`
 		ForwardPolicy string         `json:"forward_policy,omitempty"` // Step 11: "relay" or "local"
 		Children      []TopologyNode `json:"children,omitempty"`
@@ -294,6 +295,26 @@ func (s *Server) handleV1Topology(w http.ResponseWriter, r *http.Request) {
 			From: "server",
 			To:   agentInfo.AgentID,
 			Type: "direct",
+		})
+	}
+
+	// P21-04: the read-only mirror. A forwarded agent stays visible to this
+	// server's UI as relayed=true with the link that carries it, and the edge
+	// is named relayed rather than direct. It has no connection and no write
+	// path: it renders state, it does not accept commands.
+	for _, m := range s.MirroredAgents() {
+		nodes = append(nodes, TopologyNode{
+			ID:      m.AgentID,
+			Type:    "agent",
+			Name:    m.AgentID,
+			Relayed: true,
+			Via:     m.Via,
+			Active:  m.UpstreamLive,
+		})
+		edges = append(edges, TopologyEdge{
+			From: m.Via,
+			To:   m.AgentID,
+			Type: "relayed",
 		})
 	}
 

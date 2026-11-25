@@ -190,7 +190,20 @@ type Server struct {
 	// When this server is also running relay mode, agents with policy "relay"
 	// have their traffic forwarded upstream. "local" = keep local only.
 	forwardMu       sync.RWMutex
-	forwardPolicies map[string]string // agentID → "relay" or "local"
+	forwardPolicies map[string]string // agentID → "local" | "relay" | "relay_all"
+
+	// P21-04: enforcement. forwarder is the uplink link this server dials
+	// when a policy says forward; nil means no uplink, which makes this
+	// server a chain root (relay/relay_all register locally there).
+	// relayAllowlist is the P7-owned gate called before a relay's clients
+	// are accepted. mirror is the read-only record of what was forwarded.
+	forwarder      *UplinkForwarder
+	forwarderID    string
+	forwardURL     string
+	forwardToken   string
+	relayAllowlist RelayAllowlist
+	mirror         mirrorStore
+	forwardStats   forwardCounters
 
 	// Phase 4 Step 13: E2E encryption manager (optional).
 	// When active, incoming binary messages are decrypted and outgoing
