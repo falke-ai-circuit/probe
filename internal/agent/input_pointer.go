@@ -461,21 +461,44 @@ func rawStringField(params json.RawMessage, name string) ([]byte, bool) {
 	return nil, false
 }
 
-// jsonStringUnits converts a JSON string literal into UTF-16 code units WITHOUT
-// repairing anything: `\uXXXX` becomes the unit it spells (surrogates
+// jsonStringScan converts a JSON string literal into UTF-16 code units WITHOUT
+// repairing anything — `\uXXXX` becomes the unit it spells (surrogates
 // included), a named escape becomes its ASCII unit, and literal UTF-8 becomes
-// the units of the rune it encodes. This is the only place the caller's code
-// units still exist, so it is where the evidence has to be collected.
-func jsonStringUnits(lit []byte) ([]uint16, bool) {
+// the units of the rune it encodes — and, in the same pass, records every byte
+// that is not part of a valid UTF-8 sequence. This is the only place the
+// caller's units AND the caller's bytes still exist, so it is where both kinds
+// of evidence have to be collected.
+//
+// The two products live in two position spaces and must never be mixed:
+//
+//   - units feed unpairedSurrogates, which reports 1-based CODE-UNIT positions;
+//   - badBytes are BYTE offsets (0-based, into the literal's own bytes, i.e.
+//     counted from the byte after the opening quote, quotes excluded). An
+//     invalid sequence is by definition unescaped — a `\uXXXX` escape is ASCII
+//     and always well-formed — so `lit[off+1]` is the offending byte itself.
+//
+// An invalid byte is substituted here by one U+FFFD unit and the walk
+// continues, because that is exactly what encoding/json does: one replacement
+// per invalid byte. Stopping instead would lose the surrogate evidence that
+// follows it in the same string.
+func jsonStringScan(lit []byte) ([]uint16, []int, bool) {
 	if len(lit) < 2 || lit[0] != '"' || lit[len(lit)-1] != '"' {
-		return nil, false
+		return nil, nil, false
 	}
 	units := make([]uint16, 0, len(lit))
+	var badBytes []int
 	for i := 1; i < len(lit)-1; {
 		if lit[i] != '\\' {
 			r, size := utf8.DecodeRune(lit[i:])
 			if r == utf8.RuneError && size == 1 {
-				return nil, false
+				// One invalid byte: name it in the byte space and carry on in
+				// the unit space the way the JSON decoder does — one U+FFFD
+				// per invalid byte, so the unit positions stay aligned with
+				// the string the agent actually received.
+				badBytes = append(badBytes, i-1)
+				units = append(units, 0xFFFD)
+				i++
+				continue
 			}
 			units = append(units, utf16.Encode([]rune{r})...)
 			i += size
@@ -483,12 +506,12 @@ func jsonStringUnits(lit []byte) ([]uint16, bool) {
 		}
 		i++
 		if i >= len(lit)-1 {
-			return nil, false
+			return nil, nil, false
 		}
 		switch lit[i] {
 		case 'u':
 			if i+4 >= len(lit) {
-				return nil, false
+				return nil, nil, false
 			}
 			var u uint16
 			for _, c := range lit[i+1 : i+5] {
@@ -501,7 +524,7 @@ func jsonStringUnits(lit []byte) ([]uint16, bool) {
 				case c >= 'A' && c <= 'F':
 					u |= uint16(c-'A') + 10
 				default:
-					return nil, false
+					return nil, nil, false
 				}
 			}
 			units = append(units, u)
@@ -525,10 +548,10 @@ func jsonStringUnits(lit []byte) ([]uint16, bool) {
 			units = append(units, '\t')
 			i++
 		default:
-			return nil, false
+			return nil, nil, false
 		}
 	}
-	return units, true
+	return units, badBytes, true
 }
 
 // unpairedSurrogates lists the 1-based code-unit positions the JSON decoder had
@@ -553,30 +576,50 @@ func unpairedSurrogates(units []uint16) []int {
 	return at
 }
 
-// textRepairs answers "did encoding/json change the caller's text, and where".
-// It reads env.Params, never env.Params decoded twice: the string field is
-// already the decoder's output by the time handleType holds it.
-func textRepairs(params json.RawMessage) []int {
+// textDamage is what the JSON layer did to the caller's text before the agent
+// saw it, kept in TWO position spaces that are never mixed:
+//
+//   - runeAt  — 1-based CODE-UNIT positions of unpaired surrogates (R4);
+//   - byteAt  — 0-based BYTE offsets of invalid UTF-8 bytes (R4b).
+//
+// Both lists can be non-empty in one body, and each names its own kind.
+type textDamage struct {
+	runeAt []int
+	byteAt []int
+}
+
+// textRepairs answers "did encoding/json change the caller's text, and where",
+// in both spaces. It reads env.Params, never env.Params decoded twice: the
+// string field is already the decoder's output by the time handleType holds it.
+func textRepairs(params json.RawMessage) textDamage {
 	lit, ok := rawStringField(params, "text")
 	if !ok {
-		return nil
+		return textDamage{}
 	}
-	units, ok := jsonStringUnits(lit)
+	units, badBytes, ok := jsonStringScan(lit)
 	if !ok {
-		return nil
+		return textDamage{}
 	}
-	return unpairedSurrogates(units)
+	return textDamage{runeAt: unpairedSurrogates(units), byteAt: badBytes}
 }
 
 // textDetail is §9.4's `detail`, built in ONE place so every success path
 // reports the same facts: the encoding the caller supplied, whether it was
-// transcoded for emission, and — when the JSON layer repaired an unpaired code
-// unit — how many and where, because `transcoded:true` cannot carry that.
+// transcoded for emission, and — when the JSON layer repaired the caller's
+// text — how many and where, because `transcoded:true` cannot carry that.
+// A unit repair and a byte replacement answer in different keys and different
+// position spaces, so `repaired_at:[2]` and `invalid_utf8_at:[2]` cannot be
+// read as the same position.
 func textDetail(env protocol.Envelope, enc string, codePoints int) *protocol.TextDetail {
 	d := &protocol.TextDetail{Transcoded: transcode(enc), Encoding: enc, CodePoints: codePoints}
-	if at := textRepairs(env.Params); len(at) > 0 {
-		d.RepairedRuneCount = len(at)
-		d.RepairedAt = at
+	dmg := textRepairs(env.Params)
+	if len(dmg.runeAt) > 0 {
+		d.RepairedRuneCount = len(dmg.runeAt)
+		d.RepairedAt = dmg.runeAt
+	}
+	if len(dmg.byteAt) > 0 {
+		d.InvalidUTF8Bytes = len(dmg.byteAt)
+		d.InvalidUTF8At = dmg.byteAt
 	}
 	return d
 }
@@ -639,9 +682,9 @@ func (a *Agent) handlePointerScroll(env protocol.Envelope) protocol.Envelope {
 		return protocol.NewErrorDetail(env.ID, protocol.ErrInvalidParams,
 			"pointer-scroll: delta 0 is not a scroll",
 			map[string]interface{}{
-				"reason":  protocol.ReasonOutOfRange,
-				"field":   "delta",
-				"ran":     false,
+				"reason": protocol.ReasonOutOfRange,
+				"field":  "delta",
+				"ran":    false,
 			})
 	}
 	if params.Delta > maxScrollNotches || params.Delta < -maxScrollNotches {

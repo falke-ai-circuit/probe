@@ -78,6 +78,17 @@ type TextDetail struct {
 	// every string that is valid Unicode.
 	RepairedRuneCount int   `json:"repaired_rune_count,omitempty"`
 	RepairedAt        []int `json:"repaired_at,omitempty"`
+	// P14B-05 / R4b: a body can also carry bytes that are not valid UTF-8 at
+	// all. `encoding/json` replaces EACH invalid byte with U+FFFD and reports
+	// no error, so the string that reaches the agent is again indistinguishable
+	// from one the caller typed. These two fields are a SECOND position space:
+	// byte offsets into the caller's raw `text` value (0-based, counted from
+	// the byte after the opening quote, quotes excluded), never code units.
+	// The three shapes stay apart: a genuine U+FFFD the caller sent carries
+	// neither pair, a lone surrogate carries repaired_* only, invalid bytes
+	// carry invalid_utf8_* only.
+	InvalidUTF8Bytes int   `json:"invalid_utf8_bytes,omitempty"`
+	InvalidUTF8At    []int `json:"invalid_utf8_at,omitempty"`
 }
 
 // TextResult is §9.4's success shape.
