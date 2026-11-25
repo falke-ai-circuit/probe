@@ -581,6 +581,13 @@ const (
 	CaptureMaxPixels = 8294400
 	ReasonRegionTooLarge = "REGION_TOO_LARGE"
 	ReasonConsentRequired = "CONSENT_REQUIRED"
+
+	// §11's 501 reason for a primitive this build cannot obtain *here* — the
+	// surface is not exposed to it (a Wayland seat with no per-window cast, a
+	// composited window whose pixels live in the compositor's pixmap). Distinct
+	// from NO_BACKEND (no implementation at all) and from a 500 that tells the
+	// operator the agent broke.
+	ReasonNotExposed = "NOT_EXPOSED"
 )
 
 type ScreenInfo struct {

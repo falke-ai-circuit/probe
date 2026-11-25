@@ -94,6 +94,25 @@ func (e *capturePlatformError) Error() string {
 	return fmt.Sprintf("%s backend failed: %v", e.Backend, e.Err)
 }
 
+// captureCompositedError means the window is composited: a compositing manager
+// owns the screen's EWMH selection, so the window's pixels live in the
+// compositor's offscreen pixmap and are not what a direct drawable read returns.
+// §10 names the way to obtain them — XCompositeNameWindowPixmap, labelled
+// source:"compositor" — and this build does not implement it. That is a 501
+// PRIMITIVE_UNSUPPORTED reason:"NOT_EXPOSED" (§11: the surface is not exposed to
+// this build), never a 500 that says the agent broke, and never a 200 whose
+// pixels are silently the wrong surface.
+type captureCompositedError struct {
+	Window     uint32
+	Compositor string
+}
+
+func (e *captureCompositedError) Error() string {
+	return fmt.Sprintf("window 0x%x is composited (%s is owned by a compositing manager): "+
+		"its pixels are not exposed to a direct drawable read and this build has no "+
+		"XCompositeNameWindowPixmap path", e.Window, e.Compositor)
+}
+
 // --- baseline cache ---------------------------------------------------------
 
 // captureBaselineTTL and captureBaselineMax are §10's numbers: TTL 600 s, LRU
@@ -447,9 +466,36 @@ func captureBackendRefusal(env protocol.Envelope, ref protocol.UITreeContextRef,
 				"window":  window,
 				"ran":     true,
 			})
+	case *captureCompositedError:
+		return compositedRefusal(env, ref, kind, window, e)
 	}
 	return protocol.NewErrorDetail(env.ID, protocol.ErrInternal, "capture: "+err.Error(),
 		map[string]interface{}{"backend": "x11", "stage": "capture", "ran": true})
+}
+
+// compositedRefusal is §11's 501 for a window this build cannot obtain: the
+// seat is composited, so the pixels live in the compositor's pixmap and §10's
+// way to read them (XCompositeNameWindowPixmap, source:"compositor") is not
+// implemented here. The reason is NOT_EXPOSED, not NOT_IMPLEMENTED: the surface
+// is not exposed to a direct read on THIS seat, and shipping nothing would still
+// leave it unobtainable. detail names the compositor selection that was
+// observed, so the operator can tell a composited seat from a dead window.
+func compositedRefusal(env protocol.Envelope, ref protocol.UITreeContextRef, kind, window string, e *captureCompositedError) protocol.Envelope {
+	return protocol.NewErrorDetail(env.ID, protocol.ErrPrimitiveUnsupported,
+		fmt.Sprintf("capture: window 0x%x is composited (%s is held by a compositing manager); "+
+			"its pixels are not exposed to a direct drawable read and this build has no "+
+			"XCompositeNameWindowPixmap path", e.Window, e.Compositor),
+		map[string]interface{}{
+			"reason":           protocol.ReasonNotExposed,
+			"composited":       true,
+			"compositor":       e.Compositor,
+			"source_available": protocol.CaptureSourceCompositor,
+			"required":         "XCompositeNameWindowPixmap",
+			"context":          ref.Resolved,
+			"target":           kind,
+			"window":           window,
+			"ran":              false,
+		})
 }
 
 // captureConsentRefusal answers §10's Wayland row: a Wayland (or Termux) seat

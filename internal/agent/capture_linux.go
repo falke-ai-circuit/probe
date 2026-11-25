@@ -28,6 +28,15 @@ const (
 	// x11GetImageWords is the request length in 4-byte units: opcode/format/
 	// length, drawable, x/y/w/h, plane-mask = 5 words.
 	x11GetImageWords = 5
+
+	x11GetSelectionOwner = 23
+
+	// captureCompositorSelection is the EWMH selection a compositing manager
+	// claims for screen 0 — the screen this connection reads (handshake takes
+	// the first screen). Its owner is the server's own answer to "is this seat
+	// composited?", which the core protocol otherwise cannot be asked: redirect
+	// state is per-window and queryable only through XComposite.
+	captureCompositorSelection = "_NET_WM_CM_S0"
 )
 
 // bitsPerPixel answers the server's pixel size for a drawable depth, from the
@@ -105,7 +114,52 @@ func (x *x11Conn) captureWindow(plan capturePlan) (*captureFrame, error) {
 	if px := w * h; px > protocol.CaptureMaxPixels {
 		return nil, &captureTooLargeError{Px: px}
 	}
+	// A composited (redirected) window is refused BEFORE any pixel is read: a
+	// direct GetImage on it either fails (the error the review measured as a
+	// 500) or, on a server that still serves it, hands back the window's own
+	// stale buffer rather than what the compositor is showing. Both would
+	// answer a different question than "the window as displayed", so the
+	// honest answer is §11's 501 NOT_EXPOSED for the missing XComposite path.
+	// The viewable test keeps a mapped-away window in its own (mapping) class.
+	if composited, cerr := x.composited(plan.Window); cerr == nil && composited {
+		return nil, &captureCompositedError{Window: plan.Window, Compositor: captureCompositorSelection}
+	}
 	return x.image(plan.Window, dx, dy, w, h, protocol.CaptureSourceWindowDirect)
+}
+
+// composited reports whether a compositing manager claims this screen AND the
+// window is currently viewable — the two signals the core protocol can be asked
+// without an XComposite query. Either alone is not the condition: the selection
+// alone is the seat's property, viewability alone is plain mapping state.
+func (x *x11Conn) composited(win uint32) (bool, error) {
+	owned, err := x.compositorOwned()
+	if err != nil || !owned {
+		return false, err
+	}
+	attrs, err := x.attributes(win)
+	if err != nil {
+		return false, err
+	}
+	return attrs.MapState == x11MapStateViewable, nil
+}
+
+// compositorOwned answers whether a compositing manager owns the screen's EWMH
+// selection: one round trip, no resource allocated, and the server's own answer
+// rather than a guess about which desktops composite.
+func (x *x11Conn) compositorOwned() (bool, error) {
+	a, err := x.atom(captureCompositorSelection)
+	if err != nil {
+		return false, err
+	}
+	req := make([]byte, 8)
+	req[0] = x11GetSelectionOwner
+	binary.LittleEndian.PutUint16(req[2:4], 2)
+	binary.LittleEndian.PutUint32(req[4:8], a)
+	reply, err := x.do(req, "GetSelectionOwner")
+	if err != nil {
+		return false, err
+	}
+	return binary.LittleEndian.Uint32(reply[8:12]) != 0, nil
 }
 
 // image reads a ZPixmap from drawable and converts it to RGBA8 with a stride of
