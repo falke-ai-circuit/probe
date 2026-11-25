@@ -168,16 +168,13 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 // handleAgentExec executes a shell command ON THE REMOTE AGENT via WebSocket.
 // Uses forwardToAgent with a per-command timeout (default 60s, from params).
 func (s *Server) handleAgentExec(w http.ResponseWriter, r *http.Request, agentID string) {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "failed to read body", http.StatusBadRequest)
+	// P13-01 E3a: strict decode against this route's own allow-list before any
+	// dispatch. Reads the body once; refuses unknown/duplicate/mistyped keys.
+	params, ok := decodeStrict[protocol.ExecParams](w, r, allowExec)
+	if !ok {
 		return
 	}
-	defer r.Body.Close()
-
-	var params protocol.ExecParams
-	if err := json.Unmarshal(body, &params); err != nil {
-		http.Error(w, fmt.Sprintf("invalid JSON: %v", err), http.StatusBadRequest)
+	if !s.preDispatchSelector(w, agentID, params) {
 		return
 	}
 
@@ -324,6 +321,7 @@ func (s *Server) handleAgentExec(w http.ResponseWriter, r *http.Request, agentID
 	params.IdempotencyKey = ""
 
 	var resp interface{}
+	var err error
 	for attempt := 0; attempt < 2; attempt++ {
 		resp, err = s.forwardToAgentWithTimeout(agentID, protocol.TypeExec, params, timeout, operatorIDFromRequest(r))
 		if err != nil || !isCredentialExpired(resp) {
@@ -427,6 +425,13 @@ func (s *Server) handleAgentExec(w http.ResponseWriter, r *http.Request, agentID
 			writeTypedErrorDetail(w, status, code, fmt.Sprintf("%v", errMsg), detail)
 			return
 		}
+	}
+
+	// P13-01 E2: a context-scoped exec result must carry context_ref. Placed
+	// after the agent-error branch (a refusal has no result envelope to assert
+	// on) and before the response is recorded or written.
+	if !s.assertContextRef(w, agentID, params, resp) {
+		return
 	}
 
 	s.sessions.AddMemory(agentID, "last_exec", params.Command)
@@ -664,22 +669,20 @@ func (s *Server) handleAgentFSHash(w http.ResponseWriter, r *http.Request, agent
 
 // handleAgentCapture captures display ON THE REMOTE AGENT via WebSocket.
 func (s *Server) handleAgentCapture(w http.ResponseWriter, r *http.Request, agentID string) {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "failed to read body", http.StatusBadRequest)
+	params, ok := decodeStrict[protocol.ScreenParams](w, r, allowCapture)
+	if !ok {
 		return
 	}
-	defer r.Body.Close()
-
-	var params protocol.ScreenParams
-	if err := json.Unmarshal(body, &params); err != nil {
-		http.Error(w, fmt.Sprintf("invalid JSON: %v", err), http.StatusBadRequest)
+	if !s.preDispatchSelector(w, agentID, params) {
 		return
 	}
 
 	resp, err := s.forwardToAgent(agentID, protocol.TypeCapture, params)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	if !s.assertContextRef(w, agentID, params, resp) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

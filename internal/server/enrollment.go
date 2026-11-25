@@ -431,8 +431,14 @@ func capabilityForCommand(msgType string) string {
 
 	// Input
 	case protocol.TypePointerClick, protocol.TypeTextInput,
-		protocol.TypeKeyPress, protocol.TypeKeyCombo:
+		protocol.TypeKeyPress, protocol.TypeKeyCombo,
+		protocol.TypePointerMove, protocol.TypePointerScroll, protocol.TypePointerDrag:
 		return "input"
+
+	// Window surface (P13-01 rows 13/14): enumeration/control is a screen-surface
+	// primitive, gated on capture until a dedicated `ui` capability exists.
+	case protocol.TypeUITree, protocol.TypeUIWindow:
+		return "capture"
 
 	// Process control
 	case protocol.TypeProcList, protocol.TypeProcKill, protocol.TypeProcStart:

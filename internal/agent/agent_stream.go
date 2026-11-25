@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,9 +36,9 @@ func newStreamManager() *streamManager {
 // It calls the platform's ScreenStreamStart, which captures frames at the
 // specified FPS and sends them back via WebSocket as stream_data messages.
 func (a *Agent) handleStreamBegin(env protocol.Envelope) protocol.Envelope {
-	params, err := protocol.ParseCommand[protocol.ScreenStreamParams](env)
-	if err != nil {
-		return protocol.NewError(env.ID, protocol.ErrInvalidParams, err.Error())
+	params, serr := protocol.ParseCommandStrict[protocol.ScreenStreamParams](env, protocol.AllowStreamStart)
+	if serr != nil {
+		return strictRefusal(env, serr)
 	}
 
 	if params.FPS <= 0 {
@@ -86,21 +87,21 @@ func (a *Agent) handleStreamBegin(env protocol.Envelope) protocol.Envelope {
 
 // handleStreamEnd stops screen streaming on the agent.
 func (a *Agent) handleStreamEnd(env protocol.Envelope) protocol.Envelope {
-	params, err := protocol.ParseCommand[protocol.ScreenStreamStopParams](env)
-	if err != nil {
-		// Allow empty params — stop all streams
-		if a.streamMgr != nil {
-			a.streamMgr.mu.Lock()
-			for id, stream := range a.streamMgr.streams {
-				close(stream.stopCh)
-				delete(a.streamMgr.streams, id)
-			}
-			a.streamMgr.mu.Unlock()
-		}
-		_ = a.plat.ScreenStreamStop("")
-		return protocol.NewResult(env.ID, protocol.TypeStreamEndResult, map[string]interface{}{
-			"stopped": true,
-		})
+	params, serr := protocol.ParseCommandStrict[protocol.ScreenStreamStopParams](env, protocol.AllowStreamStop)
+	if serr != nil {
+		return strictRefusal(env, serr)
+	}
+	// §5.5 row 4: stream_id is required. An empty id used to stop EVERY stream
+	// (SS-10) — the agent enforces the same rule as the server, so a bypassed
+	// or old server cannot reach the platform with the old behaviour.
+	if strings.TrimSpace(params.StreamID) == "" {
+		return protocol.NewErrorDetail(env.ID, protocol.ErrInvalidParams,
+			"field \"stream_id\" is required; an empty id is not a request to stop every stream",
+			map[string]interface{}{
+				"field":  "stream_id",
+				"reason": protocol.ReasonStreamIDRequired,
+				"ran":    false,
+			})
 	}
 
 	// Stop the platform stream

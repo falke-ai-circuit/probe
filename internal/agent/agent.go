@@ -574,6 +574,11 @@ var cmdTable = map[string]func(*Agent, protocol.Envelope) protocol.Envelope{
 	protocol.TypeStreamEnd: (*Agent).handleStreamEnd,
 	protocol.TypeDisplayInfo: (*Agent).handleDisplayInfo,
 	protocol.TypePointerClick: (*Agent).handleClick,
+	protocol.TypePointerMove: (*Agent).handlePointerMove,
+	protocol.TypePointerScroll: (*Agent).handlePointerScroll,
+	protocol.TypePointerDrag: (*Agent).handlePointerDrag,
+	protocol.TypeUITree: (*Agent).handleUITree,
+	protocol.TypeUIWindow: (*Agent).handleUIWindow,
 	protocol.TypeTextInput: (*Agent).handleType,
 	protocol.TypeKeyPress: (*Agent).handleKey,
 	protocol.TypeKeyCombo: (*Agent).handleKeyCombo,
@@ -632,7 +637,7 @@ func (a *Agent) handleCommand(conn *websocket.Conn, env protocol.Envelope) {
 	execCmd := ""
 	path := ""
 	if env.Type == protocol.TypeExec || env.Type == protocol.TypeExecPTY {
-		if params, err := protocol.ParseCommand[protocol.ExecParams](env); err == nil {
+		if params, err := protocol.ParseCommandStrict[protocol.ExecParams](env, protocol.AllowExec); err == nil {
 			execCmd = params.Command
 		}
 	}
@@ -686,9 +691,9 @@ func (a *Agent) handleCommand(conn *websocket.Conn, env protocol.Envelope) {
 }
 
 func (a *Agent) handleExec(env protocol.Envelope) protocol.Envelope {
-	params, err := protocol.ParseCommand[protocol.ExecParams](env)
-	if err != nil {
-		return protocol.NewError(env.ID, protocol.ErrInvalidParams, err.Error())
+	params, serr := protocol.ParseCommandStrict[protocol.ExecParams](env, protocol.AllowExec)
+	if serr != nil {
+		return strictRefusal(env, serr)
 	}
 	// P8-03: `as` is a declaration we verify, not an escalation primitive.
 	// Refusal happens BEFORE anything is spawned, so a refused call cannot
@@ -732,6 +737,7 @@ func (a *Agent) handleExec(env protocol.Envelope) protocol.Envelope {
 	// child on stdin (default) or in its environment (documented fallback).
 	// Either way it is absent from argv; only the NAME appears in the command.
 	var result protocol.ExecResult
+	var err error
 	if name := strings.TrimSpace(params.Credential); name != "" {
 		pc, expired := a.takeCredential(name)
 		if expired {
@@ -1068,9 +1074,9 @@ func (a *Agent) handleFSHash(env protocol.Envelope) protocol.Envelope {
 }
 
 func (a *Agent) handleCapture(env protocol.Envelope) protocol.Envelope {
-	params, err := protocol.ParseCommand[protocol.ScreenParams](env)
-	if err != nil {
-		return protocol.NewError(env.ID, protocol.ErrInvalidParams, err.Error())
+	params, serr := protocol.ParseCommandStrict[protocol.ScreenParams](env, protocol.AllowCapture)
+	if serr != nil {
+		return strictRefusal(env, serr)
 	}
 	result, err := a.plat.CaptureDisplay(params.Display, params.Quality)
 	if err != nil {
@@ -1084,7 +1090,7 @@ func (a *Agent) handleDisplayInfo(env protocol.Envelope) protocol.Envelope {
 }
 
 func (a *Agent) handleClick(env protocol.Envelope) protocol.Envelope {
-	params, err := protocol.ParseCommand[protocol.InputParams](env)
+	params, err := protocol.ParseCommandStrict[protocol.InputParams](env, protocol.AllowPointerClick)
 	if err != nil {
 		return protocol.NewError(env.ID, protocol.ErrInvalidParams, err.Error())
 	}
@@ -1095,7 +1101,7 @@ func (a *Agent) handleClick(env protocol.Envelope) protocol.Envelope {
 }
 
 func (a *Agent) handleType(env protocol.Envelope) protocol.Envelope {
-	params, err := protocol.ParseCommand[protocol.InputParams](env)
+	params, err := protocol.ParseCommandStrict[protocol.InputParams](env, protocol.AllowTextInput)
 	if err != nil {
 		return protocol.NewError(env.ID, protocol.ErrInvalidParams, err.Error())
 	}
@@ -1106,7 +1112,7 @@ func (a *Agent) handleType(env protocol.Envelope) protocol.Envelope {
 }
 
 func (a *Agent) handleKey(env protocol.Envelope) protocol.Envelope {
-	params, err := protocol.ParseCommand[protocol.InputParams](env)
+	params, err := protocol.ParseCommandStrict[protocol.InputParams](env, protocol.AllowKeyPress)
 	if err != nil {
 		return protocol.NewError(env.ID, protocol.ErrInvalidParams, err.Error())
 	}
@@ -1117,7 +1123,7 @@ func (a *Agent) handleKey(env protocol.Envelope) protocol.Envelope {
 }
 
 func (a *Agent) handleKeyCombo(env protocol.Envelope) protocol.Envelope {
-	params, err := protocol.ParseCommand[protocol.InputParams](env)
+	params, err := protocol.ParseCommandStrict[protocol.InputParams](env, protocol.AllowKeyCombo)
 	if err != nil {
 		return protocol.NewError(env.ID, protocol.ErrInvalidParams, err.Error())
 	}

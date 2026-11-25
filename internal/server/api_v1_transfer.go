@@ -277,9 +277,11 @@ func (s *Server) handleV1StreamStart(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.v1CheckAuth(w, r, "capture"); !ok {
 		return
 	}
-	var params protocol.ScreenStreamParams
-	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
-		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid JSON: "+err.Error())
+	params, ok := decodeStrict[protocol.ScreenStreamParams](w, r, allowStreamStart)
+	if !ok {
+		return
+	}
+	if !s.preDispatchSelector(w, agentID, params) {
 		return
 	}
 	if params.FPS <= 0 {
@@ -305,6 +307,9 @@ func (s *Server) handleV1StreamStart(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if !s.assertContextRef(w, agentID, params, resp) {
+		return
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -316,16 +321,33 @@ func (s *Server) handleV1StreamStop(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.v1CheckAuth(w, r, "capture"); !ok {
 		return
 	}
-	var params protocol.ScreenStreamStopParams
-	// Try to parse body, but allow empty body for convenience
-	body := make([]byte, 0)
-	if r.Body != nil {
-		buf := make([]byte, 4096)
-		n, _ := r.Body.Read(buf)
-		body = buf[:n]
+	params, ok := decodeStrict[protocol.ScreenStreamStopParams](w, r, allowStreamStop)
+	if !ok {
+		return
 	}
-	if len(body) > 0 {
-		_ = json.Unmarshal(body, &params)
+	// §5.5 row 4: an empty stream_id used to stop EVERY stream (SS-10).
+	if strings.TrimSpace(params.StreamID) == "" {
+		writeErrorDetail(w, http.StatusBadRequest, protocol.ErrInvalidParams,
+			"field \"stream_id\" is required; an empty id is not a request to stop every stream",
+			map[string]interface{}{
+				"field":   "stream_id",
+				"reason":  protocol.ReasonStreamIDRequired,
+				"allowed": allowStreamStop,
+				"ran":     false,
+			})
+		return
+	}
+	// §5.6: context/session are accepted by the allow-list only to be refused.
+	// A stream is stopped by its id, never by a context.
+	if selectorPresent(params) {
+		writeErrorDetail(w, http.StatusBadRequest, protocol.ErrInvalidParams,
+			"stream-stop does not accept a context selector; stop the stream by stream_id",
+			map[string]interface{}{
+				"reason":  protocol.ReasonContextNotAccepted,
+				"allowed": "stream_id",
+				"ran":     false,
+			})
+		return
 	}
 
 	resp, err := s.forwardToAgent(agentID, protocol.TypeStreamEnd, params)
@@ -355,6 +377,19 @@ func (s *Server) handleV1StreamFrame(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.v1CheckAuth(w, r, "capture"); !ok {
 		return
 	}
+	// §5.5 row 5 / §5.6: a GET with no body. What it must refuse is a QUERY
+	// parameter, because that is where an operator would put a selector.
+	if r.URL.RawQuery != "" {
+		writeErrorDetail(w, http.StatusBadRequest, protocol.ErrInvalidParams,
+			"stream-frame accepts no query parameters; a frame belongs to the stream bound at stream-start",
+			map[string]interface{}{
+				"reason":  protocol.ReasonUnknownField,
+				"field":   strings.SplitN(r.URL.RawQuery, "=", 2)[0],
+				"allowed": allowStreamFrame,
+				"ran":     false,
+			})
+		return
+	}
 	frameJSON := s.sessions.GetMemory(agentID, "last_stream_frame")
 	if frameJSON == "" {
 		writeError(w, http.StatusNotFound, "NO_FRAME", "no stream frame available")
@@ -377,9 +412,11 @@ func (s *Server) handleV1PointerClick(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.v1CheckAuth(w, r, "input"); !ok {
 		return
 	}
-	var params protocol.InputParams
-	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
-		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid JSON: "+err.Error())
+	params, ok := decodeStrict[protocol.InputParams](w, r, allowPointerClick)
+	if !ok {
+		return
+	}
+	if !s.preDispatchSelector(w, agentID, params) {
 		return
 	}
 	resp, err := s.forwardToAgent(agentID, protocol.TypePointerClick, params)
@@ -389,6 +426,9 @@ func (s *Server) handleV1PointerClick(w http.ResponseWriter, r *http.Request) {
 		} else {
 			writeError(w, http.StatusServiceUnavailable, "AGENT_UNREACHABLE", err.Error())
 		}
+		return
+	}
+	if !s.assertContextRef(w, agentID, params, resp) {
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -402,9 +442,11 @@ func (s *Server) handleV1KeyPress(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.v1CheckAuth(w, r, "input"); !ok {
 		return
 	}
-	var params protocol.InputParams
-	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
-		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid JSON: "+err.Error())
+	params, ok := decodeStrict[protocol.InputParams](w, r, allowKeyPress)
+	if !ok {
+		return
+	}
+	if !s.preDispatchSelector(w, agentID, params) {
 		return
 	}
 	resp, err := s.forwardToAgent(agentID, protocol.TypeKeyPress, params)
@@ -414,6 +456,9 @@ func (s *Server) handleV1KeyPress(w http.ResponseWriter, r *http.Request) {
 		} else {
 			writeError(w, http.StatusServiceUnavailable, "AGENT_UNREACHABLE", err.Error())
 		}
+		return
+	}
+	if !s.assertContextRef(w, agentID, params, resp) {
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -427,9 +472,11 @@ func (s *Server) handleV1KeyCombo(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.v1CheckAuth(w, r, "input"); !ok {
 		return
 	}
-	var params protocol.InputParams
-	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
-		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid JSON: "+err.Error())
+	params, ok := decodeStrict[protocol.InputParams](w, r, allowKeyCombo)
+	if !ok {
+		return
+	}
+	if !s.preDispatchSelector(w, agentID, params) {
 		return
 	}
 	resp, err := s.forwardToAgent(agentID, protocol.TypeKeyCombo, params)
@@ -439,6 +486,9 @@ func (s *Server) handleV1KeyCombo(w http.ResponseWriter, r *http.Request) {
 		} else {
 			writeError(w, http.StatusServiceUnavailable, "AGENT_UNREACHABLE", err.Error())
 		}
+		return
+	}
+	if !s.assertContextRef(w, agentID, params, resp) {
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -452,9 +502,11 @@ func (s *Server) handleV1TextInput(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.v1CheckAuth(w, r, "input"); !ok {
 		return
 	}
-	var params protocol.InputParams
-	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
-		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid JSON: "+err.Error())
+	params, ok := decodeStrict[protocol.InputParams](w, r, allowTextInput)
+	if !ok {
+		return
+	}
+	if !s.preDispatchSelector(w, agentID, params) {
 		return
 	}
 	resp, err := s.forwardToAgent(agentID, protocol.TypeTextInput, params)
@@ -464,6 +516,9 @@ func (s *Server) handleV1TextInput(w http.ResponseWriter, r *http.Request) {
 		} else {
 			writeError(w, http.StatusServiceUnavailable, "AGENT_UNREACHABLE", err.Error())
 		}
+		return
+	}
+	if !s.assertContextRef(w, agentID, params, resp) {
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)

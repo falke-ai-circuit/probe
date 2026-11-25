@@ -45,6 +45,16 @@ const (
 	TypeStreamEnd     = "stream_end"
 	TypeStreamData    = "stream_data" // Agent → Server: individual video frame (base64 JPEG)
 
+	// P13-01 (§5.5 rows 6, 8, 9, 13, 14): the five new selector-bearing wire
+	// commands. The server routes exist and enforce the allow-list; the
+	// platform backends are later units, so the agent answers PRIMITIVE_
+	// UNSUPPORTED/NO_BACKEND rather than pretending the primitive ran.
+	TypePointerMove   = "pointer_move"
+	TypePointerScroll = "pointer_scroll"
+	TypePointerDrag   = "pointer_drag"
+	TypeUITree        = "ui_tree"
+	TypeUIWindow      = "ui_window"
+
 	// Sensor subsystem (v1.14.0) — generic on-demand data read.
 	// Sensors are stateless, OS-independent (stdlib only), and return
 	// a single JSON payload. See internal/agent/sensors_*.go.
@@ -193,6 +203,12 @@ const (
 	ErrElevationUnavailable = "ELEVATION_UNAVAILABLE"
 	// P8-03: the agent does not implement the as:"SYSTEM" contract (old build).
 	ErrUnsupportedAgent = "UNSUPPORTED_AGENT"
+	// P13-01 (§5.5 E2): a context-scoped result that omits context_ref from an
+	// agent that advertises the selector. A protocol breach, never a success.
+	ErrProtocolViolation = "PROTOCOL_VIOLATION"
+	// P13-01 (§11): the primitive has no implementation in this build. 501 —
+	// distinct from a policy refusal (403) and from an observed failure (200).
+	ErrPrimitiveUnsupported = "PRIMITIVE_UNSUPPORTED"
 )
 
 // Envelope is the top-level message wrapper.
@@ -262,6 +278,12 @@ type ExecParams struct {
 	JobID       string `json:"job_id,omitempty"`
 	OnDeath     string `json:"on_death,omitempty"`
 	JobTimeoutS int    `json:"job_timeout_s,omitempty"`
+
+	// P13-01 (§5.1): the selector, canonical form. nil = absent = the agent's
+	// own context (today's behaviour). Session is the wts alias; the server and
+	// agent both validate range/conflict before any dispatch.
+	Context *string `json:"context,omitempty"`
+	Session *int    `json:"session,omitempty"`
 
 	// P8-10 (P8-02 §8.4): idempotency_key makes the call replay-safe. The
 	// same key on the same agent returns the stored envelope with
@@ -454,7 +476,31 @@ type FSHashResult struct {
 type ScreenParams struct {
 	Display int `json:"display,omitempty"`
 	Quality int `json:"quality,omitempty"`
+
+	// P13-01: selector + the P6 capture keys the §5.5 allow-list names. The
+	// fields exist so a caller that sends them is not silently mis-read as
+	// something else; the capture backends that honour window/rect/format/
+	// hash_only are a later unit (contract §11 P6).
+	Context  *string `json:"context,omitempty"`
+	Session  *int    `json:"session,omitempty"`
+	Window   string  `json:"window,omitempty"`
+	Rect     *Rect   `json:"rect,omitempty"`
+	Format   string  `json:"format,omitempty"`
+	HashOnly bool    `json:"hash_only,omitempty"`
+	Since    string  `json:"since,omitempty"`
 }
+
+// Rect is a capture region in context pixels.
+type Rect struct {
+	X int `json:"x"`
+	Y int `json:"y"`
+	W int `json:"w"`
+	H int `json:"h"`
+}
+
+// Selector implements SelectorCarrier.
+func (p ScreenParams) Selector() (*string, *int) { return p.Context, p.Session }
+
 
 type ScreenRegionParams struct {
 	X       int `json:"x"`
@@ -488,7 +534,14 @@ type ScreenStreamParams struct {
 	Display int `json:"display,omitempty"`
 	FPS     int `json:"fps,omitempty"`
 	Quality int `json:"quality,omitempty"`
+
+	// P13-01: the stream is bound to the selected context at start (§5.6).
+	Context *string `json:"context,omitempty"`
+	Session *int    `json:"session,omitempty"`
 }
+
+// Selector implements SelectorCarrier.
+func (p ScreenStreamParams) Selector() (*string, *int) { return p.Context, p.Session }
 
 // Sensor subsystem (v1.14.0) parameter types.
 
@@ -541,7 +594,15 @@ type ScreenStreamStartResult struct {
 
 type ScreenStreamStopParams struct {
 	StreamID string `json:"stream_id"`
+
+	// P13-01: accepted by the allow-list only so they can be refused
+	// (CONTEXT_NOT_ACCEPTED) — a stream is stopped by its id, never by a context.
+	Context *string `json:"context,omitempty"`
+	Session *int    `json:"session,omitempty"`
 }
+
+// Selector implements SelectorCarrier.
+func (p ScreenStreamStopParams) Selector() (*string, *int) { return p.Context, p.Session }
 
 // StreamDataParams carries a single video frame from agent to server during
 // screen streaming. Each frame is a base64-encoded JPEG image.
@@ -561,7 +622,100 @@ type InputParams struct {
 	Text   string `json:"text,omitempty"`
 	Key    string `json:"key,omitempty"`
 	Keys   []string `json:"keys,omitempty"`
+
+	// P13-01 (§5.5 rows 7/10/11/12): the keys the per-route allow-list names.
+	// Four routes share this type, which is exactly why a strict decode alone
+	// is not enough — only the route's own allow-list catches a field that is
+	// known to the type and wrong for the route.
+	Count  int    `json:"count,omitempty"`
+	Window string `json:"window,omitempty"`
+	Focus  bool   `json:"focus,omitempty"`
+	// Encoding is accepted on text-input only (§5.5 row 12); the allow-list is
+	// what keeps it off pointer-click/key-*, which share this type.
+	Encoding string `json:"encoding,omitempty"`
+
+	Context *string `json:"context,omitempty"`
+	Session *int    `json:"session,omitempty"`
 }
+
+// Selector implements SelectorCarrier.
+func (p InputParams) Selector() (*string, *int) { return p.Context, p.Session }
+
+// Point is one coordinate pair in the §5.5 pointer rows.
+type Point struct {
+	X int `json:"x"`
+	Y int `json:"y"`
+}
+
+// PointerMoveParams is §5.5 row 6: hover is a move, never a click.
+type PointerMoveParams struct {
+	Context *string `json:"context,omitempty"`
+	Session *int    `json:"session,omitempty"`
+	X       int     `json:"x"`
+	Y       int     `json:"y"`
+	Window  string  `json:"window,omitempty"`
+}
+
+// Selector implements SelectorCarrier.
+func (p PointerMoveParams) Selector() (*string, *int) { return p.Context, p.Session }
+
+// PointerScrollParams is §5.5 row 8. Delta is in wheel units; unit is the
+// backend's unit name ("line" | "page" | "pixel") as the platform reports it.
+type PointerScrollParams struct {
+	Context *string `json:"context,omitempty"`
+	Session *int    `json:"session,omitempty"`
+	X       int     `json:"x,omitempty"`
+	Y       int     `json:"y,omitempty"`
+	Delta   int     `json:"delta"`
+	Unit    string  `json:"unit,omitempty"`
+	Window  string  `json:"window,omitempty"`
+}
+
+// Selector implements SelectorCarrier.
+func (p PointerScrollParams) Selector() (*string, *int) { return p.Context, p.Session }
+
+// PointerDragParams is §5.5 row 9: from → to with an explicit button.
+type PointerDragParams struct {
+	Context    *string `json:"context,omitempty"`
+	Session    *int    `json:"session,omitempty"`
+	From       *Point  `json:"from"`
+	To         *Point  `json:"to"`
+	Button     string  `json:"button,omitempty"`
+	DurationMS int     `json:"duration_ms,omitempty"`
+	Steps      int     `json:"steps,omitempty"`
+	Window     string  `json:"window,omitempty"`
+}
+
+// Selector implements SelectorCarrier.
+func (p PointerDragParams) Selector() (*string, *int) { return p.Context, p.Session }
+
+// UITreeParams is §5.5 row 13. VisibleOnly is a pointer so "absent" (default
+// true) and "explicitly false" are distinguishable.
+type UITreeParams struct {
+	Context     *string `json:"context,omitempty"`
+	Session     *int    `json:"session,omitempty"`
+	VisibleOnly *bool   `json:"visible_only,omitempty"`
+	Window      string  `json:"window,omitempty"`
+	Max         int     `json:"max,omitempty"`
+}
+
+// Selector implements SelectorCarrier.
+func (p UITreeParams) Selector() (*string, *int) { return p.Context, p.Session }
+
+// UIWindowParams is §5.5 row 14: one action on one window id.
+type UIWindowParams struct {
+	Context *string `json:"context,omitempty"`
+	Session *int    `json:"session,omitempty"`
+	Window  string  `json:"window"`
+	Action  string  `json:"action"`
+	X       int     `json:"x,omitempty"`
+	Y       int     `json:"y,omitempty"`
+	W       int     `json:"w,omitempty"`
+	H       int     `json:"h,omitempty"`
+}
+
+// Selector implements SelectorCarrier.
+func (p UIWindowParams) Selector() (*string, *int) { return p.Context, p.Session }
 
 type InputResult struct {
 	Success bool `json:"success"`

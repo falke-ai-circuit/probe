@@ -186,6 +186,21 @@ func reformatV1WithAgent(rec *httptest.ResponseRecorder, w http.ResponseWriter, 
 func reformatV1(rec *httptest.ResponseRecorder, w http.ResponseWriter) {
 	body := rec.Body.Bytes()
 	if rec.Code >= 400 {
+		// P13-01: a legacy handler that already wrote the v1 envelope (the
+		// strict-decode refusals do) must not be re-derived as BAD_REQUEST
+		// with the whole envelope as its message.
+		var envelope struct {
+			OK    bool      `json:"ok"`
+			Error *APIError `json:"error"`
+		}
+		if json.Unmarshal(body, &envelope) == nil && envelope.Error != nil && envelope.Error.Code != "" {
+			msg := envelope.Error.Message
+			if msg == "" {
+				msg = http.StatusText(rec.Code)
+			}
+			writeErrorDetail(w, rec.Code, envelope.Error.Code, msg, envelope.Error.Detail)
+			return
+		}
 		// P8-05: a legacy handler that refused with a typed code (e.g.
 		// FS_WRITE_EMPTY_DATA) keeps that code; only untyped bodies fall back
 		// to the status-derived code.
@@ -490,6 +505,9 @@ func (s *Server) registerV1Routes() {
 	s.mux.HandleFunc("POST /api/v1/agents/{id}/key-press", s.handleV1KeyPress)
 	s.mux.HandleFunc("POST /api/v1/agents/{id}/key-combo", s.handleV1KeyCombo)
 	s.mux.HandleFunc("POST /api/v1/agents/{id}/text-input", s.handleV1TextInput)
+
+	// P13-01 §5.5 rows 6, 8, 9, 13, 14 — the new selector-bearing routes.
+	s.registerStrictSelectorRoutes()
 
 	// Login endpoint (username/password → operator token)
 	s.mux.HandleFunc("POST /api/v1/login", s.handleV1Login)

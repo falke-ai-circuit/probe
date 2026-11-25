@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -605,12 +606,15 @@ func TestV1_StreamStartAgentNotConnected(t *testing.T) {
 }
 
 // TestV1_StreamStopAgentNotConnected verifies stream-stop on unconnected agent.
+// The body carries a real stream_id: since P13-01 §5.5 row 4 an empty id is a
+// 400 STREAM_ID_REQUIRED refusal *before* dispatch, which would mask the
+// not-connected path this test exists to exercise.
 func TestV1_StreamStopAgentNotConnected(t *testing.T) {
 	srv, cleanup := newV1TestServer(t)
 	defer cleanup()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/api/v1/agents/ghost/stream-stop", nil)
+	req := httptest.NewRequest("POST", "/api/v1/agents/ghost/stream-stop", strings.NewReader(`{"stream_id":"s-1"}`))
 	srv.mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusServiceUnavailable {
