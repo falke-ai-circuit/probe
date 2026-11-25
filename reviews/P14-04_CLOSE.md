@@ -1,6 +1,7 @@
 # P14-04 — close
 
-**Commit:** code under review `23cf971` (P14-01), `8cdbb18` (P14-02), `fd7d548` (P14-03) — all ancestors of the reviewed head `3b32753`; every commit above `fd7d548` is documentation only, and `git diff --stat fd7d548 HEAD -- internal/` is empty. This unit's own review documents are committed above that.
+**Commit:** `3b32753` (the reviewed head). Code judged: `23cf971` (P14-01), `8cdbb18` (P14-02), `fd7d548` (P14-03) — all three are ancestors of the head, every commit above `fd7d548` is documentation only, and `git diff --stat fd7d548 3b32753 -- internal/` is empty.
+**Head-move waiver:** repo HEAD is above `3b32753` again with this unit's own review documents (no code); the verdict binds to `3b32753`, the tree every table row was resolved against.
 **Review:** reviewed_by: `reviewer` (independent; neither author `coder` nor sequencer) · verdict: `FIX-FIRST` · verdict_sha_of_head: `3b32753`
 **Verdict vocabulary note:** the reviewer's ruling on the change set is **FAIL — 5 of 6 items PASS, item 1 FAIL, R1/R2 blocking** (`P14-04_REVIEW.md`, header line and per-item table). This row reads `FIX-FIRST` because that is the close gate's enum for "review delivered, defects listed and owned": the review is complete, and the change set does not close until P14-01 is re-gated.
 **Scope:** independent review of P14-01/02/03 against `docs/contracts/P10-07_CONTRACT_V3_1.md` §9.1-9.4, §10, §11 — per-item verdicts from committed blobs, three deviation rulings, four falsification re-runs in throwaway copies, five Xvfb wire probes, three whole-suite runs. No fixes in the worktree; no CT100 or live agent touched; worktree clean.
