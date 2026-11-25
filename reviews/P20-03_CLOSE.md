@@ -1,8 +1,8 @@
 # P20-03 — CLOSE (written by the parent; the unit produced the artefact and no close record)
 
-**Commit:** none — read-only preflight, no tree file changed, so no unit head exists. The verdict binds to the record commit that carries this file and the artefact (parent's commit at close time).
-**Head-move waiver:** a unit that writes nothing has no head; binding to a code commit would name a tree it never touched.
-**Review:** `reviewed_by: PENDING` · `verdict: PASS` · `verdict_sha_of_head: none — read-only unit; see waiver`
+**Commit:** `8a78625` — the record commit that carries this close and the preflight artefact. The unit changed no tree file, so the verdict binds to the commit holding its evidence.
+**Head-move waiver:** a read-only unit writes nothing, so it has no code head; binding to `8a78625` names the commit its evidence actually lives in rather than a tree it never touched. Verified: `git show --name-status 8a78625` is four `reviews/` paths and nothing else.
+**Review:** `reviewed_by: PENDING` · `verdict: PASS` · `verdict_sha_of_head: 8a78625`
 **Scope:** read-only reconnaissance across the Radxa (`radxa-e54c`, tailnet 100.71.4.28), the relay's netns, and central on KS-3 CT100. No container pulled, created, recreated, restarted or stopped; nothing written on any probe host. Mutations performed: **NONE**.
 
 ## Question the unit was asked
