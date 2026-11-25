@@ -1094,17 +1094,10 @@ func (a *Agent) handleFSHash(env protocol.Envelope) protocol.Envelope {
 	return protocol.NewResult(env.ID, protocol.TypeFSHashResult, result)
 }
 
-func (a *Agent) handleCapture(env protocol.Envelope) protocol.Envelope {
-	params, serr := protocol.ParseCommandStrict[protocol.ScreenParams](env, protocol.AllowCapture)
-	if serr != nil {
-		return strictRefusal(env, serr)
-	}
-	result, err := a.plat.CaptureDisplay(params.Display, params.Quality)
-	if err != nil {
-		return protocol.NewError(env.ID, protocol.ErrInternal, err.Error())
-	}
-	return protocol.NewResult(env.ID, protocol.TypeCaptureResult, result)
-}
+// P14-03: handleCapture moved to capture.go — the §10 shape (hash of decoded
+// pixels, absent data/size_bytes under hash_only, changed:null without a
+// baseline) is a body of rules, not three lines of dispatch.
+
 
 func (a *Agent) handleDisplayInfo(env protocol.Envelope) protocol.Envelope {
 	return protocol.NewResult(env.ID, protocol.TypeDisplayInfoResult, a.plat.ScreenInfo())

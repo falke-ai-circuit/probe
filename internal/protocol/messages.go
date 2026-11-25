@@ -528,6 +528,61 @@ type CaptureResult struct {
 	SizeBytes int64  `json:"size_bytes"`
 }
 
+// P14-03 (contract P10-07 v3.1 §10): the capture `data` object.
+//
+// Three corrections this type encodes rather than leaves to a backend:
+//   - C-8: Data and SizeBytes are ABSENT when hash_only:true. `omitempty` on
+//     both is what makes the key disappear; a `""` or `null` placeholder is the
+//     defect, and the test asserts key absence, not an empty value.
+//   - C-5: `window` is a string (the §4 xid shape), echoed in Target.
+//   - §10: `changed` is a pointer so "no baseline" serialises as JSON null —
+//     distinguishable from false, which is a real comparison result.
+//
+// Hash covers the DECODED RGBA8 pixels (stride-normalised to width*4), never
+// the encoded file: re-encoding the same pixels as jpeg must not change it.
+type CaptureTarget struct {
+	Kind   string    `json:"kind"` // screen | window | region
+	Window string    `json:"window,omitempty"`
+	IDKind string    `json:"id_kind,omitempty"`
+	Rect   *Rect     `json:"rect,omitempty"`
+}
+
+type CaptureV1Result struct {
+	ContextRef UITreeContextRef `json:"context_ref"`
+	Target     CaptureTarget    `json:"target"`
+	Format     string           `json:"format"`
+	Width      int              `json:"width"`
+	Height     int              `json:"height"`
+	Hash       string           `json:"hash"`
+	Changed    *bool            `json:"changed"`
+	Baseline   string           `json:"baseline"`
+	Source     string           `json:"source"`
+	Units      string           `json:"units"`
+	DPIScale   float64          `json:"dpi_scale"`
+	// Absent, not empty, when hash_only:true (C-8).
+	Data      string                 `json:"data,omitempty"`
+	SizeBytes int64                  `json:"size_bytes,omitempty"`
+	Detail    map[string]interface{} `json:"detail,omitempty"`
+}
+
+// §10 source labels: how the pixels were obtained. window_direct is
+// occlusion-independent by construction (the window's own drawable);
+// screen_region is lifted from the screen, so occlusion affects it.
+const (
+	CaptureSourceWindowDirect = "window_direct"
+	CaptureSourceScreenRegion = "screen_region"
+	CaptureSourceCompositor   = "compositor"
+
+	CaptureUnitsX11 = "px"
+
+	// CaptureMaxPixels is the §10 cost guard: 4K, 8_294_400 px. One pixel more
+	// is REGION_TOO_LARGE; a silent downscale is a second truth and is not
+	// permitted.
+	CaptureMaxPixels = 8294400
+	ReasonRegionTooLarge = "REGION_TOO_LARGE"
+	ReasonConsentRequired = "CONSENT_REQUIRED"
+)
+
 type ScreenInfo struct {
 	Displays []DisplayInfo `json:"displays"`
 }

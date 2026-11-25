@@ -273,6 +273,11 @@ func forwardedErrorStatus(code string) int {
 		return http.StatusConflict
 	case protocol.ErrInvalidParams:
 		return http.StatusBadRequest
+	case protocol.ErrInternal:
+		// §10: a backend that cannot parse its own capture is a 500
+		// INTERNAL_ERROR, not a 503 "the agent is unreachable" — the agent
+		// answered, and what it answered was a failure.
+		return http.StatusInternalServerError
 	case protocol.ErrWindowNotFound:
 		// §9.1: the window is not in the resolved context's tree. 404, and the
 		// agent refused before any injection.

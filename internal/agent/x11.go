@@ -47,6 +47,17 @@ type x11Conn struct {
 	maxKeycode byte
 	xtest      byte
 	saved      map[byte][]uint32
+
+	// P14-03: bits per pixel per drawable depth, from the pixmap-format block
+	// of the setup reply. GetImage decoding needs the server's answer, not a
+	// guess: a 16bpp display read as 32bpp is a plausible-looking wrong image.
+	bpp map[byte]byte
+
+	// P14-03: the client's resource-id range from the setup reply. A created
+	// resource must live inside it — the server rejects anything else with
+	// BadIDChoice (measured: id 0x1a00001).
+	idBase uint32
+	idMask uint32
 }
 
 // x11Dial connects to display :num over the abstract or filesystem socket and
@@ -61,7 +72,7 @@ func x11Dial(num int) (*x11Conn, error) {
 			return nil, err
 		}
 	}
-	x := &x11Conn{c: c, atoms: map[string]uint32{}, atomNames: map[uint32]string{}}
+	x := &x11Conn{c: c, atoms: map[string]uint32{}, atomNames: map[uint32]string{}, bpp: map[byte]byte{}}
 	if err := x.handshake(num); err != nil {
 		c.Close()
 		return nil, err
@@ -112,10 +123,21 @@ func (x *x11Conn) handshake(num int) error {
 	numFormats := int(body[21])
 	// vendor starts at 32: release(4) base(4) mask(4) motion(4) vendorlen(2)
 	// maxreq(2) screens(1) formats(1) orders(4) keycodes(4) pad(4).
-	off := 32 + ((vlen + 3) &^ 3) + numFormats*8
+	fmtOff := 32 + ((vlen + 3) &^ 3)
+	// Each pixmap format is 8 bytes: depth, bits-per-pixel, scanline-pad, pad.
+	for i := 0; i < numFormats; i++ {
+		at := fmtOff + i*8
+		if at+2 > len(body) {
+			break
+		}
+		x.bpp[body[at]] = body[at+1]
+	}
+	off := fmtOff + numFormats*8
 	if numScreens == 0 || off+24 > len(body) {
 		return errors.New("x11 setup reply has no screen")
 	}
+	x.idBase = binary.LittleEndian.Uint32(body[4:8])
+	x.idMask = binary.LittleEndian.Uint32(body[8:12])
 	x.root = binary.LittleEndian.Uint32(body[off : off+4])
 	// The keycode range lives in the fixed part of the setup reply, BEFORE the
 	// vendor string — not in the screen structure `off` points at.

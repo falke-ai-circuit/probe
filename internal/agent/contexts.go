@@ -291,16 +291,14 @@ func x11Features(state wmState, tools map[string]bool) (protocol.ContextFeatures
 		})
 	}
 
-	if tools["import"] || tools["scrot"] {
-		f.CaptureRegion = true
-	} else {
-		refusals = append(refusals, protocol.ContextRefusal{
-			Feature: "capture.region", Code: protocol.ErrPrimitiveUnsupported, Reason: "NO_BACKEND",
-		})
-	}
-	refusals = append(refusals, protocol.ContextRefusal{
-		Feature: "capture.window", Code: protocol.ErrPrimitiveUnsupported, Reason: "NO_BACKEND",
-	})
+	// P14-03: §10 capture ships a real X11 backend — GetImage on the same
+	// connection the tree and the hit-test use. It needs no shell tool (the
+	// old import/scrot gate is gone with the stdout-parsing code it guarded),
+	// and it answers window, region and full screen, so all three are
+	// advertised here rather than refused with a NO_BACKEND that no longer
+	// describes this build.
+	f.CaptureRegion = true
+	f.CaptureWindow = true
 
 	return f, refusals
 }

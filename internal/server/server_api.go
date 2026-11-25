@@ -682,6 +682,12 @@ func (s *Server) handleAgentCapture(w http.ResponseWriter, r *http.Request, agen
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
+	// P14-03: the agent's §10 refusals (REGION_TOO_LARGE 400, decode failure
+	// 500, CONSENT_REQUIRED 403) travel as typed errors. Relaying them as a
+	// 200 body would report a refused capture as a capture.
+	if writeAgentRefusal(w, resp) {
+		return
+	}
 	if !s.assertContextRef(w, agentID, params, resp) {
 		return
 	}
