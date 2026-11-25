@@ -67,145 +67,145 @@ export const api = {
 
   // Agents
   listAgents: () => apiFetch<AgentRecord[]>('/agents'),
-  getAgent: (id: string) => apiFetch<AgentRecord>(`/agents/${id}`),
+  getAgent: (id: string) => apiFetch<AgentRecord>(`/agents/${encodeURIComponent(id)}`),
   deleteAgent: (id: string) =>
-    apiFetch<{ removed: string }>(`/agents/${id}`, { method: 'DELETE' }),
-  getAgentHealth: (id: string) => apiFetch<AgentRecord>(`/agents/${id}/health`),
-  getAgentAudit: (id: string) => apiFetch<AuditEntry[]>(`/agents/${id}/audit`),
+    apiFetch<{ removed: string }>(`/agents/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  getAgentHealth: (id: string) => apiFetch<AgentRecord>(`/agents/${encodeURIComponent(id)}/health`),
+  getAgentAudit: (id: string) => apiFetch<AuditEntry[]>(`/agents/${encodeURIComponent(id)}/audit`),
 
   // Agent commands (all POST)
   execCmd: (id: string, cmd: string) =>
-    apiFetch<unknown>(`/agents/${id}/exec`, {
+    apiFetch<unknown>(`/agents/${encodeURIComponent(id)}/exec`, {
       method: 'POST',
       body: JSON.stringify({ command: cmd }),
     }),
   fsList: (id: string, dir: string) =>
-    apiFetch<unknown>(`/agents/${id}/fs-list`, {
+    apiFetch<unknown>(`/agents/${encodeURIComponent(id)}/fs-list`, {
       method: 'POST',
       body: JSON.stringify({ path: dir }),
     }),
   fsRead: (id: string, path: string) =>
-    apiFetch<unknown>(`/agents/${id}/fs-read`, {
+    apiFetch<unknown>(`/agents/${encodeURIComponent(id)}/fs-read`, {
       method: 'POST',
       body: JSON.stringify({ path }),
     }),
   fsWrite: (id: string, path: string, content: string) =>
-    apiFetch<unknown>(`/agents/${id}/fs-write`, {
+    apiFetch<unknown>(`/agents/${encodeURIComponent(id)}/fs-write`, {
       method: 'POST',
       body: JSON.stringify({ path, content, encoding: 'base64', data: btoa(content) }),
     }),
   fsStat: (id: string, path: string) =>
-    apiFetch<unknown>(`/agents/${id}/fs-stat`, {
+    apiFetch<unknown>(`/agents/${encodeURIComponent(id)}/fs-stat`, {
       method: 'POST',
       body: JSON.stringify({ path }),
     }),
   fsHash: (id: string, path: string) =>
-    apiFetch<unknown>(`/agents/${id}/fs-hash`, {
+    apiFetch<unknown>(`/agents/${encodeURIComponent(id)}/fs-hash`, {
       method: 'POST',
       body: JSON.stringify({ path }),
     }),
   procList: (id: string) =>
-    apiFetch<unknown>(`/agents/${id}/proc-list`, { method: 'POST', body: '{}' }),
+    apiFetch<unknown>(`/agents/${encodeURIComponent(id)}/proc-list`, { method: 'POST', body: '{}' }),
   procKill: (id: string, pid: number) =>
-    apiFetch<unknown>(`/agents/${id}/proc-kill`, {
+    apiFetch<unknown>(`/agents/${encodeURIComponent(id)}/proc-kill`, {
       method: 'POST',
       body: JSON.stringify({ pid }),
     }),
   procStart: (id: string, exe: string, args?: string) =>
-    apiFetch<unknown>(`/agents/${id}/proc-start`, {
+    apiFetch<unknown>(`/agents/${encodeURIComponent(id)}/proc-start`, {
       method: 'POST',
       body: JSON.stringify({ executable: exe, args: args || '' }),
     }),
   capture: (id: string) =>
-    apiFetch<unknown>(`/agents/${id}/capture`, { method: 'POST', body: '{}' }),
+    apiFetch<unknown>(`/agents/${encodeURIComponent(id)}/capture`, { method: 'POST', body: '{}' }),
 
   // Screen streaming
   streamStart: (id: string, display: number, fps: number, quality: number) =>
-    apiFetch<unknown>(`/api/v1/agents/${id}/stream-start`, {
+    apiFetch<unknown>(`/api/v1/agents/${encodeURIComponent(id)}/stream-start`, {
       method: 'POST',
       body: JSON.stringify({ display, fps, quality }),
     }),
   streamStop: (id: string, streamId: string) =>
-    apiFetch<unknown>(`/api/v1/agents/${id}/stream-stop`, {
+    apiFetch<unknown>(`/api/v1/agents/${encodeURIComponent(id)}/stream-stop`, {
       method: 'POST',
       body: JSON.stringify({ stream_id: streamId }),
     }),
   streamFrame: (id: string) =>
-    apiFetch<unknown>(`/api/v1/agents/${id}/stream-frame`),
+    apiFetch<unknown>(`/api/v1/agents/${encodeURIComponent(id)}/stream-frame`),
 
   // Input (mouse/keyboard)
   pointerClick: (id: string, x: number, y: number, button: string) =>
-    apiFetch<unknown>(`/api/v1/agents/${id}/pointer-click`, {
+    apiFetch<unknown>(`/api/v1/agents/${encodeURIComponent(id)}/pointer-click`, {
       method: 'POST',
       body: JSON.stringify({ x, y, button }),
     }),
   keyPress: (id: string, key: string) =>
-    apiFetch<unknown>(`/api/v1/agents/${id}/key-press`, {
+    apiFetch<unknown>(`/api/v1/agents/${encodeURIComponent(id)}/key-press`, {
       method: 'POST',
       body: JSON.stringify({ key }),
     }),
   keyCombo: (id: string, keys: string[]) =>
-    apiFetch<unknown>(`/api/v1/agents/${id}/key-combo`, {
+    apiFetch<unknown>(`/api/v1/agents/${encodeURIComponent(id)}/key-combo`, {
       method: 'POST',
       body: JSON.stringify({ keys }),
     }),
   textInput: (id: string, text: string) =>
-    apiFetch<unknown>(`/api/v1/agents/${id}/text-input`, {
+    apiFetch<unknown>(`/api/v1/agents/${encodeURIComponent(id)}/text-input`, {
       method: 'POST',
       body: JSON.stringify({ text }),
     }),
 
   tunnelOpen: (id: string, targetHost: string, targetPort: number, listenPort?: number) =>
-    apiFetch<unknown>(`/agents/${id}/tunnel`, {
+    apiFetch<unknown>(`/agents/${encodeURIComponent(id)}/tunnel`, {
       method: 'POST',
       body: JSON.stringify({ target_host: targetHost, target_port: targetPort, listen_port: listenPort || 0 }),
     }),
   tunnelList: (id: string) =>
-    apiFetch<unknown>(`/agents/${id}/tunnels`, {
+    apiFetch<unknown>(`/agents/${encodeURIComponent(id)}/tunnels`, {
       method: 'GET',
     }),
   tunnelClose: (id: string, tunnelId: string) =>
-    apiFetch<unknown>(`/agents/${id}/tunnel-close`, {
+    apiFetch<unknown>(`/agents/${encodeURIComponent(id)}/tunnel-close`, {
       method: 'POST',
       body: JSON.stringify({ tunnel_id: tunnelId }),
     }),
   mitmStart: (id: string, listenAddr: string, targetAddr: string, logPath?: string, reuseAddr?: boolean) =>
-    apiFetch<unknown>(`/agents/${id}/mitm-start`, {
+    apiFetch<unknown>(`/agents/${encodeURIComponent(id)}/mitm-start`, {
       method: 'POST',
       body: JSON.stringify({ listen_addr: listenAddr, target_addr: targetAddr, log_path: logPath || '', reuse_addr: reuseAddr || false }),
     }),
   mitmStop: (id: string, mitmId: string) =>
-    apiFetch<unknown>(`/agents/${id}/mitm-stop`, { method: 'POST', body: JSON.stringify({ mitm_id: mitmId }) }),
+    apiFetch<unknown>(`/agents/${encodeURIComponent(id)}/mitm-stop`, { method: 'POST', body: JSON.stringify({ mitm_id: mitmId }) }),
   mitmTraffic: (id: string, mitmId: string) =>
-    apiFetch<unknown>(`/agents/${id}/mitm-traffic`, { method: 'POST', body: JSON.stringify({ mitm_id: mitmId }) }),
+    apiFetch<unknown>(`/agents/${encodeURIComponent(id)}/mitm-traffic`, { method: 'POST', body: JSON.stringify({ mitm_id: mitmId }) }),
   sniffStart: (id: string, targetHost: string, targetPort: number, duration?: number) =>
-    apiFetch<unknown>(`/agents/${id}/sniff`, {
+    apiFetch<unknown>(`/agents/${encodeURIComponent(id)}/sniff`, {
       method: 'POST',
       body: JSON.stringify({ target_host: targetHost, target_port: targetPort, duration: duration || 0 }),
     }),
   sniffStop: (id: string, sniffId: string) =>
-    apiFetch<unknown>(`/agents/${id}/sniff-stop`, { method: 'POST', body: JSON.stringify({ sniff_id: sniffId }) }),
+    apiFetch<unknown>(`/agents/${encodeURIComponent(id)}/sniff-stop`, { method: 'POST', body: JSON.stringify({ sniff_id: sniffId }) }),
   debugAttach: (id: string, pid: number) =>
-    apiFetch<unknown>(`/agents/${id}/debug-attach`, {
+    apiFetch<unknown>(`/agents/${encodeURIComponent(id)}/debug-attach`, {
       method: 'POST',
       body: JSON.stringify({ pid }),
     }),
   debugAttachByName: (id: string, processName: string) =>
-    apiFetch<unknown>(`/agents/${id}/debug-attach`, {
+    apiFetch<unknown>(`/agents/${encodeURIComponent(id)}/debug-attach`, {
       method: 'POST',
       body: JSON.stringify({ pid: 0, process_name: processName }),
     }),
   debugDetach: (id: string, debugId: string) =>
-    apiFetch<unknown>(`/agents/${id}/debug-detach`, { method: 'POST', body: JSON.stringify({ debug_id: debugId }) }),
+    apiFetch<unknown>(`/agents/${encodeURIComponent(id)}/debug-detach`, { method: 'POST', body: JSON.stringify({ debug_id: debugId }) }),
   debugReadMem: (id: string, debugId: string, addr: number, size: number) =>
-    apiFetch<unknown>(`/agents/${id}/debug-read-mem`, {
+    apiFetch<unknown>(`/agents/${encodeURIComponent(id)}/debug-read-mem`, {
       method: 'POST',
       body: JSON.stringify({ debug_id: debugId, address: addr, size }),
     }),
   debugModules: (id: string, debugId: string) =>
-    apiFetch<unknown>(`/agents/${id}/debug-modules`, { method: 'POST', body: JSON.stringify({ debug_id: debugId }) }),
+    apiFetch<unknown>(`/agents/${encodeURIComponent(id)}/debug-modules`, { method: 'POST', body: JSON.stringify({ debug_id: debugId }) }),
   debugMemQuery: (id: string, debugId: string, addr: number) =>
-    apiFetch<unknown>(`/agents/${id}/debug-mem-query`, {
+    apiFetch<unknown>(`/agents/${encodeURIComponent(id)}/debug-mem-query`, {
       method: 'POST',
       body: JSON.stringify({ debug_id: debugId, address: addr }),
     }),
@@ -213,7 +213,7 @@ export const api = {
   // the server resolves it inside its managed artifacts directory, so the UI
   // never hardcodes a server path.
   createTransfer: (id: string, direction: string, remotePath: string, localPath?: string, chunkSize?: number) =>
-    apiFetch<unknown>(`/agents/${id}/transfer`, {
+    apiFetch<unknown>(`/agents/${encodeURIComponent(id)}/transfer`, {
       method: 'POST',
       body: JSON.stringify({ direction, remote_path: remotePath, local_path: localPath || '', chunk_size: chunkSize || 65536 }),
     }),
@@ -297,9 +297,9 @@ export const api = {
 
   // Agent capabilities + redeploy
   getAgentCapabilities: (id: string) =>
-    apiFetch<{ capabilities: string[] }>(`/agents/${id}/capabilities`),
+    apiFetch<{ capabilities: string[] }>(`/agents/${encodeURIComponent(id)}/capabilities`),
   redeployAgent: (id: string, capabilities: string[], serverUrl?: string) =>
-    apiFetch<{ build_id: string; status: string }>(`/agents/${id}/redeploy`, {
+    apiFetch<{ build_id: string; status: string }>(`/agents/${encodeURIComponent(id)}/redeploy`, {
       method: 'POST',
       body: JSON.stringify({ capabilities, server_url: serverUrl }),
     }),
@@ -312,12 +312,12 @@ export const api = {
 
   // Phase 4: mode control + topology
   agentModeControl: (id: string, action: string, mode: string, config?: Record<string, unknown>) =>
-    apiFetch<unknown>(`/agents/${id}/mode`, {
+    apiFetch<unknown>(`/agents/${encodeURIComponent(id)}/mode`, {
       method: 'POST',
       body: JSON.stringify({ action, mode, config }),
     }),
   getAgentMode: (id: string) =>
-    apiFetch<unknown>(`/agents/${id}/mode`),
+    apiFetch<unknown>(`/agents/${encodeURIComponent(id)}/mode`),
   getTopology: () => apiFetch<unknown>('/topology'),
   reconfigureAll: (serverUrl: string, token?: string) =>
     apiFetch<unknown>('/reconfigure', {
@@ -325,7 +325,7 @@ export const api = {
       body: JSON.stringify({ server_url: serverUrl, token: token || '' }),
     }),
   reconfigureAgent: (id: string, serverUrl: string, token?: string) =>
-    apiFetch<unknown>(`/agents/${id}/reconfigure`, {
+    apiFetch<unknown>(`/agents/${encodeURIComponent(id)}/reconfigure`, {
       method: 'POST',
       body: JSON.stringify({ server_url: serverUrl, token: token || '' }),
     }),

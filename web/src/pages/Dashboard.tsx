@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../api/client'
 import type { HealthInfo, AgentRecord, Task } from '../api/types'
 import { StatusBadge } from '../components/StatusBadge'
 import { TopologyGraph } from '../components/TopologyGraph'
 
 export default function Dashboard() {
+  const navigate = useNavigate()
   const [health, setHealth] = useState<HealthInfo | null>(null)
   const [agents, setAgents] = useState<AgentRecord[]>([])
   const [tasks, setTasks] = useState<Task[]>([])
@@ -31,9 +32,13 @@ export default function Dashboard() {
     return () => clearInterval(interval)
   }, [])
 
-  const recentTasks = (tasks || []).slice(0, 10)
-  const activeAgents = (agents || []).filter(a => a.status === 'active')
-  const staleAgents = (agents || []).filter(a => a.status === 'stale')
+  // The full fleet lives on /agents and the task list on /tasks; the landing
+  // page only carries the operational signal — agents that need a human.
+  // Capped: an all-inactive fleet must not turn the panel back into the
+  // 26-row table that /agents already owns.
+  const ATTENTION_LIMIT = 8
+  const attentionAgents = (agents || []).filter(a => a.status === 'stale' || a.status === 'inactive')
+  const shownAttention = attentionAgents.slice(0, ATTENTION_LIMIT)
 
   return (
     <div>
@@ -79,74 +84,53 @@ export default function Dashboard() {
       </div>
 
       <div className="card">
-        <div className="card-title">Connected Agents</div>
-        {agents.length === 0 ? (
-          <div className="empty-state">No agents connected</div>
+        <div className="card-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+          <span>Needs attention</span>
+          <span className="flex gap-8">
+            <Link to="/agents" className="btn btn-sm">All agents →</Link>
+            <Link to="/tasks" className="btn btn-sm">All tasks →</Link>
+          </span>
+        </div>
+        {attentionAgents.length === 0 ? (
+          <div className="empty-state">No stale or inactive agents — the full fleet list is on Agents.</div>
         ) : (
           <div className="table-container">
             <table>
               <thead>
                 <tr>
                   <th>Name</th>
-                  <th>Version</th>
-                  <th>OS / Arch</th>
                   <th>Status</th>
                   <th>Health</th>
-                  <th>Capabilities</th>
+                  <th>Last heartbeat</th>
                 </tr>
               </thead>
               <tbody>
-                {agents.map(a => (
-                  <tr key={a.agent_id} className="clickable" onClick={() => window.location.hash = `/agents/${a.agent_id}`}>
-                    <td>
-                      <Link to={`/agents/${a.agent_id}`}>{a.name || a.agent_id}</Link>
-                    </td>
-                    <td className="mono green">{a.version || '—'}</td>
-                    <td className="mono">{a.os}/{a.arch}</td>
-                    <td><StatusBadge status={a.status} /></td>
-                    <td>{(a.health_score * 100).toFixed(0)}%</td>
-                    <td className="mono dim">{(a.capabilities || []).join(', ')}</td>
-                  </tr>
-                ))}
+                {shownAttention.map(a => {
+                  // O4: agent ids may contain '/', which would be read as a path
+                  // separator and fall through to the wildcard route.
+                  const to = `/agents/${encodeURIComponent(a.agent_id)}`
+                  return (
+                    <tr key={a.agent_id} className="clickable" onClick={() => navigate(to)}>
+                      <td>
+                        <Link to={to} onClick={e => e.stopPropagation()}>{a.name || a.agent_id}</Link>
+                      </td>
+                      <td><StatusBadge status={a.status} /></td>
+                      <td>{(a.health_score * 100).toFixed(0)}%</td>
+                      <td className="dim">{a.last_heartbeat ? new Date(a.last_heartbeat).toLocaleString() : '—'}</td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
+        )}
+        {attentionAgents.length > shownAttention.length && (
+          <p className="dim mt-16" style={{ fontSize: 12 }} id="attention-more">
+            +{attentionAgents.length - shownAttention.length} more stale or inactive agents — see All agents.
+          </p>
         )}
       </div>
 
-      <div className="card">
-        <div className="card-title">Recent Tasks</div>
-        {recentTasks.length === 0 ? (
-          <div className="empty-state">No tasks</div>
-        ) : (
-          <div className="table-container">
-            <table>
-              <thead>
-                <tr>
-                  <th>Task ID</th>
-                  <th>Agent</th>
-                  <th>Type</th>
-                  <th>Schedule</th>
-                  <th>Status</th>
-                  <th>Created</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recentTasks.map(t => (
-                  <tr key={t.id}>
-                    <td className="mono dim">{t.id.slice(0, 8)}…</td>
-                    <td className="mono dim">{t.agent_id.slice(0, 12)}…</td>
-                    <td>{t.command_type}</td>
-                    <td>{t.schedule.type}</td>
-                    <td><StatusBadge status={t.status} /></td>
-                    <td className="dim">{new Date(t.created_at).toLocaleString()}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
     </div>
   )
 }

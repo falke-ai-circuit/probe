@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom'
 import { clearToken } from '../api/client'
-import { LayoutDashboard, Monitor, Wrench, Layers, Clock, Settings, LogOut, Radar, ArrowDownUp, KeyRound, GitBranch, Activity, Menu, X } from 'lucide-react'
+import { LayoutDashboard, Monitor, Wrench, Clock, Settings, LogOut, Radar, ArrowDownUp, KeyRound, GitBranch, Activity, Menu, X } from 'lucide-react'
 import { useState } from 'react'
 
 const navItems = [
@@ -12,7 +12,6 @@ const navItems = [
   { to: '/transfers', label: 'Transfers', icon: ArrowDownUp },
   { to: '/credentials', label: 'Credentials', icon: KeyRound },
   { to: '/builds', label: 'Builder', icon: Wrench },
-  { to: '/profiles', label: 'Profiles', icon: Layers },
   { to: '/settings', label: 'Settings', icon: Settings },
 ]
 

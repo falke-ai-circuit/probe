@@ -4,7 +4,6 @@ import Dashboard from './pages/Dashboard'
 import Agents from './pages/Agents'
 import AgentDetail from './pages/AgentDetail'
 import Builder from './pages/Builder'
-import Profiles from './pages/Profiles'
 import Tasks from './pages/Tasks'
 import Transfers from './pages/Transfers'
 import Credentials from './pages/Credentials'
@@ -31,7 +30,9 @@ export default function App() {
           <Route path="/agents" element={<Agents />} />
           <Route path="/agents/:id" element={<AgentDetail />} />
           <Route path="/builds" element={<Builder />} />
-          <Route path="/profiles" element={<Profiles />} />
+          {/* Profiles are presets inside Builder (P18-05). The old URL keeps
+              working: it redirects into the preset strip. */}
+          <Route path="/profiles" element={<Navigate to="/builds?presets=1" replace />} />
           <Route path="/tasks" element={<Tasks />} />
           <Route path="/transfers" element={<Transfers />} />
           <Route path="/credentials" element={<Credentials />} />

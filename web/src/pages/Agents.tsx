@@ -84,7 +84,7 @@ export default function Agents() {
          <thead><tr><th>Name</th><th>OS / Arch</th><th>Status</th><th>Health</th><th>Capabilities</th><th>Connected</th><th>Actions</th></tr></thead>
          <tbody>{filteredAgents.map(a => (
            <tr key={a.agent_id}>
-             <td><Link to={`/agents/${a.agent_id}`}>{a.name || a.agent_id}</Link></td>
+             <td><Link to={`/agents/${encodeURIComponent(a.agent_id)}`}>{a.name || a.agent_id}</Link></td>
              <td className="mono">{a.os}/{a.arch}</td>
              <td><StatusBadge status={a.status} /></td>
              <td><div className="flex gap-8" style={{ alignItems: 'center' }}>
@@ -99,7 +99,7 @@ export default function Agents() {
              </div></td>
              <td className="dim">{a.connected_at ? new Date(a.connected_at).toLocaleString() : '—'}</td>
              <td><div className="flex gap-8">
-               <Link to={`/agents/${a.agent_id}`} className="btn btn-sm"><ExternalLink size={14} /> Manage</Link>
+               <Link to={`/agents/${encodeURIComponent(a.agent_id)}`} className="btn btn-sm"><ExternalLink size={14} /> Manage</Link>
                <button className="btn btn-sm" onClick={() => openCapEditor(a)}><Settings2 size={14} /> Caps</button>
              </div></td>
            </tr>

@@ -773,6 +773,14 @@ table .trigger-badge.once { color: var(--text-muted); border-color: var(--border
   border-radius: 50%; border: 2px solid currentColor; font-size: 11px; margin-right: 8px;
 }
 .wizard-nav { display: flex; justify-content: space-between; margin-top: 24px; }
+/* P18-05: presets folded into Builder (was /profiles) */
+.preset-strip {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 16px;
+  margin-bottom: 20px;
+}
+.preset-strip .card-title { margin-bottom: 12px; }
+.preset-strip-focus { border-left: 2px solid var(--green); padding-left: 12px; }
 
 /* === MISC === */
 .loading { color: var(--text-muted); padding: 20px; text-align: center; }

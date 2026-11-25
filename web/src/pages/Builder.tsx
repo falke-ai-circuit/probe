@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { api } from '../api/client'
-import type { BuildConfig } from '../api/types'
+import type { BuildConfig, Profile } from '../api/types'
 import { StatusBadge } from '../components/StatusBadge'
 
 const ALL_CAPS = ['exec', 'filesystem', 'process', 'tunnel', 'mitm', 'debug', 'capture', 'input', 'clipboard']
@@ -46,10 +47,28 @@ export default function Builder() {
   const [vtScanning, setVTScanning] = useState<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval>>()
 
+  // Presets (formerly the /profiles page): a saved Profile is a template for
+  // the wizard fields below. The wizard never sends a profile id to the
+  // builder — applying a preset copies its values into this form.
+  const [presets, setPresets] = useState<Profile[]>([])
+  const [presetId, setPresetId] = useState('')
+  const [presetName, setPresetName] = useState('')
+  const [presetMsg, setPresetMsg] = useState('')
+  const [params] = useSearchParams()
+  const presetsRequested = params.get('presets') === '1'
+
   useEffect(() => {
     loadBuilds()
+    loadPresets()
     return () => { if (pollRef.current) clearInterval(pollRef.current) }
   }, [])
+
+  const loadPresets = async () => {
+    try {
+      const p = await api.listProfiles()
+      setPresets(p || [])
+    } catch { /* profiles endpoint optional */ }
+  }
 
   const loadBuilds = async () => {
     try {
@@ -113,6 +132,75 @@ export default function Builder() {
     window.open(api.downloadBuildUrl(id), '_blank')
   }
 
+  // applyPreset copies a saved template into the wizard fields, so the next
+  // "Build Agent" click uses it. Every field a Profile carries is restored.
+  const applyPreset = (id: string) => {
+    const p = presets.find(x => x.id === id)
+    if (!p) return
+    setOS(p.os || 'windows')
+    setArch(p.arch || 'amd64')
+    setCaps(p.capabilities || [])
+    setServerURL(p.server_url || '')
+    setPermissions(p.permissions || 'full')
+    setSandboxDir(p.sandbox_dir || '')
+    setAutostart(p.autostart)
+    if (p.disguise?.enabled) {
+      setDisguiseEnabled(true)
+      setDisguiseFilename(p.disguise.filename || '')
+      setDisguiseCompany(p.disguise.company || '')
+      setDisguiseDescription(p.disguise.description || '')
+      setDisguiseProduct(p.disguise.product_name || '')
+    } else {
+      setDisguiseEnabled(false)
+    }
+    setStep(0)
+    setPresetMsg(`Applied preset "${p.name}" to the wizard.`)
+  }
+
+  const savePreset = async () => {
+    const label = presetName.trim()
+    if (!label) {
+      setPresetMsg('Enter a preset name first.')
+      return
+    }
+    try {
+      await api.createProfile({
+        name: label,
+        os, arch,
+        capabilities: caps,
+        server_url: serverURL,
+        permissions,
+        sandbox_dir: permissions === 'sandboxed' ? sandboxDir : '',
+        autostart,
+        disguise: disguiseEnabled ? {
+          enabled: true,
+          filename: disguiseFilename,
+          company: disguiseCompany,
+          description: disguiseDescription,
+          product_name: disguiseProduct,
+        } : undefined,
+      } as Profile)
+      setPresetName('')
+      setPresetMsg(`Saved preset "${label}".`)
+      await loadPresets()
+    } catch (e) {
+      setPresetMsg(`Save failed: ${(e as Error).message}`)
+    }
+  }
+
+  const removePreset = async (id: string) => {
+    if (!id) return
+    const p = presets.find(x => x.id === id)
+    try {
+      await api.deleteProfile(id)
+      setPresetId('')
+      setPresetMsg(`Deleted preset${p ? ` "${p.name}"` : ''}.`)
+      await loadPresets()
+    } catch (e) {
+      setPresetMsg(`Delete failed: ${(e as Error).message}`)
+    }
+  }
+
   const removeBuild = async (id: string) => {
     try {
       await api.deleteBuild(id)
@@ -167,6 +255,32 @@ export default function Builder() {
       {success && <div className="success-msg">{success}</div>}
 
       <div className="card">
+        <div className={`preset-strip ${presetsRequested ? 'preset-strip-focus' : ''}`} id="preset-strip">
+          <div className="card-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+            <span>Build presets</span>
+            {presetsRequested && <span className="badge badge-blue">moved here from Profiles</span>}
+          </div>
+          <div className="flex gap-8" style={{ flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <div className="form-group" style={{ minWidth: 240, marginBottom: 0 }}>
+              <label htmlFor="preset-select">Preset</label>
+              <select id="preset-select" value={presetId} onChange={e => setPresetId(e.target.value)}>
+                <option value="">{presets.length ? 'Select a preset…' : 'No presets saved yet'}</option>
+                {presets.map(p => (
+                  <option key={p.id} value={p.id}>{p.name} — {p.os}/{p.arch} · {p.permissions}</option>
+                ))}
+              </select>
+            </div>
+            <button className="btn btn-sm" id="preset-apply" onClick={() => applyPreset(presetId)} disabled={!presetId}>Apply to wizard</button>
+            <button className="btn btn-danger btn-sm" id="preset-delete" onClick={() => removePreset(presetId)} disabled={!presetId}>Delete preset</button>
+            <div className="form-group" style={{ minWidth: 240, marginBottom: 0 }}>
+              <label htmlFor="preset-name">Save current config as</label>
+              <input id="preset-name" type="text" value={presetName} onChange={e => setPresetName(e.target.value)} placeholder="windows-full-agent" />
+            </div>
+            <button className="btn btn-primary btn-sm" id="preset-save" onClick={savePreset}>Save preset</button>
+          </div>
+          {presetMsg && <p className="dim mt-16" style={{ fontSize: 12 }} id="preset-msg">{presetMsg}</p>}
+        </div>
+
         <div className="wizard-steps">
           {wizardSteps.map((s, i) => (
             <div key={s} className={`wizard-step ${i === step ? 'active' : ''} ${i < step ? 'done' : ''}`}>
