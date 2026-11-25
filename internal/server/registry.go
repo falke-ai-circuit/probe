@@ -92,6 +92,15 @@ type AgentRecord struct {
 	LivenessSource string `json:"liveness_source"`           // "ws" | "relay" | "registry-only"
 	DispatchError  string `json:"dispatch_error,omitempty"`  // why, in a sentence, when not dispatchable
 
+	// P23-09 — provenance. Via names the relay that actually carries this
+	// row's transport, derived on every read from the live relay route (or
+	// the forward mirror, on a server that handed the agent upstream). Empty
+	// means "reached directly": omitempty is what makes a direct agent carry
+	// no carrier field at all instead of an empty string. Derived, never
+	// persisted — load() clears it, so a row written by a previous process
+	// cannot inherit a carrier it no longer has.
+	Via string `json:"via,omitempty"`
+
 	// internal — not serialized; parsed from the string fields on load.
 	connectedAt         time.Time `json:"-"`
 	lastHeartbeat       time.Time `json:"-"`
@@ -587,6 +596,8 @@ func (r *Registry) load() {
 	// defect this unit exists to kill.
 	for _, rec := range r.agents {
 		rec.Status = "inactive"
+		// P23-09: provenance is derived, never inherited from disk.
+		rec.Via = ""
 		if rec.ExecutionContext == "" {
 			rec.ExecutionContext = ExecutionContextAgentOwn
 		}

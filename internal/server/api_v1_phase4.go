@@ -173,7 +173,12 @@ func (s *Server) handleV1Topology(w http.ResponseWriter, r *http.Request) {
 					Type:    "agent",
 					Name:    vc.agentID,
 					Relayed: true,
-					Active:  true, // relayed agent is active if it has a channel
+					// P23-09: provenance from the node's own fields. The
+					// channel's session IS the relay that carries it, so
+					// this is read from the transport, not parsed out of
+					// the id and not filled from the server's own name.
+					Via:    rs.relayID,
+					Active: true, // relayed agent is active if it has a channel
 				}
 				if err == nil {
 					agentNode.Version = agentRecord.Version

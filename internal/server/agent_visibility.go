@@ -361,6 +361,36 @@ func (s *Server) decorateAgentLiveness(rec *AgentRecord) {
 		rec.Stale = true
 		rec.StaleReason = "no_transport"
 	}
+	// P23-09 — provenance on the same read as liveness, from the same truth.
+	// A row whose transport is a relay names that relay; a directly
+	// connected row leaves the field absent (omitempty), never an empty
+	// string and never the agent's own id.
+	rec.Via = ""
+	if source == LivenessSourceRelay {
+		if via, ok := s.agentCarrier(rec.AgentID); ok {
+			rec.Via = via
+		}
+	}
+}
+
+// agentCarrier names the relay that actually carries this agent's transport.
+//
+// Two carriers exist and both are read, never guessed:
+//   - a live relay route — the same entry the dispatcher resolves through, so
+//     a row that says via=<relay> is dispatched through exactly that relay;
+//   - a forward mirror — this server handed the agent upstream, and the
+//     mirror's Via is the forwarder link that carries it.
+//
+// Deliberately no fallback derives a relay from the row's own id prefix or
+// from s.addr: a guessed carrier is the same defect as no carrier at all.
+func (s *Server) agentCarrier(agentID string) (string, bool) {
+	if rec, ok := s.mirroredAgent(agentID); ok && rec.Via != "" {
+		return rec.Via, true
+	}
+	if route, ok := s.relayRouteFor(agentID); ok && route.RelayID != "" {
+		return route.RelayID, true
+	}
+	return "", false
 }
 
 // decorateAgentListLiveness applies decorateAgentLiveness to a slice. It does
