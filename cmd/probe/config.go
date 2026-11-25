@@ -68,10 +68,31 @@ type ClientConfig struct {
 	E2EEnabled bool `json:"e2e_enabled,omitempty"` // Step 13: end-to-end encryption
 }
 
+// RelayUpstreams is the relay's ordered upstream candidate list. The config
+// accepts both forms under the same `upstream` key — the legacy single string
+// and an ordered array — and normalises both to one list, so an operator
+// upgrading the binary keeps their existing config unchanged (P21-09).
+type RelayUpstreams []string
+
+// UnmarshalJSON accepts "ws://a" or ["ws://a","ws://b"].
+func (u *RelayUpstreams) UnmarshalJSON(b []byte) error {
+	var one string
+	if err := json.Unmarshal(b, &one); err == nil {
+		*u = RelayUpstreams{one}
+		return nil
+	}
+	var many []string
+	if err := json.Unmarshal(b, &many); err != nil {
+		return fmt.Errorf("upstream must be a string or an array of strings: %w", err)
+	}
+	*u = RelayUpstreams(many)
+	return nil
+}
+
 // RelayConfig holds settings for relay mode.
 type RelayConfig struct {
 	Listen      string `json:"listen"`
-	Upstream    string `json:"upstream"`
+	Upstream    RelayUpstreams `json:"upstream"`
 	Token       string `json:"token"`
 	AgentTokens string `json:"agent_tokens"`
 	CertFile    string `json:"cert_file"`
@@ -235,8 +256,8 @@ func (uc *UnifiedConfig) applyDefaults() {
 			uc.Relay.Listen = ":7701"
 		}
 		// If no upstream specified, use client's server URL
-		if uc.Relay.Upstream == "" && uc.Client != nil {
-			uc.Relay.Upstream = uc.Client.Server
+		if len(uc.Relay.Upstream) == 0 && uc.Client != nil {
+			uc.Relay.Upstream = RelayUpstreams{uc.Client.Server}
 		}
 		// If no token specified, use top-level or client token
 		if uc.Relay.Token == "" {
@@ -318,7 +339,6 @@ func (uc *UnifiedConfig) ToAgentConfig() agent.Config {
 		E2EEnabled:      c.E2EEnabled,
 	}
 
-
 	return cfg
 }
 
@@ -329,7 +349,8 @@ func (uc *UnifiedConfig) ToRelayConfig() relay.Config {
 	}
 	r := uc.Relay
 	return relay.Config{
-		UpstreamURL:  r.Upstream,
+		UpstreamURL:  firstUpstream(r.Upstream),
+		UpstreamURLs: append([]string(nil), r.Upstream...),
 		ListenAddr:   r.Listen,
 		Token:        strings.Trim(r.Token, "\"'"),
 		AgentTokens:  r.AgentTokens,
@@ -338,6 +359,16 @@ func (uc *UnifiedConfig) ToRelayConfig() relay.Config {
 		MaxAgents:    100,
 		MaxPerIP:     10,
 	}
+}
+
+// firstUpstream is the legacy single-string view of the candidate list. It is
+// kept populated so anything still reading relay.Config.UpstreamURL sees the
+// top of the list; the relay itself dials UpstreamURLs in order.
+func firstUpstream(list RelayUpstreams) string {
+	if len(list) == 0 {
+		return ""
+	}
+	return list[0]
 }
 
 // LoadConfigFromB64 decodes a base64-encoded JSON config (used by ldflags injection).

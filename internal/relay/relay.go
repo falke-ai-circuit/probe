@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,7 +18,17 @@ import (
 
 // Config holds relay configuration.
 type Config struct {
+	// UpstreamURL is the legacy single upstream target. It is still honoured:
+	// when UpstreamURLs is empty it becomes a one-element candidate list, so an
+	// operator upgrading the binary does not rewrite their config.
 	UpstreamURL string // wss://server:port/ws
+	// UpstreamURLs is the ordered upstream candidate list (P21-09). The first
+	// candidate that completes the upgrade wins; after a drop the whole list is
+	// walked again from the top. Order is the operator's, not sorted.
+	UpstreamURLs []string
+	// DialTimeout bounds one candidate's upgrade attempt (default 5s). A
+	// candidate that accepts TCP and never upgrades must not stall the walk.
+	DialTimeout time.Duration
 	ListenAddr  string // :7701
 	Token       string // relay's own token for upstream auth
 	AgentTokens string // comma-separated tokens agents must present to relay
@@ -46,6 +57,12 @@ type Relay struct {
 	// by statusMu; rendered by Status()/handleStatus in status.go.
 	statusMu sync.RWMutex
 	uplink   uplinkState
+
+	// P21-09: the ordered candidate list resolved once in New, and the
+	// per-candidate attempt record that says why each one was skipped.
+	// candidates is immutable after New; candState is guarded by statusMu.
+	candidates []candidate
+	candState  []candidateState
 
 	// P21-07: the credential in force. It starts as cfg.Token and is
 	// replaced in place when the server rotates this relay's identity, so a
@@ -80,8 +97,11 @@ func New(cfg Config) *Relay {
 	var b [1]byte
 	rand.Read(b[:])
 	// cfg.RelayID is preserved from input if already set
+	cands := resolveCandidates(cfg)
 	return &Relay{
 		cfg:      cfg,
+		candidates: cands,
+		candState:  make([]candidateState, len(cands)),
 		magic:    0x02 + (b[0] % 0xFE), // 0x02..0xFF
 		channels: NewChannelMap(),
 		ipCounts: make(map[string]int),
@@ -165,8 +185,8 @@ func (r *Relay) Run() error {
 		Handler: mux,
 	}
 
-	log.Printf("[relay] listening on %s, upstream=%s, magic=0x%02X, max-agents=%d",
-		r.cfg.ListenAddr, r.cfg.UpstreamURL, r.magic, r.cfg.MaxAgents)
+	log.Printf("[relay] listening on %s, upstreams=[%s], magic=0x%02X, max-agents=%d",
+		r.cfg.ListenAddr, strings.Join(r.candidateURLs(), ", "), r.magic, r.cfg.MaxAgents)
 
 	if r.cfg.CertFile != "" && r.cfg.KeyFile != "" {
 		return r.httpSrv.ListenAndServeTLS(r.cfg.CertFile, r.cfg.KeyFile)
@@ -174,23 +194,47 @@ func (r *Relay) Run() error {
 	return r.httpSrv.ListenAndServe()
 }
 
-// connectUpstream dials the upstream server and sends relay registration.
+// connectUpstream walks the ordered candidate list and adopts the first that
+// completes the upgrade. It is the only dial path: the initial connect and every
+// reconnect after a drop go through the same walk, so the list is always
+// re-entered from the top. Each failed candidate keeps its error (P21-09).
 func (r *Relay) connectUpstream() error {
-	headers := http.Header{}
-	headers.Set("Authorization", "Bearer "+r.Token())
-
-	conn, _, err := websocket.DefaultDialer.Dial(r.cfg.UpstreamURL, headers)
-	if err != nil {
+	if len(r.candidates) == 0 {
+		err := fmt.Errorf("no upstream candidate configured")
 		r.recordUpstreamError(err)
-		return fmt.Errorf("dial upstream: %w", err)
+		return err
 	}
 
-	r.upstreamMu.Lock()
-	r.upstream = conn
-	r.upstreamOK.Store(true)
-	r.upstreamMu.Unlock()
-	r.clearUpstreamError()
+	var failures []string
+	for i, c := range r.candidates {
+		r.noteAttempt(i)
+		conn, err := r.dial(c)
+	if err != nil {
+			r.recordCandidateFailure(i, err)
+			failures = append(failures, fmt.Sprintf("%s: %v", c.url, err))
+			log.Printf("[relay] candidate %d/%d %s skipped: %v", i+1, len(r.candidates), c.url, err)
+			continue
+		}
+		if err := r.adoptUpstream(i, conn); err != nil {
+			conn.Close()
+			r.recordCandidateFailure(i, err)
+			failures = append(failures, fmt.Sprintf("%s: %v", c.url, err))
+			log.Printf("[relay] candidate %d/%d %s skipped: %v", i+1, len(r.candidates), c.url, err)
+			continue
+		}
+		return nil
+	}
 
+	err := fmt.Errorf("no upstream candidate accepted the connection (tried %d: %s)",
+		len(r.candidates), strings.Join(failures, "; "))
+	r.recordUpstreamError(err)
+	return err
+}
+
+// adoptUpstream installs a connection that completed the upgrade and sends the
+// relay registration over it. Registration is part of the upgrade: a socket
+// that opens but cannot register has not won, and the walk moves on.
+func (r *Relay) adoptUpstream(idx int, conn *websocket.Conn) error {
 	// Generate relay ID if not set
 	relayID := r.cfg.RelayID
 	if relayID == "" {
@@ -209,20 +253,28 @@ func (r *Relay) connectUpstream() error {
 		Metadata: &RelayMetadata{
 			ListenAddr: r.cfg.ListenAddr,
 			MaxAgents:  r.cfg.MaxAgents,
-			Upstream:   r.cfg.UpstreamURL,
+			Upstream:   r.candidates[idx].url,
 		},
 	}
 	frame, err := MakeControlFrame(r.magic, reg)
 	if err != nil {
-		conn.Close()
 		return fmt.Errorf("build registration frame: %w", err)
 	}
 	if err := conn.WriteMessage(websocket.BinaryMessage, frame); err != nil {
-		conn.Close()
 		return fmt.Errorf("send registration: %w", err)
 	}
 
-	log.Printf("[relay] connected to upstream %s (id=%s)", r.cfg.UpstreamURL, relayID)
+	r.upstreamMu.Lock()
+	r.upstream = conn
+	r.upstreamOK.Store(true)
+	r.upstreamMu.Unlock()
+	r.clearUpstreamError()
+	r.markCandidateUp(idx)
+
+	// One line at connection time naming the transport that won. The transport
+	// is the port actually dialled, which is what the operator points a rule at.
+	log.Printf("[relay] connected to upstream %s (id=%s, transport=%s, candidate %d/%d)",
+		r.candidates[idx].url, relayID, transportName(r.candidates[idx].port), idx+1, len(r.candidates))
 	return nil
 }
 
@@ -244,6 +296,9 @@ func (r *Relay) dispatchFromServer() {
 			log.Printf("[relay] upstream read error: %v", err)
 			r.upstreamOK.Store(false)
 			r.recordUpstreamError(err)
+			// P21-09: the transport that was carrying the link is named as the
+			// one that went down; the watcher then re-walks the list from the top.
+			r.recordCandidateLinkLoss(err)
 			// Wait for upstreamWatcher to reconnect
 			return
 		}

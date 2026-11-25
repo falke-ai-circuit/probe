@@ -156,12 +156,12 @@ func runSupervisor(args []string) {
 		if startRelay && uc.Relay != nil {
 			relayCfg := uc.ToRelayConfig()
 			cfgJSON, _ := json.Marshal(struct {
-				Upstream    string `json:"upstream"`
+				Upstream    []string `json:"upstream"`
 				Token       string `json:"token"`
 				Listen      string `json:"listen"`
 				AgentTokens string `json:"agent_tokens"`
 			}{
-				Upstream:    relayCfg.UpstreamURL,
+				Upstream:    relayCfg.UpstreamURLs,
 				Token:       relayCfg.Token,
 				Listen:      relayCfg.ListenAddr,
 				AgentTokens: relayCfg.AgentTokens,
@@ -169,7 +169,7 @@ func runSupervisor(args []string) {
 			if err := mgr.StartMode("relay", cfgJSON); err != nil {
 				fmt.Fprintf(os.Stderr, "Failed to start relay: %v\n", err)
 			} else {
-				fmt.Fprintf(os.Stderr, "  ✓ relay mode started on %s → %s\n", relayCfg.ListenAddr, relayCfg.UpstreamURL)
+				fmt.Fprintf(os.Stderr, "  ✓ relay mode started on %s → %s\n", relayCfg.ListenAddr, strings.Join(relayCfg.UpstreamURLs, ", "))
 			}
 		}
 	}
@@ -307,12 +307,12 @@ func runSupervisorWithAutoStart(uc *UnifiedConfig, configPath string) {
 	if startRelay && uc != nil && uc.Relay != nil {
 		relayCfg := uc.ToRelayConfig()
 		cfgJSON, _ := json.Marshal(struct {
-			Upstream    string `json:"upstream"`
+			Upstream    []string `json:"upstream"`
 			Token       string `json:"token"`
 			Listen      string `json:"listen"`
 			AgentTokens string `json:"agent_tokens"`
 		}{
-			Upstream:    relayCfg.UpstreamURL,
+			Upstream:    relayCfg.UpstreamURLs,
 			Token:       relayCfg.Token,
 			Listen:      relayCfg.ListenAddr,
 			AgentTokens: relayCfg.AgentTokens,
@@ -320,7 +320,7 @@ func runSupervisorWithAutoStart(uc *UnifiedConfig, configPath string) {
 		if err := mgr.StartMode("relay", cfgJSON); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to start relay: %v\n", err)
 		} else {
-			fmt.Fprintf(os.Stderr, "  ✓ relay mode started on %s → %s\n", relayCfg.ListenAddr, relayCfg.UpstreamURL)
+			fmt.Fprintf(os.Stderr, "  ✓ relay mode started on %s → %s\n", relayCfg.ListenAddr, strings.Join(relayCfg.UpstreamURLs, ", "))
 		}
 	}
 
@@ -424,7 +424,7 @@ func registerFactories(mgr *modes.Manager) {
 
 	mgr.RegisterFactory("relay", func(cfg json.RawMessage) (modes.Mode, error) {
 		var c struct {
-			Upstream    string `json:"upstream"`
+			Upstream    RelayUpstreams `json:"upstream"`
 			Token       string `json:"token"`
 			Listen      string `json:"listen"`
 			AgentTokens string `json:"agent_tokens"`
@@ -434,7 +434,7 @@ func registerFactories(mgr *modes.Manager) {
 				return nil, fmt.Errorf("invalid relay config: %w", err)
 			}
 		}
-		if c.Upstream == "" {
+		if len(c.Upstream) == 0 {
 			return nil, fmt.Errorf("upstream is required")
 		}
 		if c.Token == "" {
@@ -445,7 +445,8 @@ func registerFactories(mgr *modes.Manager) {
 			listen = ":7701"
 		}
 		rc := relay.Config{
-			UpstreamURL: c.Upstream,
+			UpstreamURL:  firstUpstream(c.Upstream),
+			UpstreamURLs: []string(c.Upstream),
 			ListenAddr:  listen,
 			Token:       c.Token,
 			AgentTokens: c.AgentTokens,

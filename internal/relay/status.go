@@ -40,10 +40,29 @@ type PeerHello struct {
 type UpstreamStatus struct {
 	URL         string     `json:"url"`
 	Port        int        `json:"port"`
+	// P21-09: Transport names the port the winning candidate actually dialled,
+	// as a string ("443"). It is derived from the connection that upgraded, not
+	// from config order, and it is retained when the link drops: it is the last
+	// transport that won, which is what an operator goes and looks at.
+	Transport   string            `json:"transport,omitempty"`
+	Candidates  []CandidateStatus `json:"candidates,omitempty"`
 	State       string     `json:"state"` // "up" | "down"
 	ConnectedAt string     `json:"connected_at,omitempty"`
 	Peer        *PeerHello `json:"peer,omitempty"` // last known, retained on loss
 	LastError   string     `json:"last_error"`
+}
+
+// CandidateStatus is one entry of the ordered upstream candidate list, as the
+// relay last saw it. State is "up" for the candidate carrying the link, "down"
+// for one whose attempt failed, "untried" for a candidate no walk has reached
+// yet. LastError is why that candidate was skipped: a failover that reports only
+// "connected" hides which candidates are dead.
+type CandidateStatus struct {
+	URL       string `json:"url"`
+	Port      int    `json:"port"`
+	State     string `json:"state"`
+	Attempts  int    `json:"attempts"`
+	LastError string `json:"last_error"`
 }
 
 // DownstreamChannel is one multiplexed downstream channel. Kind is "agent"
@@ -80,6 +99,10 @@ type uplinkState struct {
 	peer        *PeerHello
 	connectedAt time.Time
 	lastErr     string
+	// P21-09: the candidate that won the last successful walk. Retained on
+	// link loss; empty until some candidate has completed an upgrade.
+	activeURL  string
+	activePort int
 }
 
 func (r *Relay) recordPeerHello(peer *PeerHello) {
@@ -119,6 +142,8 @@ func (r *Relay) Status() Status {
 	}
 	connectedAt := r.uplink.connectedAt
 	lastErr := r.uplink.lastErr
+	activeURL := r.uplink.activeURL
+	activePort := r.uplink.activePort
 	r.statusMu.RUnlock()
 
 	state := "down"
@@ -126,9 +151,19 @@ func (r *Relay) Status() Status {
 		state = "up"
 	}
 
+	// Until a candidate has won, the first configured candidate is the honest
+	// answer to "what are you trying to reach"; transport stays empty because
+	// no port has actually been used.
+	url, port := activeURL, activePort
+	if url == "" && len(r.candidates) > 0 {
+		url, port = r.candidates[0].url, r.candidates[0].port
+	}
+
 	up := UpstreamStatus{
-		URL:       r.cfg.UpstreamURL,
-		Port:      upstreamPort(r.cfg.UpstreamURL),
+		URL:        url,
+		Port:       port,
+		Transport:  transportName(activePort),
+		Candidates: r.candidatesSnapshot(),
 		State:     state,
 		Peer:      peer,
 		LastError: lastErr,

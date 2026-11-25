@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/falke-ai-circuit/probe/internal/relay"
 )
@@ -12,6 +13,7 @@ import (
 func runRelay(args []string) {
 	fs := flag.NewFlagSet("relay", flag.ExitOnError)
 	upstream := fs.String("upstream", "", "upstream server URL (e.g. wss://server:7700/ws)")
+	upstreams := fs.String("upstreams", "", "ordered upstream candidates, comma-separated (overrides --upstream)")
 	token := fs.String("token", "", "relay token for upstream authentication")
 	listen := fs.String("listen", ":7701", "downstream listen address")
 	agentTokens := fs.String("agent-tokens", "", "comma-separated tokens agents must present (empty = accept all)")
@@ -28,7 +30,16 @@ func runRelay(args []string) {
 		os.Exit(0)
 	}
 
-	if *upstream == "" {
+	candidates := []string{}
+	for _, u := range strings.Split(*upstreams, ",") {
+		if u = strings.TrimSpace(u); u != "" {
+			candidates = append(candidates, u)
+		}
+	}
+	if len(candidates) == 0 && *upstream != "" {
+		candidates = []string{*upstream}
+	}
+	if len(candidates) == 0 {
 		fmt.Fprintf(os.Stderr, "Error: --upstream is required\n\n")
 		fs.Usage()
 		os.Exit(1)
@@ -40,7 +51,8 @@ func runRelay(args []string) {
 	}
 
 	cfg := relay.Config{
-		UpstreamURL: *upstream,
+		UpstreamURL:  candidates[0],
+		UpstreamURLs: candidates,
 		ListenAddr:  *listen,
 		Token:       *token,
 		AgentTokens: *agentTokens,
