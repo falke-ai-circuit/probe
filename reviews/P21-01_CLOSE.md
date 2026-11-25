@@ -1,8 +1,9 @@
 # P21-01 — CLOSE
 
-**Commit:** `<sha-set-on-amend>`
+**Commit:** `6f94a3e` (unit commit: predicate, surface, refusals, tests, artefact)
 **Unit:** P21-01 · workflow `wf_probe1` · branch `r119-build`
-**Review:** `reviewed_by: PENDING` · `verdict: NEEDS-REVIEW` · `verdict_sha_of_head: <sha-set-on-amend>`
+**Review:** `reviewed_by: PENDING` · `verdict: NEEDS-REVIEW` · `verdict_sha_of_head: 6f94a3e`
+**Close record:** committed as a document-only commit that binds `6f94a3e`; a header cannot name the sha of the commit that contains it, so the record trails the unit commit by one.
 **Scope:** `internal/server/` only — `agent_visibility.go` (predicate + refusal derivation), `registry.go` (three derived fields), `server_api.go`, `api_v1_fs_transfer.go`, `credential_api.go`, `tunnel.go`, `api_v1_phase4.go`, `p2101_liveness_test.go`. No `internal/web`.
 
 ## Deliverable
