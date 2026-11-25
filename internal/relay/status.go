@@ -58,6 +58,10 @@ type DownstreamStatus struct {
 	Listen   string              `json:"listen"`
 	Agents   []DownstreamChannel `json:"agents"`
 	Channels int                 `json:"channels"`
+	// P21-08: the nested relays this relay carries. Each entry is one hop the
+	// server cannot see directly; it is retained after the nested socket dies
+	// with state=down, so the chain keeps naming the dead hop.
+	Nested []NestedStatus `json:"nested,omitempty"`
 }
 
 // Status is the document served at GET /api/v1/relay/status on the relay's
@@ -152,6 +156,7 @@ func (r *Relay) Status() Status {
 			Listen:   r.cfg.ListenAddr,
 			Agents:   agents,
 			Channels: len(channels),
+			Nested:   r.nestedSnapshot(),
 		},
 	}
 }

@@ -537,6 +537,10 @@ func (s *Server) registerV1Routes() {
 	// rotate one node's credential.
 	s.mux.HandleFunc("GET /api/v1/relays", s.handleV1Relays)
 	s.mux.HandleFunc("POST /api/v1/relays/{id}/rotate", s.handleV1RotateRelayCredential)
+
+	// P21-08: one chain object per path, with per-hop state and the failing
+	// hop named. Its own endpoint: topology stays an edge list.
+	s.mux.HandleFunc("GET /api/v1/chain", s.handleV1Chain)
 }
 
 // ---------------------------------------------------------------------------
@@ -563,14 +567,14 @@ func (s *Server) handleV1Health(w http.ResponseWriter, r *http.Request) {
 		pingTimeouts += a.PingTimeouts
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":                 "ok",
-		"server_version":         s.version,
-		"total_agents":           total,
-		"active_agents":          active,
-		"stale_agents":           stale,
-		"ping_timeouts_total":    pingTimeouts,
+		"status":                  "ok",
+		"server_version":          s.version,
+		"total_agents":            total,
+		"active_agents":           active,
+		"stale_agents":            stale,
+		"ping_timeouts_total":     pingTimeouts,
 		"stale_threshold_seconds": int64(staleThreshold.Seconds()),
-		"uptime_seconds":         int64(time.Since(startTime).Seconds()),
+		"uptime_seconds":          int64(time.Since(startTime).Seconds()),
 	})
 }
 

@@ -178,6 +178,10 @@ type Server struct {
 	relayMu sync.RWMutex
 	relays  map[string]*relaySession // relayID → session
 
+	// P21-08: per-link counters, keyed by relay id, deliberately outside
+	// relaySession so a reconnect does not reset them. The zero value works.
+	linkStats linkStatStore
+
 	// P21-03: this server's own uplink. uplinkAddr is the loopback address
 	// of the relay that carries us upstream; empty means no uplink is
 	// configured and topology reports no uplink edge at all. uplinkLast is

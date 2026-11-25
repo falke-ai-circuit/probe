@@ -39,6 +39,10 @@ type relaySession struct {
 	// whether a relay re-formed or is a different node.
 	tokenFP   string
 	startedAt string
+	// P21-08: the durable per-link counter record for this relay id. It is
+	// looked up from the server's store, not created here, so a reconnect
+	// inherits the counts of the session it replaced.
+	link *linkStat
 }
 
 // virtualConn represents a single agent behind a relay. It implements
@@ -73,7 +77,13 @@ func (vc *virtualConn) WriteJSON(v interface{}) error {
 
 	vc.session.writeMu.Lock()
 	defer vc.session.writeMu.Unlock()
-	return vc.session.conn.WriteMessage(websocket.BinaryMessage, frame)
+	err = vc.session.conn.WriteMessage(websocket.BinaryMessage, frame)
+	// P21-08: count only bytes that actually crossed the socket. A failed
+	// write is a link failure, not relayed traffic.
+	if err == nil && vc.session.link != nil {
+		vc.session.link.addBytesDown(len(data))
+	}
+	return err
 }
 
 // WriteMessage writes a raw message as a framed payload on the relay's
@@ -86,7 +96,13 @@ func (vc *virtualConn) WriteMessage(msgType int, data []byte) error {
 
 	vc.session.writeMu.Lock()
 	defer vc.session.writeMu.Unlock()
-	return vc.session.conn.WriteMessage(websocket.BinaryMessage, frame)
+	err := vc.session.conn.WriteMessage(websocket.BinaryMessage, frame)
+	// P21-08: same hook as WriteJSON — bytes are counted where the copy that
+	// carries them happened, and only when the write succeeded.
+	if err == nil && vc.session.link != nil {
+		vc.session.link.addBytesDown(len(data))
+	}
+	return err
 }
 
 // Close closes the virtual connection and removes it from the session.
@@ -190,6 +206,12 @@ func (s *Server) handleRelayConnection(conn *websocket.Conn, firstData []byte) {
 		chain:     chain,
 		tokenFP:   ident.TokenFP,
 		startedAt: time.Now().UTC().Format(time.RFC3339),
+		link:      s.linkStats.forRelay(relayID),
+	}
+	if meta != nil {
+		// P21-08: the link is up and this is where the chain read finds it.
+		// A successful registration also clears the previous failure.
+		session.link.registration(meta.ListenAddr)
 	}
 
 	// Store relay session in server's relay registry
@@ -204,6 +226,7 @@ func (s *Server) handleRelayConnection(conn *websocket.Conn, firstData []byte) {
 	// cannot be written, registration did not succeed — say so and close.
 	if err := s.sendPeerHello(session); err != nil {
 		log.Printf("[server] relay %s: peer_hello write failed: %v", relayID, err)
+		session.link.fail(err)
 		s.cleanupRelaySession(session)
 		conn.Close()
 		return
@@ -214,6 +237,9 @@ func (s *Server) handleRelayConnection(conn *websocket.Conn, firstData []byte) {
 		msgType, data, err := conn.ReadMessage()
 		if err != nil {
 			log.Printf("[server] relay %s disconnected: %v", reg.RelayID, err)
+			// P21-08: the failure that took the link down is what the chain
+			// object names after the hop disappears.
+			session.link.fail(err)
 			s.cleanupRelaySession(session)
 			return
 		}
@@ -230,6 +256,10 @@ func (s *Server) handleRelayConnection(conn *websocket.Conn, firstData []byte) {
 			s.handleRelayControl(session, payload)
 			continue
 		}
+
+		// P21-08: bytes_relayed inbound is counted here, on the payload the
+		// read loop actually hands on — not from a message count.
+		session.link.addBytesUp(len(payload))
 
 		// Agent data — find the virtual connection
 		session.channelsMu.RLock()
@@ -299,6 +329,9 @@ func (s *Server) handleRelayConnection(conn *websocket.Conn, firstData []byte) {
 					}
 					s.registry.Register(agentID, info.Name, info.Version, info.OS, info.Arch, info.Mode, info.Capabilities)
 					s.sessions.CreateSession(agentID)
+					// P21-08: per-link counters, hooked where the agent is
+					// admitted on this link.
+					s.noteRelayedAgent(session, agentID)
 
 					// Register the virtual connection in the server's conn map
 					s.mu.Lock()
@@ -396,6 +429,7 @@ func (s *Server) handleRelayControl(session *relaySession, payload []byte) {
 			// P21-05: the socket is gone, so the route must be too. A stale
 			// route may never answer for a closed channel.
 			s.dropRelayRoute(vc.agentID)
+			session.link.agentGone(vc.agentID)
 			s.registry.Unregister(vc.agentID)
 			s.sessions.RemoveSession(vc.agentID)
 			s.ClearTokenExpiry(vc.agentID)
@@ -425,6 +459,7 @@ func (s *Server) cleanupRelaySession(session *relaySession) {
 			// P21-05: a link that dies takes every route it carried with it.
 			// The map is swept here, before the sockets' owners can be asked.
 			s.dropRelayRoute(vc.agentID)
+			session.link.agentGone(vc.agentID)
 			s.registry.Unregister(vc.agentID)
 			s.sessions.RemoveSession(vc.agentID)
 			s.ClearTokenExpiry(vc.agentID)

@@ -54,6 +54,12 @@ type Relay struct {
 	credMu  sync.RWMutex
 	token   string
 	tokenFP string
+
+	// P21-08: the nested relays this relay carries (relay chaining), keyed by
+	// nested relay id and retained after a nested socket dies. Guarded by
+	// nestedMu; served in the status document as downstream.nested.
+	nestedMu sync.Mutex
+	nested   map[string]*nestedLink
 }
 
 var upgrader = &websocket.Upgrader{
@@ -449,6 +455,11 @@ func (r *Relay) handleDownstream(w http.ResponseWriter, req *http.Request) {
 // Relay A connects to Relay B as a downstream agent. Relay B sees Relay A's
 // relay_register and creates a nested relay session. Relay B forwards Relay A's
 // channels as its own channels to Server Y. Server Y sees: relay/B/relay/A/Z
+//
+// P21-08: Relay B is also the only party that can report the B↔A link. This
+// function keeps a durable record of it (nested.go) and counts bytes at the
+// copy points, so the server's chain object can render the hop and keep
+// rendering it after it dies.
 func (r *Relay) handleNestedRelay(conn *websocket.Conn, ctrl *ControlMessage, ip string, firstData []byte) {
 	nestedRelayID := ctrl.RelayID
 	if nestedRelayID == "" {
@@ -456,6 +467,14 @@ func (r *Relay) handleNestedRelay(conn *websocket.Conn, ctrl *ControlMessage, ip
 	}
 
 	log.Printf("[relay] nested relay connected: id=%s from %s", nestedRelayID, ip)
+
+	// P21-08: the nested link is up as of this registration. A second
+	// registration of the same id is counted as a reconnect.
+	listenAddr := ""
+	if ctrl.Metadata != nil {
+		listenAddr = ctrl.Metadata.ListenAddr
+	}
+	r.nestedUp(nestedRelayID, listenAddr)
 
 	// We treat the nested relay as a sub-multiplexer. Messages from the nested
 	// relay are framed with the nested relay's magic + channel IDs. We need to
@@ -484,7 +503,13 @@ func (r *Relay) handleNestedRelay(conn *websocket.Conn, ctrl *ControlMessage, ip
 			return fmt.Errorf("no nested channel for our channel %d", ourChanID)
 		}
 		frame := MakeFrame(nestedMagic, nestedChID, payload)
-		return conn.WriteMessage(websocket.BinaryMessage, frame)
+		err := conn.WriteMessage(websocket.BinaryMessage, frame)
+		// P21-08: bytes counted where the payload copy into the nested
+		// frame happened, and only when the write succeeded.
+		if err == nil {
+			r.nestedBytesDown(nestedRelayID, len(payload))
+		}
+		return err
 	}
 
 	// Register the nested relay's own registration with our upstream
@@ -505,10 +530,12 @@ func (r *Relay) handleNestedRelay(conn *websocket.Conn, ctrl *ControlMessage, ip
 	r.upstreamMu.Unlock()
 
 	// Main loop: read framed messages from nested relay, re-frame and forward upstream
+	var closeErr error
 	for {
 		msgType, data, err := conn.ReadMessage()
 		if err != nil {
 			log.Printf("[relay] nested relay %s disconnected: %v", nestedRelayID, err)
+			closeErr = err
 			break
 		}
 		_ = msgType
@@ -520,6 +547,12 @@ func (r *Relay) handleNestedRelay(conn *websocket.Conn, ctrl *ControlMessage, ip
 			continue
 		}
 		_ = nestedMagic
+
+		if nestedChanID != 0 {
+			// P21-08: payload bytes arriving from the nested relay, counted
+			// on the same read that hands them on.
+			r.nestedBytesUp(nestedRelayID, len(payload))
+		}
 
 		if nestedChanID == 0 {
 			// Control message from nested relay
@@ -537,6 +570,8 @@ func (r *Relay) handleNestedRelay(conn *websocket.Conn, ctrl *ControlMessage, ip
 				nestedChanMap[nestedCtrl.ChannelID] = ourChanID
 				reverseChanMap[ourChanID] = nestedCtrl.ChannelID
 				nestedMu.Unlock()
+				// P21-08: one channel is one client on this nested link.
+				r.nestedChannel(nestedRelayID, ourChanID)
 
 				// Set the NestedWrite callback so dispatchFromServer can
 				// forward server→agent traffic back through the nested relay
@@ -567,6 +602,7 @@ func (r *Relay) handleNestedRelay(conn *websocket.Conn, ctrl *ControlMessage, ip
 				nestedMu.Unlock()
 				if ok {
 					r.channels.Close(ourChanID)
+					r.nestedChannelGone(nestedRelayID, ourChanID)
 					// Forward channel_close
 					fwdCtrl := ControlMessage{
 						Type:      "channel_close",
@@ -620,6 +656,11 @@ func (r *Relay) handleNestedRelay(conn *websocket.Conn, ctrl *ControlMessage, ip
 		}
 		r.upstreamMu.Unlock()
 	}
+
+	// P21-08: the nested link is down, and stays on record. Its channel ids
+	// are retained: they are what places an agent behind this hop in the
+	// server's chain object after the hop is gone.
+	r.nestedDown(nestedRelayID, closeErr)
 
 	// Cleanup: close all nested channels
 	nestedMu.Lock()
