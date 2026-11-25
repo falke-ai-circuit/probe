@@ -219,12 +219,11 @@ func (s *Server) handleAgentTunnel(w http.ResponseWriter, r *http.Request, agent
 		return
 	}
 
-	// Verify agent is connected
-	s.mu.RLock()
-	_, ok := s.conns[agentID]
-	s.mu.RUnlock()
-	if !ok {
-		http.Error(w, fmt.Sprintf("agent %s not connected", agentID), http.StatusServiceUnavailable)
+	// Verify the agent can be dispatched. P21-01: the answer comes from the
+	// one predicate, and the refusal states its reason instead of a bare
+	// "not connected". A dispatchable agent is never refused here for absence.
+	if dispatchable, _, reason := s.AgentDispatchability(agentID); !dispatchable {
+		http.Error(w, reason, http.StatusServiceUnavailable)
 		return
 	}
 

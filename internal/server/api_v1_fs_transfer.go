@@ -193,7 +193,7 @@ func (s *Server) handleV1FSRawUpload(w http.ResponseWriter, r *http.Request) {
 	partPath := path + ".part"
 	partSize, exists, _, err := s.remoteStat(agentID, partPath)
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "AGENT_UNAVAILABLE", err.Error())
+		s.writeDispatchRefusal(w, agentID, "fs-upload-stat", err)
 		return
 	}
 	if !exists {
@@ -213,7 +213,7 @@ func (s *Server) handleV1FSRawUpload(w http.ResponseWriter, r *http.Request) {
 
 	newSize, _, _, err := s.remoteStat(agentID, partPath)
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "AGENT_UNAVAILABLE", err.Error())
+		s.writeDispatchRefusal(w, agentID, "fs-upload-stat-after-write", err)
 		return
 	}
 	next := offset + int64(len(body))
@@ -244,7 +244,7 @@ func (s *Server) handleV1FSRawUpload(w http.ResponseWriter, r *http.Request) {
 	if total > 0 && next >= total {
 		whole, size, err := s.remoteHash(agentID, partPath)
 		if err != nil {
-			writeError(w, http.StatusServiceUnavailable, "AGENT_UNAVAILABLE", err.Error())
+			s.writeDispatchRefusal(w, agentID, "fs-upload-hash", err)
 			return
 		}
 		if want := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Probe-Sha256"))); want != "" && want != whole {
@@ -262,7 +262,8 @@ func (s *Server) handleV1FSRawUpload(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if _, err := s.forwardToAgent(agentID, protocol.TypeFSMove, protocol.FSParams{From: partPath, To: path}); err != nil {
-			writeError(w, http.StatusServiceUnavailable, "AGENT_UNAVAILABLE", "finalize rename failed: "+err.Error())
+			s.writeDispatchRefusal(w, agentID, "fs-upload-finalize",
+				fmt.Errorf("finalize rename failed: %w", err))
 			return
 		}
 		resp["state"] = "completed"
@@ -344,7 +345,7 @@ func (s *Server) handleV1FSDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	size, exists, modTime, err := s.remoteStat(agentID, path)
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "AGENT_UNAVAILABLE", err.Error())
+		s.writeDispatchRefusal(w, agentID, "fs-download-stat", err)
 		return
 	}
 	if !exists {
@@ -393,7 +394,7 @@ func (s *Server) handleV1FSDownload(w http.ResponseWriter, r *http.Request) {
 
 	body, next, err := s.readRemoteRange(agentID, path, start, end)
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "AGENT_UNAVAILABLE", err.Error())
+		s.writeDispatchRefusal(w, agentID, "fs-download-read", err)
 		return
 	}
 

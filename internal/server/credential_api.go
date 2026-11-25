@@ -186,9 +186,14 @@ func (s *Server) sealCredentialForExec(agentID, name, jobID, mode string) (strin
 			_ = ch
 		}
 		cleanup()
+		// P21-01: the refusal names the predicate's reason. A dispatchable
+		// agent whose link refused the frame is a delivery failure (502), not
+		// an absent agent (503) — the old code answered AGENT_UNAVAILABLE for
+		// both, which is the disagreement this unit removes.
+		d := s.dispatchRefusal(agentID, "credential-delivery", err)
 		return "", func() {}, &credentialExecError{
-			http.StatusServiceUnavailable, "AGENT_UNAVAILABLE",
-			"credential handle could not be delivered: " + s.redactor.Redact(err.Error()),
+			d.Status, d.Code,
+			"credential handle could not be delivered: " + s.redactor.Redact(d.Message),
 		}
 	}
 	store.Touch(name)

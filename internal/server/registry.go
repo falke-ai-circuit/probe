@@ -82,6 +82,16 @@ type AgentRecord struct {
 	PingMisses              int    `json:"ping_misses"`               // current consecutive unanswered pings
 	LastPingTimeoutAt       string `json:"last_ping_timeout_at,omitempty"`
 
+	// P21-01 — one liveness truth. These three fields are the predicate's
+	// answer (AgentDispatchability), stamped on every read path that returns a
+	// row. They are derived, never persisted: dispatchable is not a fact about
+	// a previous server process. dispatch_error is present exactly when
+	// dispatchable is false, so a client never shows a green row with a dead
+	// control.
+	Dispatchable   bool   `json:"dispatchable"`
+	LivenessSource string `json:"liveness_source"`           // "ws" | "relay" | "registry-only"
+	DispatchError  string `json:"dispatch_error,omitempty"`  // why, in a sentence, when not dispatchable
+
 	// internal — not serialized; parsed from the string fields on load.
 	connectedAt         time.Time `json:"-"`
 	lastHeartbeat       time.Time `json:"-"`

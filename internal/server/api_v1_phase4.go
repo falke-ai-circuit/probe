@@ -73,13 +73,11 @@ func (s *Server) handleV1GetAgentMode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if agent is connected
-	s.mu.RLock()
-	_, connected := s.conns[agentID]
-	s.mu.RUnlock()
-
-	if !connected {
-		http.Error(w, "agent not connected", http.StatusNotFound)
+	// P21-01: this handler used to answer a bare 404 "agent not connected" for
+	// an agent the list called active — the same disagreement exec had, one
+	// surface over. The predicate names the real state instead.
+	if dispatchable, _, reason := s.AgentDispatchability(agentID); !dispatchable {
+		http.Error(w, reason, http.StatusNotFound)
 		return
 	}
 

@@ -3,11 +3,180 @@ package server
 import (
 	"fmt"
 	"log"
+	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/falke-ai-circuit/probe/internal/protocol"
 )
+
+// P21-01 — one liveness truth.
+//
+// P12-03 made the health row honest about the transport. It did not give the
+// question a single home: /api/v1/agents built its own answer from the
+// registry, and every refusal site built its own from the conn-map, so the two
+// could disagree indefinitely (active + health 0.95 on the list, 503
+// AGENT_UNAVAILABLE on exec). AgentDispatchability below is the one answer.
+// The list handler and every refusal site derive from it; nothing else may
+// restate "is this agent dispatchable" from first principles.
+const (
+	// LivenessSourceWS: a direct WebSocket is in the conn-map.
+	LivenessSourceWS = "ws"
+	// LivenessSourceRelay: the transport is a relayed virtual channel.
+	LivenessSourceRelay = "relay"
+	// LivenessSourceRegistryOnly: the registry knows the agent, no live
+	// channel does. This is the state the old surface reported as green.
+	LivenessSourceRegistryOnly = "registry-only"
+)
+
+// AgentDispatchability answers "can this agent be dispatched right now, and how
+// do we know": (dispatchable, source, reason). reason is empty exactly when
+// dispatchable is true; otherwise it is the sentence a client shows instead of
+// a generic refusal.
+//
+// It reads the conn-map first (the same map every dispatch path reads), then
+// any live relay channel that has not reached the conn-map yet, then falls back
+// to the registry alone. Only the first case can be dispatchable: a promise the
+// dispatch path cannot keep is the defect this unit removes, not a nicety.
+func (s *Server) AgentDispatchability(agentID string) (bool, string, string) {
+	s.mu.RLock()
+	conn, ok := s.conns[agentID]
+	_, wmuOk := s.connWriteMu[agentID]
+	s.mu.RUnlock()
+
+	if ok {
+		if _, isVirtual := conn.(*virtualConn); isVirtual {
+			// A relayed channel carries its own write mutex inside the
+			// virtualConn, so the conn-map entry is the whole requirement.
+			return true, LivenessSourceRelay, ""
+		}
+		if wmuOk {
+			return true, LivenessSourceWS, ""
+		}
+		// A transport with no write mutex cannot be framed safely: forwarding
+		// would either race another writer or deadlock. Refusing here rather
+		// than promising a dispatch that the writer lock would block.
+		return false, LivenessSourceRegistryOnly,
+			"agent has a transport but no per-agent write mutex; dispatch would race another writer"
+	}
+
+	if relayID, found := s.relayChannelOwner(agentID); found {
+		return false, LivenessSourceRelay,
+			fmt.Sprintf("relay %s holds a channel for this agent but the agent is not registered for dispatch (no conn-map entry)", relayID)
+	}
+
+	if s.registry == nil {
+		// A Server without a registry has no second truth to fall back to:
+		// the conn-map is the whole answer, and it said no.
+		return false, LivenessSourceRegistryOnly,
+			fmt.Sprintf("agent %s has no live ws connection and this server has no registry", agentID)
+	}
+	rec, err := s.registry.GetHealth(agentID)
+	if err != nil {
+		return false, LivenessSourceRegistryOnly,
+			fmt.Sprintf("agent %s is in neither the conn-map nor the registry", agentID)
+	}
+	return false, LivenessSourceRegistryOnly, registryOnlyReason(rec)
+}
+
+// relayChannelOwner reports which connected relay holds a channel for agentID.
+// The conn-map is authoritative; this only names a channel that exists before
+// the agent's own registration completed, so the reason can point at it.
+func (s *Server) relayChannelOwner(agentID string) (string, bool) {
+	s.relayMu.RLock()
+	defer s.relayMu.RUnlock()
+	for id, sess := range s.relays {
+		sess.channelsMu.RLock()
+		for _, vc := range sess.channels {
+			if vc.agentID == agentID {
+				sess.channelsMu.RUnlock()
+				return id, true
+			}
+		}
+		sess.channelsMu.RUnlock()
+	}
+	return "", false
+}
+
+// registryOnlyReason is the sentence for "the registry knows it, no live
+// channel does" — the disagreement the operator used to see as a green row.
+func registryOnlyReason(rec AgentRecord) string {
+	seen := "never heard from"
+	if rec.LastSeenAgeSeconds >= 0 {
+		seen = "last seen " + humanizeAge(rec.LastSeenAgeSeconds) + " ago"
+	}
+	return fmt.Sprintf("registered (status=%s), no live ws connection, %s", rec.Status, seen)
+}
+
+// humanizeAge renders a second count as the coarsest unit that still reads
+// truly: 4m, 3h, 2d.
+func humanizeAge(seconds int64) string {
+	switch {
+	case seconds < 60:
+		return fmt.Sprintf("%ds", seconds)
+	case seconds < 3600:
+		return fmt.Sprintf("%dm", seconds/60)
+	case seconds < 86400:
+		return fmt.Sprintf("%dh", seconds/3600)
+	default:
+		return fmt.Sprintf("%dd", seconds/86400)
+	}
+}
+
+// DispatchRefusal is the honest answer to "why did this command not reach the
+// agent". Status/Code/Message are the HTTP surface; Detail carries the
+// predicate's own verdict so a caller can see which truth it was told.
+type DispatchRefusal struct {
+	Status  int
+	Code    string
+	Message string
+	Detail  map[string]interface{}
+}
+
+// dispatchRefusal derives the refusal for a failed dispatch from the predicate.
+//
+// When the predicate says the agent IS dispatchable, the command was not
+// refused for absence: whatever failed is the agent's own error or the link's,
+// and it is passed through as such (502 AGENT_ERROR). Answering
+// AGENT_UNAVAILABLE there is the lie this unit removes.
+func (s *Server) dispatchRefusal(agentID, call string, err error) DispatchRefusal {
+	dispatchable, source, reason := s.AgentDispatchability(agentID)
+	detail := map[string]interface{}{
+		"call":            call,
+		"agent_id":        agentID,
+		"dispatchable":    dispatchable,
+		"liveness_source": source,
+	}
+	if err != nil {
+		detail["error"] = err.Error()
+	}
+	if dispatchable {
+		msg := "dispatch failed on a live agent"
+		if err != nil && strings.TrimSpace(err.Error()) != "" {
+			msg = err.Error()
+		}
+		return DispatchRefusal{
+			Status:  http.StatusBadGateway,
+			Code:    "AGENT_ERROR",
+			Message: msg,
+			Detail:  detail,
+		}
+	}
+	return DispatchRefusal{
+		Status:  http.StatusServiceUnavailable,
+		Code:    "AGENT_UNAVAILABLE",
+		Message: reason,
+		Detail:  detail,
+	}
+}
+
+// writeDispatchRefusal answers a command that never reached the agent with the
+// predicate's reason instead of a generic sentence.
+func (s *Server) writeDispatchRefusal(w http.ResponseWriter, agentID, call string, err error) {
+	d := s.dispatchRefusal(agentID, call, err)
+	writeErrorDetail(w, d.Status, d.Code, d.Message, d.Detail)
+}
 
 // P12-03 — agent-state visibility.
 //
@@ -150,26 +319,23 @@ func (s *Server) pongToPending(env protocol.Envelope) bool {
 
 // decorateAgentLiveness stamps a health snapshot with the transport truth the
 // execution paths use. A row the exec path would refuse with 503 must never
-// read as healthy here.
+// read as healthy here, and the row now says which truth it rests on.
 func (s *Server) decorateAgentLiveness(rec *AgentRecord) {
-	s.mu.RLock()
-	_, connected := s.conns[rec.AgentID]
-	s.mu.RUnlock()
-	if !connected {
+	dispatchable, source, reason := s.AgentDispatchability(rec.AgentID)
+	rec.Dispatchable = dispatchable
+	rec.LivenessSource = source
+	rec.DispatchError = reason
+	if !dispatchable {
 		rec.Stale = true
 		rec.StaleReason = "no_transport"
 	}
 }
 
-// decorateAgentListLiveness applies decorateAgentLiveness to a slice, one
-// RLock for the whole list instead of one per row.
+// decorateAgentListLiveness applies decorateAgentLiveness to a slice. It does
+// not hold s.mu across the call: the predicate takes the conn-map lock itself,
+// and Go mutexes are not reentrant.
 func (s *Server) decorateAgentListLiveness(recs []AgentRecord) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	for i := range recs {
-		if _, ok := s.conns[recs[i].AgentID]; !ok {
-			recs[i].Stale = true
-			recs[i].StaleReason = "no_transport"
-		}
+		s.decorateAgentLiveness(&recs[i])
 	}
 }

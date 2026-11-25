@@ -368,11 +368,17 @@ func (s *Server) handleAgentExec(w http.ResponseWriter, r *http.Request, agentID
 		}
 		code := "AGENT_UNAVAILABLE"
 		status := http.StatusServiceUnavailable
+		message := err.Error()
 		if strings.Contains(err.Error(), "lacks required capability") {
 			code = "CAPABILITY_MISSING"
 			status = http.StatusConflict
+		} else if d := s.dispatchRefusal(agentID, "exec", err); d.Code != "" {
+			// P21-01: the refusal derives from the one predicate. An agent the
+			// list calls dispatchable never answers AGENT_UNAVAILABLE here —
+			// its own failure is passed through as AGENT_ERROR.
+			code, status, message = d.Code, d.Status, d.Message
 		}
-		writeTypedErrorDetail(w, status, code, err.Error(), map[string]interface{}{
+		writeTypedErrorDetail(w, status, code, message, map[string]interface{}{
 			"call":           "exec",
 			"agent_id":       agentID,
 			"started_at_utc": startedAt.Format(time.RFC3339Nano),
@@ -836,11 +842,21 @@ func (s *Server) forwardToAgentWithTimeout(agentID string, msgType string, param
 	writeMu, wmuOk := s.connWriteMu[agentID]
 	s.mu.RUnlock()
 	if !ok || !wmuOk {
-		s.auditLog(agentID, msgType, params, "error", "agent not connected", start, false, operatorID)
+		// P21-01: the refusal states the predicate's reason, not a generic
+		// "not connected". If the predicate says the agent IS dispatchable,
+		// this is a link failure on a live agent, never an absence — the
+		// caller must not be told the agent is gone.
+		dispatchable, _, reason := s.AgentDispatchability(agentID)
+		code := RefusalAgentNotConnected
+		if dispatchable {
+			code = RefusalDeliveryFailed
+			reason = fmt.Sprintf("agent %s is dispatchable but its transport could not be opened for %s", agentID, msgType)
+		}
+		s.auditLog(agentID, msgType, params, "error", reason, start, false, operatorID)
 		return nil, &ForwardRefusal{
-			Code:    RefusalAgentNotConnected,
+			Code:    code,
 			AgentID: agentID,
-			Message: fmt.Sprintf("agent %s not connected", agentID),
+			Message: reason,
 		}
 	}
 
