@@ -159,54 +159,73 @@ func TestP1301DuplicateSelectorRefused(t *testing.T) {
 // TestP1301E1RefusesAgentWithoutSelectorFeature proves the pre-dispatch gate
 // and its control in one test: with a selector the call is 409 before dispatch;
 // without one the same agent is served — so removing the gate fails this.
+// Both routes are exercised: /exec is §5.5 row 1 and a gate that only holds for
+// pointer-click is the hole this test exists to close.
 func TestP1301E1RefusesAgentWithoutSelectorFeature(t *testing.T) {
-	srv, cleanup := newV1TestServer(t)
-	defer cleanup()
-	attachP1301Agent(t, srv, "old1", "1.19.0", []string{"input"},
-		&resultConn{srv: srv, payload: map[string]interface{}{"success": true}})
-
-	rec := postP1301(srv, "/api/v1/agents/old1/pointer-click", `{"context":"x11::0","x":1,"y":2}`)
-	detail := wantRefusal(t, rec, http.StatusConflict, protocol.ErrUnsupportedAgent, "")
-	if detail["feature"] != featureContextSelector {
-		t.Fatalf("detail.feature = %v, want %q", detail["feature"], featureContextSelector)
+	cases := []struct{ route, selBody, freeBody string }{
+		{"/pointer-click", `{"context":"x11::0","x":1,"y":2}`, `{"x":1,"y":2}`},
+		{"/exec", `{"command":"id","context":"x11::0"}`, `{"command":"id"}`},
 	}
-	if detail["agent_version"] != "1.19.0" {
-		t.Fatalf("detail.agent_version = %v, want \"1.19.0\"", detail["agent_version"])
-	}
+	for _, tc := range cases {
+		t.Run(strings.TrimPrefix(tc.route, "/"), func(t *testing.T) {
+			srv, cleanup := newV1TestServer(t)
+			defer cleanup()
+			attachP1301Agent(t, srv, "old1", "1.19.0", []string{"input", "exec"},
+				&resultConn{srv: srv, payload: map[string]interface{}{"success": true}})
 
-	// Control: no selector → today's behaviour, byte-for-byte.
-	rec = postP1301(srv, "/api/v1/agents/old1/pointer-click", `{"x":1,"y":2}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("selector-free call to a 1.19 agent = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+			rec := postP1301(srv, "/api/v1/agents/old1"+tc.route, tc.selBody)
+			detail := wantRefusal(t, rec, http.StatusConflict, protocol.ErrUnsupportedAgent, "")
+			if detail["feature"] != featureContextSelector {
+				t.Fatalf("detail.feature = %v, want %q", detail["feature"], featureContextSelector)
+			}
+			if detail["agent_version"] != "1.19.0" {
+				t.Fatalf("detail.agent_version = %v, want \"1.19.0\"", detail["agent_version"])
+			}
+
+			// Control: no selector → today's behaviour, byte-for-byte.
+			rec = postP1301(srv, "/api/v1/agents/old1"+tc.route, tc.freeBody)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("selector-free call to a 1.19 agent = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 
 // TestP1301E2RefusesMissingContextRef proves the post-dispatch assertion: a
 // 1.21+ agent that advertises the selector and answers a context-scoped call
-// without context_ref is a 502, never a success passthrough.
+// without context_ref is a 502, never a success passthrough. /exec is included
+// for the same reason as E1: one tested route is not a gate.
 func TestP1301E2RefusesMissingContextRef(t *testing.T) {
-	srv, cleanup := newV1TestServer(t)
-	defer cleanup()
-	attachP1301Agent(t, srv, "new1", "1.21.0",
-		[]string{featureContextSelector, "input"},
-		&resultConn{srv: srv, payload: map[string]interface{}{"success": true}})
-
-	rec := postP1301(srv, "/api/v1/agents/new1/pointer-click", `{"context":"wts:7","x":1,"y":2}`)
-	detail := wantRefusal(t, rec, http.StatusBadGateway, protocol.ErrProtocolViolation, "")
-	if detail["missing"] != "context_ref" {
-		t.Fatalf("detail.missing = %v, want \"context_ref\"", detail["missing"])
+	cases := []struct{ route, body string }{
+		{"/pointer-click", `{"context":"wts:7","x":1,"y":2}`},
+		{"/exec", `{"command":"id","context":"wts:7"}`},
 	}
+	for _, tc := range cases {
+		t.Run(strings.TrimPrefix(tc.route, "/"), func(t *testing.T) {
+			srv, cleanup := newV1TestServer(t)
+			defer cleanup()
+			attachP1301Agent(t, srv, "new1", "1.21.0",
+				[]string{featureContextSelector, "input", "exec"},
+				&resultConn{srv: srv, payload: map[string]interface{}{"success": true}})
 
-	// Control: the same call with the echo is a result, not a refusal.
-	attachP1301Agent(t, srv, "new2", "1.21.0",
-		[]string{featureContextSelector, "input"},
-		&resultConn{srv: srv, payload: map[string]interface{}{
-			"success":     true,
-			"context_ref": map[string]interface{}{"id": "wts:7", "kind": "wts"},
-		}})
-	rec = postP1301(srv, "/api/v1/agents/new2/pointer-click", `{"context":"wts:7","x":1,"y":2}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("result carrying context_ref = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+			rec := postP1301(srv, "/api/v1/agents/new1"+tc.route, tc.body)
+			detail := wantRefusal(t, rec, http.StatusBadGateway, protocol.ErrProtocolViolation, "")
+			if detail["missing"] != "context_ref" {
+				t.Fatalf("detail.missing = %v, want \"context_ref\"", detail["missing"])
+			}
+
+			// Control: the same call with the echo is a result, not a refusal.
+			attachP1301Agent(t, srv, "new2", "1.21.0",
+				[]string{featureContextSelector, "input", "exec"},
+				&resultConn{srv: srv, payload: map[string]interface{}{
+					"success":     true,
+					"context_ref": map[string]interface{}{"id": "wts:7", "kind": "wts"},
+				}})
+			rec = postP1301(srv, "/api/v1/agents/new2"+tc.route, tc.body)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("result carrying context_ref = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 

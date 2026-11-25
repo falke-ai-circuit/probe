@@ -296,6 +296,12 @@ type ExecParams struct {
 	IdempotencyKey string `json:"idempotency_key,omitempty"`
 }
 
+// Selector implements SelectorCarrier. Exec carries a selector like every other
+// context-scoped command: without this method the server's type assertion fails,
+// E1/E2 are skipped, and a selector sent to /exec is forwarded and silently
+// ignored by a pre-1.21 agent (§5.5 row 1).
+func (p ExecParams) Selector() (*string, *int) { return p.Context, p.Session }
+
 // JobLaunch is what a detached exec returns: no output, just the handle.
 type JobLaunch struct {
 	JobID          string `json:"job_id"`

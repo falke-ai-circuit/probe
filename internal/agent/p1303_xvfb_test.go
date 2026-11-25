@@ -13,42 +13,131 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/falke-ai-circuit/probe/internal/protocol"
 )
 
-// startBareXvfb runs an access-control-disabled Xvfb with no window manager
-// and returns its display number. It skips when the binary is not installed:
-// a missing X server is not evidence about the refusal.
+// xvfbFirstDisplay/xvfbLastDisplay bound the scan for a display this test
+// uniquely owns. The old harness derived the number from the pid (90 +
+// pid%8), so eight displays were shared by every run on the host: a run could
+// attach to a socket whose server state it did not create, and a SIGKILLed
+// predecessor left the socket and lock behind for the next one.
+const (
+	xvfbFirstDisplay = 90
+	xvfbLastDisplay  = 179
+)
+
+// xvfbDisplayFree reports whether nothing currently owns display num: neither
+// a filesystem socket, nor the lock file, nor a server answering on the socket
+// (a stale abstract-namespace socket can outlive the file).
+func xvfbDisplayFree(num int) bool {
+	if _, err := os.Stat(fmt.Sprintf("/tmp/.X11-unix/X%d", num)); err == nil {
+		return false
+	}
+	if _, err := os.Stat(fmt.Sprintf("/tmp/.X%d-lock", num)); err == nil {
+		return false
+	}
+	if d, err := x11Dial(num); err == nil {
+		d.Close()
+		return false
+	}
+	return true
+}
+
+// x11AnswersProperty is the readiness gate: a handshake is not readiness, an
+// answer to a real request is. A server still initialising can accept the
+// connection and then close mid-setup (EOF), which is what made the old
+// one-handshake check pass and probeX11 answer wmUnknown a moment later.
+// "Property absent" is a definitive answer — it is exactly what Xvfb with no
+// window manager returns.
+func x11AnswersProperty(num int) bool {
+	d, err := x11Dial(num)
+	if err != nil {
+		return false
+	}
+	defer d.Close()
+	_, err = d.Property(d.Root(), "_NET_SUPPORTING_WM_CHECK")
+	return err == nil || err == errPropAbsent
+}
+
+// waitXvfbReady polls until the server answers a property read, or the child
+// exits (its display was taken after the scan, e.g. by a peer process).
+func waitXvfbReady(num int, exited <-chan struct{}, budget time.Duration) bool {
+	deadline := time.Now().Add(budget)
+	for time.Now().Before(deadline) {
+		select {
+		case <-exited:
+			return false
+		default:
+		}
+		if x11AnswersProperty(num) {
+			return true
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return false
+}
+
+// stopXvfb kills the child, waits for it, then unlinks the socket and lock it
+// created and waits until the socket is gone — so a later run's scan cannot
+// see (or attach to) this run's remains.
+func stopXvfb(cmd *exec.Cmd, num int, exited <-chan struct{}) {
+	if cmd.Process != nil {
+		_ = cmd.Process.Kill()
+	}
+	select {
+	case <-exited:
+	case <-time.After(5 * time.Second):
+	}
+	sock := fmt.Sprintf("/tmp/.X11-unix/X%d", num)
+	_ = os.Remove(sock)
+	_ = os.Remove(fmt.Sprintf("/tmp/.X%d-lock", num))
+	for i := 0; i < 100; i++ {
+		if _, err := os.Stat(sock); os.IsNotExist(err) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// startBareXvfb runs an access-control-disabled Xvfb with no window manager on
+// a display number nothing else owns, and returns that number. It skips when
+// the binary is not installed: a missing X server is not evidence about the
+// refusal.
 func startBareXvfb(t *testing.T) int {
 	t.Helper()
 	if _, err := exec.LookPath("Xvfb"); err != nil {
 		t.Skip("Xvfb not installed: the §7.1 negative is proved on the measured substrate only")
 	}
-	num := 90 + os.Getpid()%8
-	sock := fmt.Sprintf("/tmp/.X11-unix/X%d", num)
-	cmd := exec.Command("Xvfb", fmt.Sprintf(":%d", num), "-screen", "0", "320x240x24", "-ac")
-	cmd.Stdout, cmd.Stderr = nil, nil
-	if err := cmd.Start(); err != nil {
-		t.Skipf("could not start Xvfb: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = cmd.Process.Kill()
-		_, _ = cmd.Process.Wait()
-	})
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(sock); err == nil {
-			if d, err := x11Dial(num); err == nil {
-				d.Close()
-				return num
-			}
+	var lastErr string
+	for num := xvfbFirstDisplay; num <= xvfbLastDisplay; num++ {
+		if !xvfbDisplayFree(num) {
+			continue
 		}
-		time.Sleep(50 * time.Millisecond)
+		var stderr strings.Builder
+		cmd := exec.Command("Xvfb", fmt.Sprintf(":%d", num),
+			"-screen", "0", "320x240x24", "-ac", "-nolisten", "tcp", "-noreset")
+		cmd.Stdout, cmd.Stderr = nil, &stderr
+		if err := cmd.Start(); err != nil {
+			lastErr = fmt.Sprintf("start :%d: %v", num, err)
+			continue
+		}
+		exited := make(chan struct{})
+		go func() {
+			_ = cmd.Wait()
+			close(exited)
+		}()
+		if waitXvfbReady(num, exited, 10*time.Second) {
+			t.Cleanup(func() { stopXvfb(cmd, num, exited) })
+			return num
+		}
+		stopXvfb(cmd, num, exited)
+		lastErr = fmt.Sprintf(":%d did not answer a property read: %s", num, strings.TrimSpace(stderr.String()))
 	}
-	t.Skipf("Xvfb :%d did not come up", num)
+	t.Skipf("no free Xvfb display in %d..%d (last: %s)", xvfbFirstDisplay, xvfbLastDisplay, lastErr)
 	return 0
 }
 
