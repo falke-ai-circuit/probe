@@ -41,6 +41,8 @@ func runServe(args []string) {
 	flowsPath := fs.String("flows-path", "", "Path to flow definitions JSON file (persistent). Default: /data/runtime/flows.json. Created if missing.")
 	adminPassword := fs.String("admin-password", "", "password for the default admin operator created on startup if no operators exist")
 	operatorPath := fs.String("operator-db", "", "operator database file path (default: PROBE_OPERATOR_DB env or /tmp/probe-operators.json)")
+	relayStatus := fs.String("relay-status", "", "loopback address (host:port) of the relay serving this server's uplink; enables the uplink edge in /api/v1/topology (default: PROBE_RELAY_STATUS env). Empty = no uplink configured.")
+	advertisedAddr := fs.String("advertised-addr", "", "address peers should dial for this server, pushed in peer_hello (default: PROBE_ADVERTISED_ADDR env, else host name + listen port)")
 	vtAPIKey := fs.String("vt-api-key", "", "VirusTotal API key for auto-scan after build and manual scan API (default: PROBE_VT_API_KEY env)")
 	showVersion := fs.Bool("version", false, "Print version and exit")
 	fs.Parse(args)
@@ -105,6 +107,12 @@ func runServe(args []string) {
 	if *operatorPath == "" {
 		*operatorPath = "/tmp/probe-operators.json"
 	}
+	if *relayStatus == "" {
+		*relayStatus = os.Getenv("PROBE_RELAY_STATUS")
+	}
+	if *advertisedAddr == "" {
+		*advertisedAddr = os.Getenv("PROBE_ADVERTISED_ADDR")
+	}
 	if *auditLogPath == "" {
 		*auditLogPath = os.Getenv("PROBE_AUDIT_LOG")
 	}
@@ -143,6 +151,8 @@ func runServe(args []string) {
 	}
 	srv.SetTokenTTL(*tokenTTL)
 	srv.SetVersion(appVersion)
+	srv.SetUplinkRelayStatus(*relayStatus)
+	srv.SetAdvertisedAddr(*advertisedAddr)
 	srv.SetEnrollmentPath(*enrollmentPath)
 	srv.SetCADir(*caDir)
 	srv.SetBuilderPath(*builderPath, *builderOutputDir)

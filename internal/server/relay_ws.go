@@ -146,6 +146,16 @@ func (s *Server) handleRelayConnection(conn *websocket.Conn, firstData []byte) {
 
 	log.Printf("[server] relay connected: id=%s, magic=0x%02X", relayID, magic)
 
+	// P21-03: one message down the same socket, at registration success.
+	// This is the downstream server's only record of its own peer. If it
+	// cannot be written, registration did not succeed — say so and close.
+	if err := s.sendPeerHello(session); err != nil {
+		log.Printf("[server] relay %s: peer_hello write failed: %v", relayID, err)
+		s.cleanupRelaySession(session)
+		conn.Close()
+		return
+	}
+
 	// Main loop: read framed messages from relay and dispatch
 	for {
 		msgType, data, err := conn.ReadMessage()
@@ -308,6 +318,34 @@ func (s *Server) cleanupRelaySession(session *relaySession) {
 	s.relayMu.Unlock()
 
 	log.Printf("[server] relay %s: cleaned up %d channels", session.relayID, len(session.channels))
+}
+
+// sendPeerHello pushes this server's identity down the uplink on the
+// registration socket, on control channel 0. Exactly one frame, once, at
+// registration success — not a poll and not a second connection (spec P2).
+func (s *Server) sendPeerHello(session *relaySession) error {
+	payload, err := json.Marshal(struct {
+		Type string        `json:"type"`
+		Peer *peerIdentity `json:"peer"`
+	}{
+		Type: "peer_hello",
+		Peer: s.peerIdentitySnapshot(),
+	})
+	if err != nil {
+		return fmt.Errorf("marshal peer_hello: %w", err)
+	}
+
+	frame := make([]byte, 5+len(payload))
+	frame[0] = session.magic
+	binary.BigEndian.PutUint32(frame[1:5], 0) // control channel
+	copy(frame[5:], payload)
+
+	session.writeMu.Lock()
+	defer session.writeMu.Unlock()
+	if err := session.conn.WriteMessage(websocket.BinaryMessage, frame); err != nil {
+		return fmt.Errorf("write peer_hello: %w", err)
+	}
+	return nil
 }
 
 // parseRelayFrame parses a relay framing header.

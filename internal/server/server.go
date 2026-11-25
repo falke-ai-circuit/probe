@@ -173,6 +173,19 @@ type Server struct {
 	relayMu sync.RWMutex
 	relays  map[string]*relaySession // relayID → session
 
+	// P21-03: this server's own uplink. uplinkAddr is the loopback address
+	// of the relay that carries us upstream; empty means no uplink is
+	// configured and topology reports no uplink edge at all. uplinkLast is
+	// the last successful status read, retained when the relay goes away so
+	// a dead link renders as degraded with its last known peer.
+	uplinkMu       sync.RWMutex
+	uplinkAddr     string
+	uplinkLast     *uplinkRelayStatus
+	uplinkClient   *http.Client
+	advertisedAddr string
+	serverID       string
+	serverName     string
+
 	// Phase 4 Step 11: forward policy — server-as-relay selective forwarding.
 	// When this server is also running relay mode, agents with policy "relay"
 	// have their traffic forwarded upstream. "local" = keep local only.

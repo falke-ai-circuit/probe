@@ -17,12 +17,15 @@ var frameMagic byte = 0x7B // default, overridden by Relay.Run()
 
 // ControlMessage is sent on channelID=0 for relay lifecycle events.
 type ControlMessage struct {
-	Type      string          `json:"type"`       // "relay_register", "channel_open", "channel_close", "heartbeat"
+	Type      string          `json:"type"` // "relay_register", "channel_open", "channel_close", "heartbeat", "peer_hello"
 	ChannelID uint32          `json:"channel_id,omitempty"`
 	RelayID   string          `json:"relay_id,omitempty"`
 	Token     string          `json:"token,omitempty"`
 	AgentInfo json.RawMessage `json:"agent_info,omitempty"` // for channel_open: the agent's AgentInfo envelope
 	Metadata  *RelayMetadata  `json:"metadata,omitempty"`   // Phase 4: relay topology metadata
+	// P21-03: peer_hello carries the upstream server's identity down the
+	// uplink; absent on every relay→server control message.
+	Peer *PeerHello `json:"peer,omitempty"`
 }
 
 // RelayMetadata carries relay topology information to the server.
@@ -73,12 +76,12 @@ type ChannelMap struct {
 
 // Channel represents a single downstream agent connection through the relay.
 type Channel struct {
-	ID       uint32
-	Conn     *websocket.Conn // downstream agent WebSocket connection (nil for virtual channels)
-	OnClose  func()
-	sendBuf  chan []byte // buffered messages waiting for upstream
-	closed   bool
-	closeMu  sync.Mutex
+	ID      uint32
+	Conn    *websocket.Conn // downstream agent WebSocket connection (nil for virtual channels)
+	OnClose func()
+	sendBuf chan []byte // buffered messages waiting for upstream
+	closed  bool
+	closeMu sync.Mutex
 	// NestedWrite is set for virtual channels (relay chaining) to forward
 	// server→agent traffic back through the nested relay's connection.
 	// It takes (ourChanID, payload) and returns an error.

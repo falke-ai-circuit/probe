@@ -43,6 +43,8 @@ func main() {
 	allowedCIDR := flag.String("allowed-cidr", "100.64.0.0/10,10.10.10.0/24,172.16.0.0/12", "CIDR ranges allowed for WebUI/API HTTP routes (default: Tailscale 100.64.0.0/10 + subnet-routed 10.10.10.0/24 + Docker bridges 172.16.0.0/12). Comma-separated for multiple. /ws is always open from any IP. Set to 0.0.0.0/0 to disable.")
 	adminPassword := flag.String("admin-password", "", "password for the default admin operator created on startup if no operators exist")
 	operatorPath := flag.String("operator-db", "", "operator database file path (default: PROBE_OPERATOR_DB env or /tmp/probe-operators.json)")
+	relayStatus := flag.String("relay-status", "", "loopback address (host:port) of the relay serving this server's uplink; enables the uplink edge in /api/v1/topology (default: PROBE_RELAY_STATUS env). Empty = no uplink configured.")
+	advertisedAddr := flag.String("advertised-addr", "", "address peers should dial for this server, pushed in peer_hello (default: PROBE_ADVERTISED_ADDR env, else host name + listen port)")
 	vtAPIKey := flag.String("vt-api-key", "", "VirusTotal API key for auto-scan after build and manual scan API (default: PROBE_VT_API_KEY env)")
 	showVersion := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
@@ -107,6 +109,12 @@ func main() {
 	if *operatorPath == "" {
 		*operatorPath = "/tmp/probe-operators.json"
 	}
+	if *relayStatus == "" {
+		*relayStatus = os.Getenv("PROBE_RELAY_STATUS")
+	}
+	if *advertisedAddr == "" {
+		*advertisedAddr = os.Getenv("PROBE_ADVERTISED_ADDR")
+	}
 	if *vtAPIKey == "" {
 		*vtAPIKey = os.Getenv("PROBE_VT_API_KEY")
 	}
@@ -152,6 +160,8 @@ func main() {
 	// the server, so /api/v1/health served "server_version":"" on this
 	// binary while `probe serve` reported correctly. One line, same source.
 	srv.SetVersion(appVersion)
+	srv.SetUplinkRelayStatus(*relayStatus)
+	srv.SetAdvertisedAddr(*advertisedAddr)
 	srv.SetRequireAPIAuth(*requireAPIAuth)
 	srv.SetEnrollmentPath(*enrollmentPath)
 	srv.SetCADir(*caDir)

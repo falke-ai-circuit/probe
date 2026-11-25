@@ -15,29 +15,35 @@ import (
 
 // Config holds relay configuration.
 type Config struct {
-	UpstreamURL  string // wss://server:port/ws
-	ListenAddr   string // :7701
-	Token        string // relay's own token for upstream auth
-	AgentTokens  string // comma-separated tokens agents must present to relay
-	CertFile     string // TLS cert for downstream listener (optional)
-	KeyFile      string // TLS key for downstream listener (optional)
-	MaxAgents    int    // max concurrent downstream agents (default 100)
-	MaxPerIP     int    // max connections per IP (default 10)
-	RelayID      string // relay identifier (auto-generated if empty)
+	UpstreamURL string // wss://server:port/ws
+	ListenAddr  string // :7701
+	Token       string // relay's own token for upstream auth
+	AgentTokens string // comma-separated tokens agents must present to relay
+	CertFile    string // TLS cert for downstream listener (optional)
+	KeyFile     string // TLS key for downstream listener (optional)
+	MaxAgents   int    // max concurrent downstream agents (default 100)
+	MaxPerIP    int    // max connections per IP (default 10)
+	RelayID     string // relay identifier (auto-generated if empty)
 }
 
 // Relay is the bridge between downstream agents and upstream server.
 type Relay struct {
-	cfg         Config
-	magic       byte
-	channels    *ChannelMap
-	upstream    *websocket.Conn
-	upstreamMu  sync.Mutex // protects upstream connection writes
-	upstreamOK  atomic.Bool
-	httpSrv     *http.Server
+	cfg        Config
+	magic      byte
+	channels   *ChannelMap
+	upstream   *websocket.Conn
+	upstreamMu sync.Mutex // protects upstream connection writes
+	upstreamOK atomic.Bool
+	httpSrv    *http.Server
 	// IP tracking for rate limiting
-	ipMu        sync.Mutex
-	ipCounts    map[string]int
+	ipMu     sync.Mutex
+	ipCounts map[string]int
+
+	// P21-03: the relay's own record of its uplink — the peer identity the
+	// upstream pushed down (peer_hello) and the last link failure. Guarded
+	// by statusMu; rendered by Status()/handleStatus in status.go.
+	statusMu sync.RWMutex
+	uplink   uplinkState
 }
 
 var upgrader = &websocket.Upgrader{
@@ -99,6 +105,9 @@ func (r *Relay) Run() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", r.handleDownstream)
 	mux.HandleFunc("/health", r.handleHealth)
+	// P21-03: the uplink's state is served by the relay itself, on the
+	// relay's own listen port. This is the relay binary, not the server.
+	mux.HandleFunc("GET /api/v1/relay/status", r.handleStatus)
 
 	r.httpSrv = &http.Server{
 		Addr:    r.cfg.ListenAddr,
@@ -121,6 +130,7 @@ func (r *Relay) connectUpstream() error {
 
 	conn, _, err := websocket.DefaultDialer.Dial(r.cfg.UpstreamURL, headers)
 	if err != nil {
+		r.recordUpstreamError(err)
 		return fmt.Errorf("dial upstream: %w", err)
 	}
 
@@ -128,6 +138,7 @@ func (r *Relay) connectUpstream() error {
 	r.upstream = conn
 	r.upstreamOK.Store(true)
 	r.upstreamMu.Unlock()
+	r.clearUpstreamError()
 
 	// Generate relay ID if not set
 	relayID := r.cfg.RelayID
@@ -181,6 +192,7 @@ func (r *Relay) dispatchFromServer() {
 		if err != nil {
 			log.Printf("[relay] upstream read error: %v", err)
 			r.upstreamOK.Store(false)
+			r.recordUpstreamError(err)
 			// Wait for upstreamWatcher to reconnect
 			return
 		}
@@ -197,10 +209,16 @@ func (r *Relay) dispatchFromServer() {
 		_ = magic
 
 		if chanID == 0 {
-			// Control message from server (heartbeat ack, etc.)
+			// Control message from server (heartbeat ack, peer_hello, ...)
 			var ctrl ControlMessage
 			if err := json.Unmarshal(payload, &ctrl); err == nil {
-				// Handle server-side control messages if needed
+				// P21-03: the upstream server pushes its identity down this
+				// same socket on registration success. Store it; retain it on
+				// link loss so a dead uplink stays nameable.
+				if ctrl.Type == "peer_hello" && ctrl.Peer != nil {
+					r.recordPeerHello(ctrl.Peer)
+					log.Printf("[relay] peer_hello from upstream: id=%s name=%s version=%s", ctrl.Peer.ID, ctrl.Peer.Name, ctrl.Peer.Version)
+				}
 			}
 			continue
 		}
@@ -413,9 +431,9 @@ func (r *Relay) handleNestedRelay(conn *websocket.Conn, ctrl *ControlMessage, ip
 	if r.upstream != nil && r.upstreamOK.Load() {
 		// Build a relay_register for the nested relay, prefixed with our relay ID
 		nestedReg := ControlMessage{
-			Type:    "relay_register",
-			RelayID: fmt.Sprintf("%s/relay/%s", r.cfg.RelayID, nestedRelayID),
-			Token:   ctrl.Token,
+			Type:     "relay_register",
+			RelayID:  fmt.Sprintf("%s/relay/%s", r.cfg.RelayID, nestedRelayID),
+			Token:    ctrl.Token,
 			Metadata: ctrl.Metadata,
 		}
 		frame, _ := MakeControlFrame(r.magic, nestedReg)
@@ -517,12 +535,12 @@ func (r *Relay) handleNestedRelay(conn *websocket.Conn, ctrl *ControlMessage, ip
 			nestedMu.Unlock()
 			ourCh.NestedWrite = nestedWrite
 
-				// Send channel_open
-				fwdCtrl := ControlMessage{
-					Type:      "channel_open",
-					ChannelID: ourChanID,
-					RelayID:   r.cfg.RelayID,
-				}
+			// Send channel_open
+			fwdCtrl := ControlMessage{
+				Type:      "channel_open",
+				ChannelID: ourChanID,
+				RelayID:   r.cfg.RelayID,
+			}
 			frame, _ := MakeControlFrame(r.magic, fwdCtrl)
 			r.upstreamMu.Lock()
 			if r.upstream != nil {
@@ -607,6 +625,7 @@ func (r *Relay) pipeAgentToServer(conn *websocket.Conn, ch *Channel, ip string) 
 		if err != nil {
 			log.Printf("[relay] upstream write error on channel %d: %v", ch.ID, err)
 			r.upstreamOK.Store(false)
+			r.recordUpstreamError(err)
 			return
 		}
 	}

@@ -87,9 +87,9 @@ func (s *Server) handleV1GetAgentMode(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"ok":         true,
-		"agent":      agentID,
-		"connected":  true,
+		"ok":          true,
+		"agent":       agentID,
+		"connected":   true,
 		"mode_status": modeStatus,
 	})
 }
@@ -109,21 +109,28 @@ func (s *Server) handleV1Topology(w http.ResponseWriter, r *http.Request) {
 	s.relayMu.RUnlock()
 
 	type TopologyNode struct {
-		ID            string `json:"id"`
-		Type          string `json:"type"` // "server", "relay", "agent"
-		Name          string `json:"name"`
-		Version       string `json:"version,omitempty"`
-		Modes         string `json:"modes,omitempty"`
-		Relayed       bool   `json:"relayed,omitempty"`
-		Active        bool   `json:"active"`
-		ForwardPolicy string `json:"forward_policy,omitempty"` // Step 11: "relay" or "local"
+		ID            string         `json:"id"`
+		Type          string         `json:"type"` // "server", "relay", "agent"
+		Name          string         `json:"name"`
+		Version       string         `json:"version,omitempty"`
+		Modes         string         `json:"modes,omitempty"`
+		Relayed       bool           `json:"relayed,omitempty"`
+		Active        bool           `json:"active"`
+		ForwardPolicy string         `json:"forward_policy,omitempty"` // Step 11: "relay" or "local"
 		Children      []TopologyNode `json:"children,omitempty"`
 	}
 
 	type TopologyEdge struct {
 		From string `json:"from"`
 		To   string `json:"to"`
-		Type string `json:"type"` // "direct", "relay", "relayed"
+		Type string `json:"type"` // "direct", "relay", "relayed", "uplink"
+		// P21-03: the uplink edge is stateful. A down uplink stays present
+		// with a named reason and the last known peer — a failure that
+		// renders as "nothing here" is the defect this fixes.
+		State       string        `json:"state,omitempty"`
+		StateReason string        `json:"state_reason,omitempty"`
+		ConnectedAt string        `json:"connected_at,omitempty"`
+		Peer        *peerIdentity `json:"peer,omitempty"`
 	}
 
 	// Get all agents from registry
@@ -192,6 +199,71 @@ func (s *Server) handleV1Topology(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// P21-03: this server's own uplink, read from the relay that carries it.
+	// The read is bounded (uplinkStatusTimeout); the previous snapshot is
+	// retained on failure so a dead link is degraded and named, not absent.
+	if edgeAddr, st, err := s.uplinkSnapshot(); edgeAddr != "" {
+		to := "relay:" + edgeAddr
+		state := "down"
+		reason := ""
+		connectedAt := ""
+		var peer *peerIdentity
+		if st != nil {
+			if st.RelayID != "" {
+				to = st.RelayID
+			}
+			connectedAt = st.Upstream.ConnectedAt
+			if st.Upstream.Peer != nil {
+				p := *st.Upstream.Peer
+				peer = &p
+			}
+			if st.Upstream.State == "up" {
+				state = "up"
+			} else {
+				reason = st.Upstream.LastError
+			}
+		}
+		if err != nil {
+			state = "down"
+			reason = err.Error()
+		} else if state == "down" && reason == "" {
+			reason = "relay reports upstream state=down with no error text"
+		}
+
+		// A relay that also registered upstream to this server already has a
+		// node; a second node with the same id would render as two boxes and
+		// split the graph's edges. The edge is still emitted either way.
+		known := make(map[string]bool, len(nodes))
+		for _, n := range nodes {
+			known[n.ID] = true
+		}
+		if !known[to] {
+			uplinkNode := TopologyNode{
+				ID:      to,
+				Type:    "relay",
+				Name:    to,
+				Active:  state == "up",
+				Version: "",
+			}
+			if peer != nil {
+				uplinkNode.Version = peer.Version
+				if peer.Name != "" {
+					uplinkNode.Name = peer.Name
+				}
+			}
+			nodes = append(nodes, uplinkNode)
+		}
+		edges = append(edges, TopologyEdge{
+			From:        "server",
+			To:          to,
+			Type:        "uplink",
+			State:       state,
+			StateReason: reason,
+			ConnectedAt: connectedAt,
+			Peer:        peer,
+		})
+	}
+
 	// Direct agents (not behind a relay)
 	s.mu.RLock()
 	connMap := make(map[string]bool, len(s.conns))
@@ -227,7 +299,7 @@ func (s *Server) handleV1Topology(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"ok":    true,
+		"ok": true,
 		"data": map[string]interface{}{
 			"nodes": nodes,
 			"edges": edges,
