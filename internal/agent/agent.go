@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"unicode/utf16"
 	"time"
 
 	cryptomanager "github.com/falke-ai-circuit/probe/internal/crypto"
@@ -1114,6 +1115,13 @@ func (a *Agent) handleClick(env protocol.Envelope) protocol.Envelope {
 	if err != nil {
 		return protocol.NewError(env.ID, protocol.ErrInvalidParams, err.Error())
 	}
+	count := params.Count
+	if count == 0 {
+		count = 1
+	}
+	if count < 1 || count > maxClickCount {
+		return *clickRefusalForCount(env, count)
+	}
 	// §9.1: the window-relative resolution and the occlusion hit-test run
 	// BEFORE the injection, on the same display the tree reads.
 	pt, refusal := a.resolveInputPoint(env, "pointer-click", params.Context, params.Window, params.X, params.Y)
@@ -1123,16 +1131,69 @@ func (a *Agent) handleClick(env protocol.Envelope) protocol.Envelope {
 	if pt.Probe != nil {
 		defer pt.Probe.Close()
 	}
-	if err := a.plat.Click(pt.X, pt.Y, params.Button); err != nil {
-		return protocol.NewError(env.ID, protocol.ErrInternal, err.Error())
+	// §9.2: one gesture, one call. A count>1 click is NOT a loop of the
+	// single-click path — the app decides on the gap between the presses.
+	if inj, ok := injectorFor(&pt.inputTarget); ok {
+		gap, gerr := emitClickGesture(inj, pt.X, pt.Y, params.Button, count)
+		if gerr != nil {
+			return clickBackendError(env, gerr)
+		}
+		return protocol.NewResult(env.ID, protocol.TypePointerClickResult, protocol.ClickResult{
+			Success: true, Count: count, GapMS: gapMillis(gap),
+		})
 	}
-	return protocol.NewResult(env.ID, protocol.TypePointerClickResult, protocol.InputResult{Success: true})
+	if count == 1 {
+		if err := a.plat.Click(pt.X, pt.Y, params.Button); err != nil {
+			return protocol.NewError(env.ID, protocol.ErrInternal, err.Error())
+		}
+		return protocol.NewResult(env.ID, protocol.TypePointerClickResult, protocol.ClickResult{Success: true, Count: 1})
+	}
+	// A multi-click needs a backend that can time the gesture. A display that
+	// was not named above can still be opened for it: the point stays absolute,
+	// and nothing is placed or hit-tested.
+	if pt.Probe == nil {
+		if probe, ref, oref := a.openContextDisplay(env, "pointer-click", params.Context, params.Window); oref == nil {
+			defer probe.Close()
+			if inj, ok := probe.(inputSeam); ok {
+				gap, gerr := emitClickGesture(inj, pt.X, pt.Y, params.Button, count)
+				if gerr != nil {
+					return clickBackendError(env, gerr)
+				}
+				_ = ref
+				return protocol.NewResult(env.ID, protocol.TypePointerClickResult, protocol.ClickResult{
+					Success: true, Count: count, GapMS: gapMillis(gap),
+				})
+			}
+		}
+	}
+	if mc, ok := a.plat.(multiClicker); ok {
+		ms, merr := mc.ClickCount(pt.X, pt.Y, params.Button, count, multiClickGap)
+		if merr != nil {
+			return clickBackendError(env, merr)
+		}
+		return protocol.NewResult(env.ID, protocol.TypePointerClickResult, protocol.ClickResult{
+			Success: true, Count: count, GapMS: ms,
+		})
+	}
+	return multiClickUnsupported(env, "count>1 needs a multi-click backend and this platform has none")
 }
 
 func (a *Agent) handleType(env protocol.Envelope) protocol.Envelope {
 	params, err := protocol.ParseCommandStrict[protocol.InputParams](env, protocol.AllowTextInput)
 	if err != nil {
 		return protocol.NewError(env.ID, protocol.ErrInvalidParams, err.Error())
+	}
+	enc, ok := textEncodingOK(params.Encoding)
+	if !ok {
+		envl := protocol.NewErrorDetail(env.ID, protocol.ErrInvalidParams,
+			fmt.Sprintf("text-input: encoding %q is not one this build defines", params.Encoding),
+			map[string]interface{}{
+				"reason":  protocol.ReasonOutOfRange,
+				"field":   "encoding",
+				"allowed": []string{"utf8", "utf16"},
+				"ran":     false,
+			})
+		return envl
 	}
 	target, refusal := a.resolveInputTarget(env, "text-input", params.Context, params.Window)
 	if refusal != nil {
@@ -1144,10 +1205,51 @@ func (a *Agent) handleType(env protocol.Envelope) protocol.Envelope {
 	if ref := focusGate(env, "text-input", target, params.Focus); ref != nil {
 		return *ref
 	}
+	// A text-input that names no window still has to type through the display:
+	// no window means no geometry to resolve, not no display to type on.
+	if target.Probe == nil {
+		if probe, _, oref := a.openContextDisplay(env, "text-input", params.Context, params.Window); oref == nil {
+			defer probe.Close()
+			target = &inputTarget{Probe: probe}
+		}
+	}
+	// §9.4 utf16 on Windows: the caller's code units are the wire format, so
+	// they are emitted verbatim and nothing is transcoded.
+	if runtime.GOOS == "windows" {
+		if ut, ok := a.plat.(unicodeTyper); ok {
+			units := utf16.Encode([]rune(params.Text))
+			if terr := ut.TypeTextUnits(units); terr != nil {
+				return protocol.NewError(env.ID, protocol.ErrInternal, terr.Error())
+			}
+			return protocol.NewResult(env.ID, protocol.TypeTextInputResult, protocol.TextResult{
+				Success: true,
+				Detail:  &protocol.TextDetail{Transcoded: false, Encoding: enc, CodePoints: len(units)},
+			})
+		}
+	}
+	if inj, ok := injectorFor(target); ok {
+		syms, kc, perr := planText(inj, params.Text)
+		if perr != nil {
+			return codepointUnsupported(env, params.Text, perr.Error())
+		}
+		if terr := emitText(inj, syms, kc); terr != nil {
+			if errors.Is(terr, errNoSpareKeycode) || errors.Is(terr, errXTestMissing) {
+				return codepointUnsupported(env, params.Text, terr.Error())
+			}
+			return protocol.NewError(env.ID, protocol.ErrInternal, terr.Error())
+		}
+		return protocol.NewResult(env.ID, protocol.TypeTextInputResult, protocol.TextResult{
+			Success: true,
+			Detail:  &protocol.TextDetail{Transcoded: transcode(enc), Encoding: enc, CodePoints: len(syms)},
+		})
+	}
 	if err := a.plat.TypeText(params.Text); err != nil {
 		return protocol.NewError(env.ID, protocol.ErrInternal, err.Error())
 	}
-	return protocol.NewResult(env.ID, protocol.TypeTextInputResult, protocol.InputResult{Success: true})
+	return protocol.NewResult(env.ID, protocol.TypeTextInputResult, protocol.TextResult{
+		Success: true,
+		Detail:  &protocol.TextDetail{Transcoded: transcode(enc), Encoding: enc, CodePoints: len([]rune(params.Text))},
+	})
 }
 
 func (a *Agent) handleKey(env protocol.Envelope) protocol.Envelope {

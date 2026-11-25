@@ -38,6 +38,15 @@ type x11Conn struct {
 	height    int
 	atoms     map[string]uint32
 	atomNames map[uint32]string
+
+	// P14-02: the keycode range from the setup reply (scanning the map needs
+	// its bounds), the XTEST major opcode once queried, and the keycodes this
+	// connection borrowed for §9.4 text — saved so RestoreKeymap can put them
+	// back exactly as they were.
+	minKeycode byte
+	maxKeycode byte
+	xtest      byte
+	saved      map[byte][]uint32
 }
 
 // x11Dial connects to display :num over the abstract or filesystem socket and
@@ -108,6 +117,10 @@ func (x *x11Conn) handshake(num int) error {
 		return errors.New("x11 setup reply has no screen")
 	}
 	x.root = binary.LittleEndian.Uint32(body[off : off+4])
+	// The keycode range lives in the fixed part of the setup reply, BEFORE the
+	// vendor string — not in the screen structure `off` points at.
+	x.minKeycode = body[26]
+	x.maxKeycode = body[27]
 	x.width = int(binary.LittleEndian.Uint16(body[off+20 : off+22]))
 	x.height = int(binary.LittleEndian.Uint16(body[off+22 : off+24]))
 	return nil

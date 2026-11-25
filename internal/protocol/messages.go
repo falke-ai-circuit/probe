@@ -165,6 +165,7 @@ const (
 	TypeCaptureResult      = "capture_result"
 	TypeDisplayInfoResult  = "display_info_result"
 	TypePointerClickResult = "pointer_click_result"
+	TypePointerScrollResult = "pointer_scroll_result"
 	TypeTextInputResult    = "text_input_result"
 	TypeKeyPressResult     = "keypress_result"
 	TypeKeyComboResult     = "keycombo_result"

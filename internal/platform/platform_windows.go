@@ -53,6 +53,7 @@ var (
 
 	// Keyboard
 	procKeybdEvent = modUser32.NewProc("keybd_event")
+	procSendInput  = modUser32.NewProc("SendInput")
 
 	// Process
 	procCreateToolhelp32Snapshot = modKernel32.NewProc("CreateToolhelp32Snapshot")
@@ -82,7 +83,9 @@ const (
 	MOUSEEVENTF_MIDDLEDOWN = 0x0020
 	MOUSEEVENTF_MIDDLEUP   = 0x0040
 
-	KEYEVENTF_KEYUP = 0x0002
+	KEYEVENTF_KEYUP     = 0x0002
+	KEYEVENTF_UNICODE   = 0x0004
+	INPUT_KEYBOARD      = 1
 
 	TH32CS_SNAPPROCESS = 0x00000002
 	MAX_PATH           = 260
@@ -655,4 +658,77 @@ func (p *windowsPlatform) ClipboardGet() (string, error) {
 
 func (p *windowsPlatform) ClipboardSet(text string) error {
 	return fmt.Errorf("clipboard not available")
+}
+// --- P14-02: §9.2 multi-click and §9.4 unicode text ---
+
+// winKeybdInput is KEYBDINPUT. The union in INPUT is 24 bytes on amd64.
+type winKeybdInput struct {
+	wVk         uint16
+	wScan       uint16
+	dwFlags     uint32
+	time        uint32
+	dwExtraInfo uintptr
+}
+
+// winInput is INPUT: type, 4 bytes of padding, the union, then padding to the
+// struct's 40-byte size.
+type winInput struct {
+	typ  uint32
+	_    uint32
+	ki   winKeybdInput
+	_    [8]byte
+}
+
+// TypeTextUnits emits one KEYEVENTF_UNICODE event per UTF-16 code unit. This is
+// §9.4's "emit verbatim": the caller's units are the payload, a surrogate pair
+// is two events because that is what the OS expects, and nothing is re-encoded.
+// UNPROVEN ON THIS HOST — no Windows target here; the contract marks the wts
+// column planned/unverified (W-8).
+func (p *windowsPlatform) TypeTextUnits(units []uint16) error {
+	for _, u := range units {
+		in := winInput{typ: INPUT_KEYBOARD, ki: winKeybdInput{wScan: u, dwFlags: KEYEVENTF_UNICODE}}
+		ret, _, callErr := procSendInput.Call(1, uintptr(unsafe.Pointer(&in)), unsafe.Sizeof(in))
+		if ret == 0 {
+			return fmt.Errorf("SendInput(unicode U+%04X) failed: %v", u, callErr)
+		}
+	}
+	return nil
+}
+
+// ClickCount emits `count` press/release pairs as ONE gesture with the gap
+// §9.2 requires, and returns the gap it measured between the presses.
+// UNPROVEN ON THIS HOST (W-6).
+func (p *windowsPlatform) ClickCount(x int, y int, button string, count int, gap time.Duration) (int, error) {
+	if button == "" {
+		button = "left"
+	}
+	var down, up uintptr
+	switch button {
+	case "right":
+		down, up = MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP
+	case "middle":
+		down, up = MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP
+	default:
+		down, up = MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP
+	}
+	if ret, _, _ := procSetCursorPos.Call(uintptr(x), uintptr(y)); ret == 0 {
+		return 0, fmt.Errorf("SetCursorPos failed")
+	}
+	time.Sleep(10 * time.Millisecond)
+	measured := 0
+	var first time.Time
+	for i := 0; i < count; i++ {
+		if i > 0 {
+			time.Sleep(gap)
+		}
+		now := time.Now()
+		if i == 0 {
+			first = now
+		} else if i == 1 {
+			measured = int((now.Sub(first) + 500*time.Microsecond) / time.Millisecond)
+		}
+		procMouseEvent.Call(down, 0, 0, 0, 0)
+		procMouseEvent.Call(up, 0, 0, 0, 0)
+	}
+	return measured, nil
 }

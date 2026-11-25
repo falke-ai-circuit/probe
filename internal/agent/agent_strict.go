@@ -33,15 +33,6 @@ func (a *Agent) handlePointerMove(env protocol.Envelope) protocol.Envelope {
 	return noBackend(env, "pointer-move")
 }
 
-func (a *Agent) handlePointerScroll(env protocol.Envelope) protocol.Envelope {
-	params, serr := protocol.ParseCommandStrict[protocol.PointerScrollParams](env, protocol.AllowPointerScroll)
-	if serr != nil {
-		return strictRefusal(env, serr)
-	}
-	_ = params
-	return noBackend(env, "pointer-scroll")
-}
-
 func (a *Agent) handlePointerDrag(env protocol.Envelope) protocol.Envelope {
 	params, serr := protocol.ParseCommandStrict[protocol.PointerDragParams](env, protocol.AllowPointerDrag)
 	if serr != nil {

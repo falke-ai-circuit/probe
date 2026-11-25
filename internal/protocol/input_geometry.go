@@ -31,7 +31,51 @@ const (
 	// §11 403 reason: the primitive needs a focused window and was not given
 	// permission to take focus (`focus:true`).
 	ReasonNoFocusTarget = "NO_FOCUS_TARGET"
+
+	// §9.3: `unit:"px"` is refused on every backend that lacks a pixel-precise
+	// wheel. A partial scroll moves the list by an unknown amount, which is
+	// worse than a refusal.
+	ReasonUnitNotSupported = "UNIT_NOT_SUPPORTED"
+
+	// §9.4: a codepoint the backend's keycode range cannot carry. The refusal
+	// NAMES the codepoint; the string is never typed as a prefix.
+	ReasonCodepointUnsupported = "CODEPOINT_UNSUPPORTED"
 )
+
+// ClickResult is §9.2's answer: the count that was emitted and the gap the
+// backend MEASURED between the two presses, not a constant it was handed.
+// `gap_ms` is present whenever count>1, because that is the number the app's
+// double-click rule is judged against.
+type ClickResult struct {
+	Success bool `json:"success"`
+	Count   int  `json:"count"`
+	GapMS   int  `json:"gap_ms,omitempty"`
+}
+
+// ScrollResult is §9.3's answer. `notches` is how many wheel events the backend
+// emitted: |delta| on every backend this build has, and the number is echoed so
+// a caller can see that a delta of 3 was not collapsed to one click.
+type ScrollResult struct {
+	Success bool   `json:"success"`
+	Delta   int    `json:"delta"`
+	Unit    string `json:"unit"`
+	Notches int    `json:"notches"`
+}
+
+// TextDetail is §9.4's `detail`: `transcoded` is true when the caller's
+// encoding was not the encoding the text was emitted in, so a caller that sent
+// UTF-16 units knows probe did not pass them through verbatim.
+type TextDetail struct {
+	Transcoded  bool   `json:"transcoded"`
+	Encoding    string `json:"encoding,omitempty"`
+	CodePoints  int    `json:"codepoints"`
+}
+
+// TextResult is §9.4's success shape.
+type TextResult struct {
+	Success bool        `json:"success"`
+	Detail  *TextDetail `json:"detail,omitempty"`
+}
 
 // ObservedReasons is §8.1's closed enum, verbatim. Every value has a producer in
 // the input/window path; a reason not listed here is a defect, not an extension.
