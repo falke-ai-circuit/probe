@@ -26,6 +26,10 @@ type ControlMessage struct {
 	// P21-03: peer_hello carries the upstream server's identity down the
 	// uplink; absent on every relay→server control message.
 	Peer *PeerHello `json:"peer,omitempty"`
+	// P21-07: credential_rotate carries a new credential down this relay's
+	// own socket. TokenFP is the fingerprint of Token, so the relay can log
+	// and report which credential it now holds without ever printing it.
+	TokenFP string `json:"token_fp,omitempty"`
 }
 
 // RelayMetadata carries relay topology information to the server.
@@ -86,6 +90,11 @@ type Channel struct {
 	// server→agent traffic back through the nested relay's connection.
 	// It takes (ourChanID, payload) and returns an error.
 	NestedWrite func(ourChanID uint32, payload []byte) error
+	// P21-07: FirstFrame is the downstream client's first message (its
+	// AgentInfo envelope). It is kept so a re-registration after an uplink
+	// reconnect can replay it and the agent re-forms on the server without
+	// the agent itself reconnecting.
+	FirstFrame []byte
 }
 
 const (

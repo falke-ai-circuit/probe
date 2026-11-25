@@ -2,6 +2,8 @@ package relay
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -44,6 +46,14 @@ type Relay struct {
 	// by statusMu; rendered by Status()/handleStatus in status.go.
 	statusMu sync.RWMutex
 	uplink   uplinkState
+
+	// P21-07: the credential in force. It starts as cfg.Token and is
+	// replaced in place when the server rotates this relay's identity, so a
+	// reconnect after rotation presents the new value without a restart.
+	// tokenFP is the fingerprint of token — the only form ever logged.
+	credMu  sync.RWMutex
+	token   string
+	tokenFP string
 }
 
 var upgrader = &websocket.Upgrader{
@@ -69,11 +79,46 @@ func New(cfg Config) *Relay {
 		magic:    0x02 + (b[0] % 0xFE), // 0x02..0xFF
 		channels: NewChannelMap(),
 		ipCounts: make(map[string]int),
+		token:    cfg.Token,
+		tokenFP:  TokenFingerprint(cfg.Token),
 	}
 }
 
 // Magic returns the relay's framing magic byte.
 func (r *Relay) Magic() byte { return r.magic }
+
+// TokenFingerprint is the token_fp convention (sha256 hex, first 8 chars).
+// Exported so the relay binary and the server agree on one definition.
+func TokenFingerprint(secret string) string {
+	if secret == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(secret))
+	return hex.EncodeToString(sum[:])[:8]
+}
+
+// Token returns the credential currently in force for the uplink.
+func (r *Relay) Token() string {
+	r.credMu.RLock()
+	defer r.credMu.RUnlock()
+	return r.token
+}
+
+// TokenFP returns the fingerprint of the credential in force.
+func (r *Relay) TokenFP() string {
+	r.credMu.RLock()
+	defer r.credMu.RUnlock()
+	return r.tokenFP
+}
+
+// setToken installs a rotated credential. Called from the uplink reader when
+// the server pushes credential_rotate; the next reconnect presents it.
+func (r *Relay) setToken(secret string) {
+	r.credMu.Lock()
+	r.token = secret
+	r.tokenFP = TokenFingerprint(secret)
+	r.credMu.Unlock()
+}
 
 // Stop gracefully shuts down the relay: stops the HTTP server and closes the upstream connection.
 func (r *Relay) Stop() {
@@ -126,7 +171,7 @@ func (r *Relay) Run() error {
 // connectUpstream dials the upstream server and sends relay registration.
 func (r *Relay) connectUpstream() error {
 	headers := http.Header{}
-	headers.Set("Authorization", "Bearer "+r.cfg.Token)
+	headers.Set("Authorization", "Bearer "+r.Token())
 
 	conn, _, err := websocket.DefaultDialer.Dial(r.cfg.UpstreamURL, headers)
 	if err != nil {
@@ -154,7 +199,7 @@ func (r *Relay) connectUpstream() error {
 	reg := ControlMessage{
 		Type:    "relay_register",
 		RelayID: relayID,
-		Token:   r.cfg.Token,
+		Token:   r.Token(),
 		Metadata: &RelayMetadata{
 			ListenAddr: r.cfg.ListenAddr,
 			MaxAgents:  r.cfg.MaxAgents,
@@ -218,6 +263,14 @@ func (r *Relay) dispatchFromServer() {
 				if ctrl.Type == "peer_hello" && ctrl.Peer != nil {
 					r.recordPeerHello(ctrl.Peer)
 					log.Printf("[relay] peer_hello from upstream: id=%s name=%s version=%s", ctrl.Peer.ID, ctrl.Peer.Name, ctrl.Peer.Version)
+				}
+				// P21-07: the server rotated this relay's credential. Hold
+				// the new value in memory, log the fingerprint only, and let
+				// the reconnect that follows present it. The socket is
+				// closed by the server immediately after this frame.
+				if ctrl.Type == "credential_rotate" && ctrl.Token != "" {
+					r.setToken(ctrl.Token)
+					log.Printf("[relay] credential rotated by upstream (token_fp=%s)", r.TokenFP())
 				}
 			}
 			continue
@@ -285,6 +338,12 @@ func (r *Relay) reregisterChannels() {
 		r.upstreamMu.Lock()
 		if r.upstream != nil {
 			r.upstream.WriteMessage(websocket.BinaryMessage, frame)
+			// P21-07: replay the cached first frame so the server re-admits
+			// the agent. Without it the channel exists but carries no
+			// identity, and a link that "reconnected" answers nothing.
+			if len(ch.FirstFrame) > 0 {
+				r.upstream.WriteMessage(websocket.BinaryMessage, MakeFrame(r.magic, ch.ID, ch.FirstFrame))
+			}
 		}
 		r.upstreamMu.Unlock()
 	}
@@ -358,6 +417,10 @@ func (r *Relay) handleDownstream(w http.ResponseWriter, req *http.Request) {
 	ch := r.channels.Alloc(conn, func() {
 		r.releaseIP(ip)
 	})
+	// P21-07: keep the client's first message. A re-registration after an
+	// uplink reconnect replays it, so the server re-admits the agent on the
+	// same downstream socket (the agent never reconnects).
+	ch.FirstFrame = append([]byte(nil), firstData...)
 
 	// If we already read the first message, we need to forward it
 	// to the upstream as the first data frame on this channel.

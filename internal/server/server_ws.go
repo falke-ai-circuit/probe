@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 	"github.com/falke-ai-circuit/probe/internal/protocol"
@@ -64,9 +65,19 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Auth check — accept primary, extra, or rotated tokens
 	authHeader := r.Header.Get("Authorization")
 	if !s.isValidToken(authHeader) {
-		log.Printf("[server] auth rejected from %s", r.RemoteAddr)
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
+		// P21-07: a relay rotated to a per-node credential presents that
+		// credential on reconnect, not the shared token. Accepting it here is
+		// what lets rotation finish without a server restart; the credential
+		// is bound to one relay id by bindRelayIdentity at registration.
+		ok := false
+		if strings.HasPrefix(authHeader, "Bearer ") {
+			ok = s.isValidRelayCredential(strings.TrimPrefix(authHeader, "Bearer "))
+		}
+		if !ok {
+			log.Printf("[server] auth rejected from %s", r.RemoteAddr)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 	}
 
 	upgrader := &websocket.Upgrader{

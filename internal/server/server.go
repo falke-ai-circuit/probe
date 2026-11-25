@@ -210,6 +210,15 @@ type Server struct {
 	mirror         mirrorStore
 	forwardStats   forwardCounters
 
+	// P21-07: relay identity. relayIdentities is the persisted record
+	// (fingerprints only); relaySecrets is the in-memory credential list per
+	// relay (newest first, previous kept as rotation grace). Nothing in
+	// relaySecrets is ever marshalled, logged, or returned.
+	relayIdentityMu   sync.Mutex
+	relayIdentities   map[string]*RelayIdentity
+	relaySecrets      map[string][]string
+	relayIdentityPath string
+
 	// Phase 4 Step 13: E2E encryption manager (optional).
 	// When active, incoming binary messages are decrypted and outgoing
 	// messages are encrypted. Relays see only encrypted bytes.
@@ -252,6 +261,8 @@ func NewServer(addr string, token string, registryPath string) *Server {
 		jobs:            make(map[string]*ServerJob),
 		pendingUpdates:  make(map[string]*pendingUpdate),
 		relays:          make(map[string]*relaySession),
+		relayIdentities: make(map[string]*RelayIdentity),
+		relaySecrets:    make(map[string][]string),
 		forwardPolicies: make(map[string]string),
 		tunnels:         make(map[string]*Tunnel),
 		tokenExpiry:     make(map[string]time.Time),

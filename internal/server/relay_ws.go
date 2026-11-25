@@ -33,6 +33,12 @@ type relaySession struct {
 	channelsMu sync.RWMutex
 	metadata   *relayMetadata
 	chain      Chain // P21-04: chain carried by this relay's registration
+	// P21-07: the fingerprint of the credential this session was admitted
+	// with (never the credential), and when the session started. Both are
+	// display/identity fields — the session id is what tells an operator
+	// whether a relay re-formed or is a different node.
+	tokenFP   string
+	startedAt string
 }
 
 // virtualConn represents a single agent behind a relay. It implements
@@ -165,13 +171,25 @@ func (s *Server) handleRelayConnection(conn *websocket.Conn, firstData []byte) {
 		return
 	}
 
+	// P21-07: bind the presented credential to this relay's identity. The
+	// record returned carries the fingerprint only; the credential itself
+	// stays out of the session and out of every response.
+	ident, ierr := s.bindRelayIdentity(relayID, reg.Token, refFingerprint(reg.Fingerprint))
+	if ierr != nil {
+		log.Printf("[server] relay %s refused: %v", relayID, ierr)
+		s.refuseRelayRegistration(conn, magic, ierr)
+		return
+	}
+
 	session := &relaySession{
-		relayID:  relayID,
-		magic:    magic,
-		conn:     conn,
-		channels: make(map[uint32]*virtualConn),
-		metadata: meta,
-		chain:    chain,
+		relayID:   relayID,
+		magic:     magic,
+		conn:      conn,
+		channels:  make(map[uint32]*virtualConn),
+		metadata:  meta,
+		chain:     chain,
+		tokenFP:   ident.TokenFP,
+		startedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 
 	// Store relay session in server's relay registry

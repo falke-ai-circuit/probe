@@ -45,6 +45,9 @@ func main() {
 	operatorPath := flag.String("operator-db", "", "operator database file path (default: PROBE_OPERATOR_DB env or /tmp/probe-operators.json)")
 	relayStatus := flag.String("relay-status", "", "loopback address (host:port) of the relay serving this server's uplink; enables the uplink edge in /api/v1/topology (default: PROBE_RELAY_STATUS env). Empty = no uplink configured.")
 	advertisedAddr := flag.String("advertised-addr", "", "address peers should dial for this server, pushed in peer_hello (default: PROBE_ADVERTISED_ADDR env, else host name + listen port)")
+	// P21-07: installed relay allowlist + fingerprint-only identity records.
+	relayAllowlist := flag.String("relay-allowlist", "", "comma-separated relay identities admitted to forward downstream clients: id, id:token_fp8, or *:token_fp8. Omitted = allow all; given empty = deny all.")
+	relayIdentityPath := flag.String("relay-identity-db", "", "relay identity records file (fingerprints only; default: PROBE_RELAY_IDENTITY_DB env or /tmp/probe-relay-identities.json)")
 	vtAPIKey := flag.String("vt-api-key", "", "VirusTotal API key for auto-scan after build and manual scan API (default: PROBE_VT_API_KEY env)")
 	showVersion := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
@@ -162,6 +165,24 @@ func main() {
 	srv.SetVersion(appVersion)
 	srv.SetUplinkRelayStatus(*relayStatus)
 	srv.SetAdvertisedAddr(*advertisedAddr)
+	// P21-07: fail loud on a malformed allowlist entry — never a silent pass.
+	allowlistProvided := false
+	flag.Visit(func(f *flag.Flag) { if f.Name == "relay-allowlist" { allowlistProvided = true } })
+	if *relayAllowlist == "" {
+		if env := os.Getenv("PROBE_RELAY_ALLOWLIST"); env != "" {
+			*relayAllowlist = env
+			allowlistProvided = true
+		}
+	}
+	if err := srv.InstallRelayAllowlist(*relayAllowlist, allowlistProvided); err != nil {
+		log.Fatalf("relay allowlist: %v", err)
+	}
+	if *relayIdentityPath == "" {
+		*relayIdentityPath = os.Getenv("PROBE_RELAY_IDENTITY_DB")
+	}
+	if err := srv.SetRelayIdentityPath(*relayIdentityPath); err != nil {
+		log.Fatalf("relay identity db: %v", err)
+	}
 	srv.SetRequireAPIAuth(*requireAPIAuth)
 	srv.SetEnrollmentPath(*enrollmentPath)
 	srv.SetCADir(*caDir)

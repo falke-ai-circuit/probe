@@ -532,6 +532,11 @@ func (s *Server) registerV1Routes() {
 
 	// Security management endpoints
 	s.registerSecurityRoutes()
+
+	// P21-07: relay identity — fingerprints only, and one operator action to
+	// rotate one node's credential.
+	s.mux.HandleFunc("GET /api/v1/relays", s.handleV1Relays)
+	s.mux.HandleFunc("POST /api/v1/relays/{id}/rotate", s.handleV1RotateRelayCredential)
 }
 
 // ---------------------------------------------------------------------------
