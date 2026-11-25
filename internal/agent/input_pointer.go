@@ -25,10 +25,13 @@ package agent
 //     never a prefix (the whole string is validated before the first remap).
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime"
 	"time"
+	"unicode/utf16"
 	"unicode/utf8"
 
 	"github.com/falke-ai-circuit/probe/internal/protocol"
@@ -376,6 +379,174 @@ func textEncodingOK(enc string) (string, bool) {
 		return "utf16", true
 	}
 	return "", false
+}
+
+// --- §9.4 / R4: what the JSON layer did before the agent saw the text --------
+//
+// A lone UTF-16 code unit cannot survive Go's JSON decoder: encoding/json
+// substitutes U+FFFD with no error, so by the time `text` is a string the
+// caller's `\ud800` and a caller's honest `\ufffd` are the SAME string. The
+// substitution is therefore invisible from the string and visible only in the
+// raw params — which is exactly the pair this section reads. It is a detector,
+// not a second decoder: the text that gets typed is still the one the JSON
+// layer produced, and the result says what was changed on the way in.
+
+// rawStringField returns the RAW JSON literal of a top-level string field,
+// escapes intact. json.RawMessage copies the value's bytes without decoding
+// them, which is what keeps `\ud800` observable after encoding/json would have
+// repaired it. A missing field or a non-string value answers false: the strict
+// parser has already refused those, so this is a read, not a validation.
+func rawStringField(params json.RawMessage, name string) ([]byte, bool) {
+	dec := json.NewDecoder(bytes.NewReader(params))
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, false
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return nil, false
+	}
+	for dec.More() {
+		kt, err := dec.Token()
+		if err != nil {
+			return nil, false
+		}
+		key, ok := kt.(string)
+		if !ok {
+			return nil, false
+		}
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			return nil, false
+		}
+		if key != name {
+			continue
+		}
+		if len(raw) >= 2 && raw[0] == '"' {
+			return raw, true
+		}
+		return nil, false
+	}
+	return nil, false
+}
+
+// jsonStringUnits converts a JSON string literal into UTF-16 code units WITHOUT
+// repairing anything: `\uXXXX` becomes the unit it spells (surrogates
+// included), a named escape becomes its ASCII unit, and literal UTF-8 becomes
+// the units of the rune it encodes. This is the only place the caller's code
+// units still exist, so it is where the evidence has to be collected.
+func jsonStringUnits(lit []byte) ([]uint16, bool) {
+	if len(lit) < 2 || lit[0] != '"' || lit[len(lit)-1] != '"' {
+		return nil, false
+	}
+	units := make([]uint16, 0, len(lit))
+	for i := 1; i < len(lit)-1; {
+		if lit[i] != '\\' {
+			r, size := utf8.DecodeRune(lit[i:])
+			if r == utf8.RuneError && size == 1 {
+				return nil, false
+			}
+			units = append(units, utf16.Encode([]rune{r})...)
+			i += size
+			continue
+		}
+		i++
+		if i >= len(lit)-1 {
+			return nil, false
+		}
+		switch lit[i] {
+		case 'u':
+			if i+4 >= len(lit) {
+				return nil, false
+			}
+			var u uint16
+			for _, c := range lit[i+1 : i+5] {
+				u <<= 4
+				switch {
+				case c >= '0' && c <= '9':
+					u |= uint16(c - '0')
+				case c >= 'a' && c <= 'f':
+					u |= uint16(c-'a') + 10
+				case c >= 'A' && c <= 'F':
+					u |= uint16(c-'A') + 10
+				default:
+					return nil, false
+				}
+			}
+			units = append(units, u)
+			i += 5
+		case '"', '\\', '/':
+			units = append(units, uint16(lit[i]))
+			i++
+		case 'b':
+			units = append(units, '\b')
+			i++
+		case 'f':
+			units = append(units, '\f')
+			i++
+		case 'n':
+			units = append(units, '\n')
+			i++
+		case 'r':
+			units = append(units, '\r')
+			i++
+		case 't':
+			units = append(units, '\t')
+			i++
+		default:
+			return nil, false
+		}
+	}
+	return units, true
+}
+
+// unpairedSurrogates lists the 1-based code-unit positions the JSON decoder had
+// to replace: a high surrogate not followed by a low one, or a low surrogate
+// with no high one before it. A well-formed pair is consumed as one unit of
+// two, so a valid astral character yields nothing — the same rule the decoder
+// applies, checked against the units instead of against its output.
+func unpairedSurrogates(units []uint16) []int {
+	var at []int
+	for i := 0; i < len(units); i++ {
+		switch u := units[i]; {
+		case u >= 0xD800 && u <= 0xDBFF:
+			if i+1 < len(units) && units[i+1] >= 0xDC00 && units[i+1] <= 0xDFFF {
+				i++
+				continue
+			}
+			at = append(at, i+1)
+		case u >= 0xDC00 && u <= 0xDFFF:
+			at = append(at, i+1)
+		}
+	}
+	return at
+}
+
+// textRepairs answers "did encoding/json change the caller's text, and where".
+// It reads env.Params, never env.Params decoded twice: the string field is
+// already the decoder's output by the time handleType holds it.
+func textRepairs(params json.RawMessage) []int {
+	lit, ok := rawStringField(params, "text")
+	if !ok {
+		return nil
+	}
+	units, ok := jsonStringUnits(lit)
+	if !ok {
+		return nil
+	}
+	return unpairedSurrogates(units)
+}
+
+// textDetail is §9.4's `detail`, built in ONE place so every success path
+// reports the same facts: the encoding the caller supplied, whether it was
+// transcoded for emission, and — when the JSON layer repaired an unpaired code
+// unit — how many and where, because `transcoded:true` cannot carry that.
+func textDetail(env protocol.Envelope, enc string, codePoints int) *protocol.TextDetail {
+	d := &protocol.TextDetail{Transcoded: transcode(enc), Encoding: enc, CodePoints: codePoints}
+	if at := textRepairs(env.Params); len(at) > 0 {
+		d.RepairedRuneCount = len(at)
+		d.RepairedAt = at
+	}
+	return d
 }
 
 // transcode reports what §9.4 says must be visible: a caller that supplied

@@ -474,3 +474,107 @@ func TestP1402UnknownEncodingIsRefused(t *testing.T) {
 		t.Fatalf("events emitted for an unknown encoding: %v", inj.events)
 	}
 }
+
+// --- P14B-02 / R4: a lone surrogate must not become U+FFFD in silence --------
+//
+// The two bodies below decode to the SAME Go string ("a\ufffdb"): Go's
+// encoding/json repairs an unpaired code unit before any caller can see it. So
+// the decoded text cannot be the discriminator — only the raw escape can. The
+// detector reads env.Params, and these tests assert the two DIFFERENT outcomes
+// on bodies that are identical after decode.
+
+// p1402RawEnvelope keeps the caller's bytes verbatim. p1401Envelope marshals a
+// map, which cannot express a lone surrogate: the repair would happen in the
+// test instead of in the code under test.
+func p1402RawEnvelope(id, params string) protocol.Envelope {
+	return protocol.Envelope{ID: id, Params: json.RawMessage(params)}
+}
+
+// p1402Detail decodes `detail` as a map so a key the result type does not have
+// YET is still observable — that is what makes the before-run red rather than a
+// compile error.
+func p1402Detail(t *testing.T, env protocol.Envelope) map[string]interface{} {
+	t.Helper()
+	if env.Error != nil {
+		t.Fatalf("text-input refused: %s (%v)", env.Error.Message, env.Error.Detail)
+	}
+	var out struct {
+		Detail map[string]interface{} `json:"detail"`
+	}
+	if err := json.Unmarshal(env.Result, &out); err != nil {
+		t.Fatalf("unmarshal %s: %v", string(env.Result), err)
+	}
+	return out.Detail
+}
+
+func TestP14B02LoneSurrogateIsLabelled(t *testing.T) {
+	const prefix = `{"context":"x11::0","window":"0x3c00007","text":"a`
+	// Identical to the byte after the escape: \ud800 is repaired, \ufffd is
+	// the character the caller meant.
+	loneEnv := p1402RawEnvelope("tl", prefix+`\ud800b"}`)
+	realEnv := p1402RawEnvelope("tf", prefix+`\ufffdb"}`)
+
+	var loneParams, realParams protocol.InputParams
+	if err := json.Unmarshal(loneEnv.Params, &loneParams); err != nil {
+		t.Fatalf("unmarshal lone body: %v", err)
+	}
+	if err := json.Unmarshal(realEnv.Params, &realParams); err != nil {
+		t.Fatalf("unmarshal fffd body: %v", err)
+	}
+	if loneParams.Text != realParams.Text {
+		t.Fatalf("premise broken: %q != %q — the two bodies are supposed to be identical after decode",
+			loneParams.Text, realParams.Text)
+	}
+
+	lone := p1402Detail(t, p1402Agent(newFakeInput()).handleType(loneEnv))
+	if got := lone["repaired_rune_count"]; got != float64(1) {
+		t.Fatalf("a\\ud800 was repaired in silence: detail = %v, want repaired_rune_count 1", lone)
+	}
+	at, ok := lone["repaired_at"].([]interface{})
+	if !ok || len(at) != 1 || at[0] != float64(2) {
+		t.Fatalf("repaired_at = %v, want [2] (the escaped unit is the 2nd code unit)", lone["repaired_at"])
+	}
+
+	real := p1402Detail(t, p1402Agent(newFakeInput()).handleType(realEnv))
+	if got, ok := real["repaired_rune_count"]; ok {
+		t.Fatalf("a caller-sent U+FFFD was labelled as a repair (repaired_rune_count=%v): detail = %v", got, real)
+	}
+}
+
+func TestP14B02AstralPairIsNotLabelled(t *testing.T) {
+	cases := map[string]string{
+		// The literal body carries the character as UTF-8; the escaped body
+		// carries the two code units the caller would write on the wire.
+		"literal": "{\"context\":\"x11::0\",\"window\":\"0x3c00007\",\"text\":\"\U0001F600\"}",
+		"escaped": `{"context":"x11::0","window":"0x3c00007","text":"\ud83d\ude00"}`,
+	}
+	for name, params := range cases {
+		t.Run(name, func(t *testing.T) {
+			inj := newFakeInput()
+			det := p1402Detail(t, p1402Agent(inj).handleType(p1402RawEnvelope("ta", params)))
+			if _, ok := det["repaired_rune_count"]; ok {
+				t.Fatalf("%s: a valid astral pair was labelled as repaired: %v", name, det)
+			}
+			if det["codepoints"] != float64(1) {
+				t.Fatalf("%s: codepoints = %v, want 1 (one codepoint, two code units)", name, det["codepoints"])
+			}
+			if countEvents(inj.events, "remap:251:0x101f600") != 1 {
+				t.Fatalf("%s: the astral character was not typed as U+1F600: %v", name, inj.events)
+			}
+		})
+	}
+}
+
+func TestP14B02CallerReplacementCharacterIsItself(t *testing.T) {
+	// U+FFFD is a legitimate character. Typing it must not be re-reported as
+	// something probe did to the caller's text.
+	inj := newFakeInput()
+	env := p1402RawEnvelope("tr", `{"context":"x11::0","window":"0x3c00007","text":"a\ufffdb"}`)
+	det := p1402Detail(t, p1402Agent(inj).handleType(env))
+	if _, ok := det["repaired_rune_count"]; ok {
+		t.Fatalf("caller-sent U+FFFD reported as a repair: %v", det)
+	}
+	if countEvents(inj.events, "remap:251:0x100fffd") != 1 {
+		t.Fatalf("U+FFFD was not typed as U+FFFD: %v", inj.events)
+	}
+}

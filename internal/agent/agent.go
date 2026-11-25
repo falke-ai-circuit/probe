@@ -1236,7 +1236,7 @@ func (a *Agent) handleType(env protocol.Envelope) protocol.Envelope {
 			}
 			return protocol.NewResult(env.ID, protocol.TypeTextInputResult, protocol.TextResult{
 				Success: true,
-				Detail:  &protocol.TextDetail{Transcoded: false, Encoding: enc, CodePoints: len(units)},
+				Detail:  textDetail(env, enc, len(units)),
 			})
 		}
 	}
@@ -1253,7 +1253,7 @@ func (a *Agent) handleType(env protocol.Envelope) protocol.Envelope {
 		}
 		return protocol.NewResult(env.ID, protocol.TypeTextInputResult, protocol.TextResult{
 			Success: true,
-			Detail:  &protocol.TextDetail{Transcoded: transcode(enc), Encoding: enc, CodePoints: len(syms)},
+			Detail:  textDetail(env, enc, len(syms)),
 		})
 	}
 	if err := a.plat.TypeText(params.Text); err != nil {
@@ -1261,7 +1261,7 @@ func (a *Agent) handleType(env protocol.Envelope) protocol.Envelope {
 	}
 	return protocol.NewResult(env.ID, protocol.TypeTextInputResult, protocol.TextResult{
 		Success: true,
-		Detail:  &protocol.TextDetail{Transcoded: transcode(enc), Encoding: enc, CodePoints: len([]rune(params.Text))},
+		Detail:  textDetail(env, enc, len([]rune(params.Text))),
 	})
 }
 

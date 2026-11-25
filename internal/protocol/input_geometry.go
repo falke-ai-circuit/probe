@@ -66,9 +66,18 @@ type ScrollResult struct {
 // encoding was not the encoding the text was emitted in, so a caller that sent
 // UTF-16 units knows probe did not pass them through verbatim.
 type TextDetail struct {
-	Transcoded  bool   `json:"transcoded"`
-	Encoding    string `json:"encoding,omitempty"`
-	CodePoints  int    `json:"codepoints"`
+	Transcoded bool   `json:"transcoded"`
+	Encoding   string `json:"encoding,omitempty"`
+	CodePoints int    `json:"codepoints"`
+	// P14B-02 / R4: `transcoded` reports an ENCODING change; it cannot report a
+	// REPAIR. Go's JSON decoder substitutes U+FFFD for an unpaired UTF-16 code
+	// unit with no error, so `"a\ud800b"` and `"a\ufffdb"` arrive as the same
+	// string. These two fields carry the only evidence that distinguishes them:
+	// how many units were replaced, and their 1-based code-unit positions in
+	// the caller's string. Absent (omitted) when nothing was repaired, which is
+	// every string that is valid Unicode.
+	RepairedRuneCount int   `json:"repaired_rune_count,omitempty"`
+	RepairedAt        []int `json:"repaired_at,omitempty"`
 }
 
 // TextResult is §9.4's success shape.

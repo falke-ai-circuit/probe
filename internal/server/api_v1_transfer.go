@@ -1,7 +1,9 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -505,6 +507,19 @@ func (s *Server) handleV1TextInput(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.v1CheckAuth(w, r, "input"); !ok {
 		return
 	}
+	// §9.4 / P14B-02: `probe must not re-encode` the caller's text. Forwarding
+	// the DECODED params re-encoded them, and that re-encode is what destroyed
+	// the evidence: encoding/json turns a lone `\ud800` into `\ufffd` on decode,
+	// so the agent received a body in which a repair and an honest U+FFFD are
+	// the same bytes. The body is read once, validated by decodeStrict exactly
+	// as before, and the caller's own bytes are what reaches the agent.
+	body, berr := io.ReadAll(io.LimitReader(r.Body, maxStrictBodyBytes))
+	if berr != nil {
+		writeErrorDetail(w, http.StatusBadRequest, protocol.ErrInvalidParams,
+			"failed to read body", map[string]interface{}{"reason": protocol.ReasonTypeMismatch, "ran": false})
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
 	params, ok := decodeStrict[protocol.InputParams](w, r, allowTextInput)
 	if !ok {
 		return
@@ -512,7 +527,7 @@ func (s *Server) handleV1TextInput(w http.ResponseWriter, r *http.Request) {
 	if !s.preDispatchSelector(w, agentID, params) {
 		return
 	}
-	resp, err := s.forwardToAgent(agentID, protocol.TypeTextInput, params)
+	resp, err := s.forwardToAgent(agentID, protocol.TypeTextInput, json.RawMessage(body))
 	if err != nil {
 		if strings.Contains(err.Error(), "timed out") {
 			writeError(w, http.StatusGatewayTimeout, "TIMEOUT", err.Error())
