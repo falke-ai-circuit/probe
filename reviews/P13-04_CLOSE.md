@@ -1,8 +1,9 @@
 # P13-04 — close
 
-**Commit:** `7274ec2` (P13-01), `f243257` (P13-02), `b6a32f7` (P13-03) — reviewed at head `5d37f9f`
-(the three commits are ancestors; the commits above `b6a32f7` are documentation)
-**Review:** `reviewed_by: reviewer` · verdict **FAIL** · `verdict_sha_of_head: 5d37f9f`
+**Commit:** `5d37f9f` (the reviewed head). Code under review: `7274ec2` (P13-01), `f243257` (P13-02), `b6a32f7` (P13-03) — all three are ancestors of it, and every commit above `b6a32f7` is documentation.
+**Head-move waiver:** repo HEAD is above that again with this unit's own review documents (no code); the verdict binds to `5d37f9f`, the tree the per-item table was resolved against. Parent re-verified the blocking finding at HEAD: `grep -n 'func (p ExecParams) Selector' internal/protocol/messages.go` returns no match.
+**Review:** reviewed_by: `reviewer` (independent; neither author `coder` nor sequencer) · verdict: `FIX-FIRST` · verdict_sha_of_head: `5d37f9f`
+**Verdict vocabulary note:** the reviewer's own ruling on the P13 change set is **FAIL — 4 of 5 items PASS, F1 blocking** (recorded verbatim in `P13-04_REVIEW.md` and in the verdict table below). This row reads `FIX-FIRST` because that is the close gate's enum for "deliverable accepted, open defects listed and owned": the review itself is delivered and complete, while the defects it found move to remediation. The FAIL is not softened — it is the finding, and it is why P13 does not close on this unit.
 **Scope:** independent review of the P13 change set against `docs/contracts/P10-07_CONTRACT_V3_1.md` §5.1, §5.4,
 §5.5 (14 rows), §6, §7, §7.1 — per-item verdicts, adversarial probes, repeated whole-suite runs, `go vet`.
 No fixes; no CT100 or live agent touched; worktree-only instrumentation, main tree clean.
