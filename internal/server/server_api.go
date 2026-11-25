@@ -786,6 +786,13 @@ func (s *Server) forwardToAgent(agentID string, msgType string, params interface
 const (
 	RefusalCapabilityMissing = "CAPABILITY_MISSING"
 	RefusalAgentNotConnected = "AGENT_NOT_CONNECTED"
+	// RefusalDeliveryFailed is the third pre-send state: the agent has a live
+	// connection and advertises the capability, but the frame could not be
+	// written to it. The command never left the server, so it is a refusal in
+	// the caller's terms even though both pre-send checks passed (P12-06 R1:
+	// this used to return a bare error, which the update route read as "sent,
+	// answer did not arrive" and answered 200 update_in_progress).
+	RefusalDeliveryFailed = "DELIVERY_FAILED"
 )
 
 // ForwardRefusal is returned by forwardToAgentWithTimeout when the command was
@@ -893,13 +900,30 @@ func (s *Server) forwardToAgentWithTimeout(agentID string, msgType string, param
 	}
 	if err != nil {
 		s.auditLog(agentID, msgType, params, "error", "send to agent failed: "+err.Error(), start, false, operatorID)
-		return nil, fmt.Errorf("send to agent failed: %w", err)
+		// The write failed, so nothing reached the agent: this is a delivery
+		// refusal, not the "sent, no answer yet" state. Typed for the same
+		// reason as the two pre-send checks above — a caller must not report
+		// work in progress for a command that was never delivered.
+		return nil, &ForwardRefusal{
+			Code:    RefusalDeliveryFailed,
+			AgentID: agentID,
+			Message: fmt.Sprintf("send to agent %s failed: %v", agentID, err),
+			Err:     err,
+		}
 	}
 
 	select {
 	case resp := <-respCh:
 		if resp.Error != nil {
-			s.auditLog(agentID, msgType, params, "success", "", start, false, operatorID)
+			// The frame reached the agent (this is the reply), so this is not
+			// the P12-06 R1 delivery lie — but the command did NOT succeed: the
+			// agent answered with a typed error. Recording "success" here gave
+			// the audit log a success row for a failed action, which is the
+			// same false-success shape one layer down. "error" + the code says
+			// what actually happened; delivery is implicit in the entry having
+			// an agent-side code at all.
+			s.auditLog(agentID, msgType, params, "error",
+				resp.Error.Code+": "+resp.Error.Message, start, false, operatorID)
 			// P8-05: the typed code travels with the message so the HTTP
 			// layer can refuse with FS_WRITE_EMPTY_DATA instead of a generic
 			// 5xx. Callers that only read "error" are unaffected.

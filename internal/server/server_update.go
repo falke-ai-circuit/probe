@@ -273,6 +273,10 @@ func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request, agent
 				status = http.StatusForbidden
 			case RefusalAgentNotConnected:
 				status = http.StatusServiceUnavailable
+			case RefusalDeliveryFailed:
+				// Connected and capable, but the frame could not be written:
+				// the break is on the link to the agent, not in the request.
+				status = http.StatusBadGateway
 			}
 			writeErrorDetail(w, status, refusal.Code, refusal.Message, map[string]interface{}{
 				"agent_id": refusal.AgentID,
