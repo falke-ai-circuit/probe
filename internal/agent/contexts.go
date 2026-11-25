@@ -305,10 +305,13 @@ func x11Features(state wmState, tools map[string]bool) (protocol.ContextFeatures
 	return f, refusals
 }
 
-// treeBackendPresent is false until the EWMH tree backend (contract §7) ships.
-// It is a constant, not a guess: the ui-tree route answers 501 today, so a
-// features row claiming window.tree:true would be the lie the unit forbids.
-const treeBackendPresent = false
+// treeBackendPresent says whether this build carries the §7 EWMH backend.
+// P13-03 shipped it, so the constant is true and the per-context answer is
+// decided by observation: a WM that publishes _NET_SUPPORTING_WM_CHECK gets
+// window.tree:true, a bare X server (Xvfb) keeps window.tree:false with
+// NO_WINDOW_MANAGER, and a display we could not ask stays NO_BACKEND. One
+// constant, two facts: the features row never promises what ui-tree refuses.
+const treeBackendPresent = true
 
 // selectorBearing is the set of commands whose params may carry `context` or
 // `session`. It is the §5.5 selector-bearing set; stream-stop is excluded

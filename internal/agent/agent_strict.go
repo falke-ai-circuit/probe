@@ -2,10 +2,11 @@ package agent
 
 // P13-01 (§5.5 E3b, rows 6, 8, 9, 13, 14). The five new selector-bearing
 // commands are parsed strictly on the agent too, so a server that is old,
-// misconfigured or bypassed cannot smuggle a field past the wire. The platform
-// backends for these primitives do not exist in this build (contract §11:
-// phase 3-5), so the honest answer after a clean parse is a typed
-// PRIMITIVE_UNSUPPORTED/NO_BACKEND — never a fabricated success.
+// misconfigured or bypassed cannot smuggle a field past the wire. Rows 6, 8, 9
+// and 14 still have no platform backend in this build (contract §11: phases
+// 4-5), so their honest answer after a clean parse is PRIMITIVE_UNSUPPORTED /
+// NO_BACKEND — never a fabricated success. Row 13 (ui-tree) was given its §7
+// backend by P13-03 and dispatches to it here.
 
 import (
 	"github.com/falke-ai-circuit/probe/internal/protocol"
@@ -55,8 +56,7 @@ func (a *Agent) handleUITree(env protocol.Envelope) protocol.Envelope {
 	if serr != nil {
 		return strictRefusal(env, serr)
 	}
-	_ = params
-	return noBackend(env, "ui-tree")
+	return a.uiTree(env, params)
 }
 
 func (a *Agent) handleUIWindow(env protocol.Envelope) protocol.Envelope {

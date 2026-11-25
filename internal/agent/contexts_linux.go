@@ -10,6 +10,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"os/user"
@@ -90,12 +91,62 @@ func scanX11Sockets() []x11SocketInfo {
 	return out
 }
 
-// probeX11 asks the display two EWMH questions in one call: is a window manager
-// running (does it publish _NET_SUPPORTING_WM_CHECK), and does it name an
-// active window. Both answers are observations; "we could not ask" is
-// wmUnknown, never "no window manager".
+// probeX11 asks the display two EWMH questions: is a window manager running
+// (does it publish _NET_SUPPORTING_WM_CHECK), and does it name an active
+// window. Both answers are observations; "we could not ask" is wmUnknown,
+// never "no window manager".
+//
+// It reads the properties over the X protocol (x11.go) first. The substrate
+// this contract was measured on has no xprop binary at all, so shelling out
+// would turn "no window manager" into "no probe" — the wrong refusal. xprop
+// stays as the fallback for a server our handshake cannot open (an authorisation
+// realm where the agent holds no cookie).
 func probeX11(num int) (wmState, *bool, string) {
 	display := ":" + strconv.Itoa(num)
+	d, err := x11Dial(num)
+	if err != nil {
+		return probeX11Xprop(display)
+	}
+	defer d.Close()
+
+	pixels := ""
+	if w, h := d.Pixels(); w > 0 && h > 0 {
+		pixels = fmt.Sprintf("%dx%d", w, h)
+	}
+
+	p, err := d.Property(d.Root(), "_NET_SUPPORTING_WM_CHECK")
+	if err != nil {
+		if err == errPropAbsent {
+			// A live X server that publishes no WM check: Xvfb.
+			return wmAbsent, nil, pixels
+		}
+		return wmUnknown, nil, pixels
+	}
+	vals := propUint32s(p)
+	if len(vals) == 0 || vals[0] == 0 {
+		return wmAbsent, nil, pixels
+	}
+	if _, err := d.Attributes(vals[0]); err != nil {
+		if _, isX := err.(*x11Error); isX {
+			// The check window is gone: a WM that died, not a WM.
+			return wmAbsent, nil, pixels
+		}
+		return wmUnknown, nil, pixels
+	}
+
+	var active *bool
+	if ap, err := d.Property(d.Root(), "_NET_ACTIVE_WINDOW"); err == nil {
+		if v := propUint32s(ap); len(v) > 0 {
+			has := v[0] != 0
+			active = &has
+		}
+	}
+	return wmPresent, active, pixels
+}
+
+// probeX11Xprop is the fallback observation, used when the protocol handshake
+// fails. It answers the same two questions from xprop's text output.
+func probeX11Xprop(display string) (wmState, *bool, string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "xprop", "-display", display, "-root",
