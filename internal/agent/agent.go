@@ -620,6 +620,7 @@ var cmdTable = map[string]func(*Agent, protocol.Envelope) protocol.Envelope{
 	protocol.TypeAuthRefresh: (*Agent).handleTokenRotate,
 	protocol.TypeTokenRotate: (*Agent).handleTokenRotate,
 	protocol.TypeTunnelOpen: (*Agent).handleTunnelOpen,
+	protocol.TypeTunnelProbe: (*Agent).handleTunnelProbe,
 	protocol.TypeTunnelData: (*Agent).handleTunnelData,
 	protocol.TypeTunnelClose: (*Agent).handleTunnelClose,
 	protocol.TypeProcList: (*Agent).handleProcList,

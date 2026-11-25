@@ -71,6 +71,13 @@ const (
 	TypeTunnelClosed  = "tunnel_closed"  // Agent → Server: tunnel closed
 	TypeTunnelError   = "tunnel_error"   // Agent → Server: tunnel error
 
+	// TunnelProbe is the create-time readiness gate (P21-06): the server
+	// asks the agent to prove the target is reachable BEFORE any listen port
+	// is published. The agent answers TypeTunnelProbeResult with ready=true,
+	// or an error envelope carrying the dial failure verbatim.
+	TypeTunnelProbe       = "tunnel_probe"
+	TypeTunnelProbeResult = "tunnel_probe_result"
+
 	// Traffic sniffer — server-side handlers exist in tunnel.go but agent
 	// doesn't implement them yet. SniffStart/Stop ARE used by the server's
 	// handleAgentSniff/handleAgentSniffStop. SniffData/Started/Stopped are
@@ -869,9 +876,40 @@ type TunnelParams struct {
 	ListenPort int    `json:"listen_port,omitempty"` // server-side listen port (0 = auto)
 }
 
-type TunnelOpenResult struct {
-	ListenPort int    `json:"listen_port"`
+// TunnelProbeParams asks the agent to open one TCP connection to
+// target_host:target_port and close it again. Its sole purpose is to let a
+// create call fail before a listen port is published.
+type TunnelProbeParams struct {
 	TunnelID   string `json:"tunnel_id"`
+	TargetHost string `json:"target_host"`
+	TargetPort int    `json:"target_port"`
+}
+
+// TunnelProbeResult is the agent's bind confirmation: it reached the target.
+type TunnelProbeResult struct {
+	TunnelID string `json:"tunnel_id"`
+	Target   string `json:"target"`
+	Ready    bool   `json:"ready"`
+}
+
+// TunnelLoopbackResult is the server's own proof that the port it is about to
+// publish accepts connections: the server dialled it and measured the
+// handshake time. A port this process cannot dial is not a working tunnel.
+type TunnelLoopbackResult struct {
+	OK        bool  `json:"ok"`
+	LatencyMS int64 `json:"latency_ms"`
+}
+
+// TunnelOpenResult is the create response. ListenPort and TunnelID are the
+// pre-existing contract and keep their names and meaning. Verified is true
+// only when BOTH proofs passed (the agent reached the target and the server
+// dialled the published port). A failed create carries none of these fields:
+// its error envelope has no listen_port key at all — absence is the contract.
+type TunnelOpenResult struct {
+	ListenPort int                   `json:"listen_port"`
+	TunnelID   string                `json:"tunnel_id"`
+	Verified   bool                  `json:"verified"`
+	Loopback   *TunnelLoopbackResult `json:"loopback,omitempty"`
 }
 
 type TunnelDataParams struct {

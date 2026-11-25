@@ -450,7 +450,8 @@ func capabilityForCommand(msgType string) string {
 		return "process"
 
 	// Network tunnel
-	case protocol.TypeTunnelOpen, protocol.TypeTunnelClose, protocol.TypeTunnelData:
+	case protocol.TypeTunnelOpen, protocol.TypeTunnelClose, protocol.TypeTunnelData,
+		protocol.TypeTunnelProbe:
 		return "tunnel"
 
 	// MITM

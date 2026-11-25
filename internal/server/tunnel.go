@@ -3,11 +3,13 @@ package server
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -228,6 +230,13 @@ func (s *Server) handleAgentTunnel(w http.ResponseWriter, r *http.Request, agent
 		return
 	}
 
+	// P21-06: a listen port is a promise, so the create call does not return
+	// until two proofs are in hand. (1) The agent dials the target and reports
+	// readiness — the agent's own error is the answer when that fails. (2) The
+	// server dials the port it is about to publish. Either failure tears the
+	// listener down and answers with an error envelope that has no listen_port
+	// key at all: absence is the contract, because a caller that sees the key
+	// will dial a port that does not work.
 	t, err := s.newTunnel(agentID, params.TargetHost, params.TargetPort, params.ListenPort)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("tunnel creation failed: %v", err), http.StatusInternalServerError)
@@ -236,15 +245,140 @@ func (s *Server) handleAgentTunnel(w http.ResponseWriter, r *http.Request, agent
 
 	actualPort := t.Listener.Addr().(*net.TCPAddr).Port
 
+	if fail := s.confirmTunnelTarget(agentID, t); fail != nil {
+		s.abandonTunnel(t)
+		s.writeTunnelFailure(w, agentID, fail)
+		return
+	}
+
+	ok, latency, dialErr := tunnelLoopbackProbe(actualPort)
+	if !ok {
+		s.abandonTunnel(t)
+		s.writeTunnelFailure(w, agentID, &tunnelFailure{
+			Status:  http.StatusBadGateway,
+			Code:    "TUNNEL_LOOPBACK_FAILED",
+			Message: fmt.Sprintf("listen port %d did not accept a connection from the server: %s", actualPort, dialErr),
+			Detail:  map[string]interface{}{"agent_id": agentID, "tunnel_id": t.ID, "port_not_dialable": true},
+		})
+		return
+	}
+
 	result := protocol.TunnelOpenResult{
 		ListenPort: actualPort,
 		TunnelID:   t.ID,
+		Verified:   true,
+		Loopback:   &protocol.TunnelLoopbackResult{OK: true, LatencyMS: latency},
 	}
-	log.Printf("[tunnel] opened %s → agent %s → %s:%d (listen :%d)",
-		t.ID, agentID, params.TargetHost, params.TargetPort, actualPort)
+	log.Printf("[tunnel] opened %s → agent %s → %s:%d (listen :%d, loopback %dms)",
+		t.ID, agentID, params.TargetHost, params.TargetPort, actualPort, latency)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
+}
+
+// Timeouts for the two create-time proofs (P21-06). They are variables because
+// a test that exercises the timeout path must not spend the production budget;
+// production uses these values.
+var (
+	// tunnelReadyTimeout bounds the wait for the agent's bind confirmation.
+	// The agent's own dial is bounded at 3s (agent.tunnelProbeDialTimeout),
+	// so an unreachable or blackholed target still produces the agent's own
+	// answer inside this window instead of a bare server timeout.
+	tunnelReadyTimeout = 5 * time.Second
+	// tunnelLoopbackTimeout bounds the server's dial of the port it opened.
+	tunnelLoopbackTimeout = 2 * time.Second
+)
+
+// tunnelLoopbackProbe is the server-side proof. It is a variable so a test can
+// force the failure branch deterministically; production dials for real.
+var tunnelLoopbackProbe = dialTunnelLoopback
+
+// dialTunnelLoopback dials the freshly-opened listen port from this process and
+// reports the handshake time. ok=false means the port the caller was about to
+// be given is not usable, which is a failure response, not a warning.
+func dialTunnelLoopback(port int) (bool, int64, string) {
+	start := time.Now()
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), tunnelLoopbackTimeout)
+	if err != nil {
+		return false, 0, err.Error()
+	}
+	latency := time.Since(start).Milliseconds()
+	conn.Close()
+	return true, latency, ""
+}
+
+// tunnelFailure is a refused create: typed code, the sentence the caller sees,
+// and the HTTP status. It carries no port in any field.
+type tunnelFailure struct {
+	Status  int
+	Code    string
+	Message string
+	Detail  map[string]interface{}
+}
+
+// confirmTunnelTarget asks the agent to prove the target is reachable. nil
+// means the agent confirmed. A refusal that never reached the wire keeps the
+// dispatch predicate's status (503 absence / 502 agent-side error); a sent
+// command that never answered is the timeout case and has its own code.
+func (s *Server) confirmTunnelTarget(agentID string, t *Tunnel) *tunnelFailure {
+	params := protocol.TunnelProbeParams{
+		TunnelID:   t.ID,
+		TargetHost: t.TargetHost,
+		TargetPort: t.TargetPort,
+	}
+	resp, err := s.forwardToAgentWithTimeout(agentID, protocol.TypeTunnelProbe, params, tunnelReadyTimeout, "")
+	if err != nil {
+		var refusal *ForwardRefusal
+		if errors.As(err, &refusal) {
+			// The probe never left the server: this unit must not turn the
+			// predicate's own answer into a timeout lie.
+			d := s.dispatchRefusal(agentID, "tunnel", err)
+			return &tunnelFailure{Status: d.Status, Code: d.Code, Message: d.Message, Detail: d.Detail}
+		}
+		return &tunnelFailure{
+			Status: http.StatusBadGateway,
+			Code:   "TUNNEL_READY_TIMEOUT",
+			Message: fmt.Sprintf("agent %s did not confirm the tunnel target within %v; no listen port was published",
+				agentID, tunnelReadyTimeout),
+			Detail: map[string]interface{}{
+				"agent_id": agentID,
+				"tunnel_id": t.ID,
+				"timeout_ms": tunnelReadyTimeout.Milliseconds(),
+				"ran":        false,
+			},
+		}
+	}
+	if m, ok := resp.(map[string]interface{}); ok && m["error"] != nil {
+		detail := map[string]interface{}{"agent_id": agentID, "tunnel_id": t.ID, "ran": false}
+		if code, has := m["code"]; has {
+			detail["agent_code"] = code
+		}
+		return &tunnelFailure{
+			Status:  http.StatusBadGateway,
+			Code:    "TUNNEL_BIND_FAILED",
+			Message: fmt.Sprint(m["error"]),
+			Detail:  detail,
+		}
+	}
+	return nil
+}
+
+// abandonTunnel undoes a create that failed verification: the tunnel leaves the
+// map and the listener stops accepting. Called on every refusal path so a
+// timed-out or refused call cannot leak a listening socket. The proof is
+// external: the refused request's port answers nothing (tests dial it).
+func (s *Server) abandonTunnel(t *Tunnel) {
+	s.tunnelMu.Lock()
+	delete(s.tunnels, t.ID)
+	s.tunnelMu.Unlock()
+	t.Close()
+}
+
+// writeTunnelFailure renders a refused create. No listen_port key is written,
+// not even as null or zero.
+func (s *Server) writeTunnelFailure(w http.ResponseWriter, agentID string, f *tunnelFailure) {
+	log.Printf("[tunnel] create refused for agent %s: %s: %s", agentID, f.Code, f.Message)
+	writeErrorDetail(w, f.Status, f.Code, f.Message, f.Detail)
 }
 
 // handleAgentTunnelClose closes a tunnel.

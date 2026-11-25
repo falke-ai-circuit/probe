@@ -95,6 +95,43 @@ func (a *Agent) handleTunnelOpen(env protocol.Envelope) protocol.Envelope {
 	})
 }
 
+// tunnelProbeDialTimeout bounds the agent's readiness dial (P21-06). It is
+// shorter than the server's tunnelReadyTimeout (5s) on purpose: an agent whose
+// target blackholes SYN must still answer the probe before the server gives up,
+// so the caller gets the agent's own failure sentence instead of a bare timeout.
+const tunnelProbeDialTimeout = 3 * time.Second
+
+// handleTunnelProbe is the create-time readiness gate (P21-06). The server
+// sends it before it publishes a listen port; the agent proves the target is
+// reachable from THIS host by dialling it once. A dial failure is returned as
+// a typed error carrying the OS error verbatim — the server's 502 repeats that
+// text and publishes no port at all.
+func (a *Agent) handleTunnelProbe(env protocol.Envelope) protocol.Envelope {
+	var params protocol.TunnelProbeParams
+	if err := json.Unmarshal(env.Params, &params); err != nil {
+		return protocol.NewError(env.ID, protocol.ErrInvalidParams, err.Error())
+	}
+	if params.TargetHost == "" || params.TargetPort == 0 {
+		return protocol.NewError(env.ID, protocol.ErrInvalidParams, "missing target_host or target_port")
+	}
+
+	targetAddr := net.JoinHostPort(params.TargetHost, strconv.Itoa(params.TargetPort))
+	conn, err := net.DialTimeout("tcp", targetAddr, tunnelProbeDialTimeout)
+	if err != nil {
+		return protocol.NewError(env.ID, protocol.ErrInternal,
+			fmt.Sprintf("agent bind check failed: connect to %s failed: %v", targetAddr, err))
+	}
+	// The probe proves reachability only; it must not hold a target
+	// connection open — the tunnel's own connections are opened per client.
+	conn.Close()
+
+	return protocol.NewResult(env.ID, protocol.TypeTunnelProbeResult, protocol.TunnelProbeResult{
+		TunnelID: params.TunnelID,
+		Target:   targetAddr,
+		Ready:    true,
+	})
+}
+
 // relayTargetToServer reads data from the target connection and sends it
 // to the server as tunnel_data frames (direction: target→client).
 func (a *Agent) relayTargetToServer(connID string, target net.Conn) {
