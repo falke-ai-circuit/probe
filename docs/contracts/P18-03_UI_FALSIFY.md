@@ -1,7 +1,7 @@
 # P18-03 — UI FALSIFICATION: RENDERED vs RAW (P18-01 /network, P18-02 via-relay column)
 
 **CLOSE HEADER**
-`reviewed_by: reviewer (P18-03 = review gate for P18-01 a60d02a and P18-02 9e68ca7)` · `verdict: PENDING-REVIEW` · `verdict_sha_of_head: pinned at commit (see close report)`
+`reviewed_by: reviewer (P18-03 = review gate for P18-01 a60d02a and P18-02 9e68ca7)` · `verdict: PENDING-REVIEW` · `verdict_sha_of_head: d26c296fbb3f77144a7a4dfbafe469e11aa5d3af (pushed origin r119-build, 9e68ca7..d26c296, 0/0)`
 `artefact: /opt/data/tmp/probe119/P18-03_UI_FALSIFY.md (+ repo copy docs/contracts/P18-03_UI_FALSIFY.md)`
 `suite: 0 failed, 0 new red — falsification unit, read-only on code; no web/ or Go file touched, so no build floor re-run owed` · `open item: F1 topology-graph layout overlap (below) — the only genuine MISMATCH; it holds the P18-01/P18-02 gate flip`
 
