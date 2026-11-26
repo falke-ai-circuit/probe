@@ -95,16 +95,25 @@ jobs:
             --user admin --password apitest-ci-pass-1 \
             --golden scripts/golden/golden_baseline.json --golden-diff \
             --output /tmp/apitest/results.json 2>&1 | tee /tmp/apitest/gate.log
-          # Budget enforcement: the suite prints TOTAL s.mmm
+          # Gate semantics: DRIFT = red, budget breach = red, endpoint FAIL
+          # rows other than the documented KNOWN-DEFECT drill = red. Even when
+          # the suite itself exits 0, a shape change against the committed
+          # golden must fail the build.
           python3 - <<'EOF'
-          import re
+          import re, sys
           log = open("/tmp/apitest/gate.log").read()
+          if "GOLDEN DRIFT" in log:
+              print("FAIL: golden baseline DRIFT (shape drift = red; "
+                    "--golden-update is a deliberate, reviewed commit only)")
+              sys.exit(1)
           m = re.search(r"TOTAL (\d+)\.(\d{3})s", log)
           if not m:
-              print("FAIL: no TOTAL line found"); raise SystemExit(1)
+              print("FAIL: no TOTAL line found"); sys.exit(1)
           ms = int(m.group(1)) * 1000 + int(m.group(2))
           print(f"suite wall time: {ms} ms (budget 120000 ms)")
-          raise SystemExit(0 if ms <= 120000 else 1)
+          if ms > 120000:
+              print("FAIL: suite exceeded the 120s budget"); sys.exit(1)
+          sys.exit(0)
           EOF
 
       - name: Stop scratch server
