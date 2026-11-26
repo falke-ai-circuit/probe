@@ -623,6 +623,8 @@ def main():
             print("-- GOLDEN DRIFT (%d) --" % len(drift))
             for d in drift:
                 print("  " + d)
+            print("golden diff: SHAPE DRIFT = POSSIBLE REGRESSION (update the golden only as a deliberate, reviewed commit — docs/TESTING.md)")
+            failed = failed or [True]  # drift fails the run: a gate that prints red but exits green protects nothing
         else:
             print("golden diff: NO DRIFT (%d endpoints identical)" % len(gold))
 
