@@ -1,5 +1,5 @@
 {
- "captured_from": "http://127.0.0.1:7811",
+ "captured_from": "http://127.0.0.1:7812",
  "mode": "test",
  "routes": {
   "POST /api/v1/login(valid)": {
@@ -90,7 +90,7 @@
    "status": 200,
    "ok": true,
    "error_code": null,
-   "data_shape": "keys:audit_log_active,blacklist_active,blacklist_count,ip_filter_active,login_rate_limit,mtls,operators_count,require_api_auth,tls,token_ttl"
+   "data_shape": "keys:allowed_cidr,audit_log_active,blacklist_active,blacklist_count,ip_filter_active,login_rate_limit,mtls,operators_count,require_api_auth,tls,token_ttl"
   },
   "GET /api/v1/security/login-attempts": {
    "status": 200,
@@ -111,9 +111,9 @@
    "data_shape": "keys:edges,nodes"
   },
   "GET /api/v1/replicate/source": {
-   "status": 500,
-   "ok": false,
-   "error_code": "INTERNAL_ERROR",
+   "status": 200,
+   "ok": null,
+   "error_code": null,
    "data_shape": null
   },
   "GET /openapi.json": {
@@ -802,5 +802,5 @@
   }
  },
  "skipped": [],
- "total_ms": 3225
+ "total_ms": 4268
 }
