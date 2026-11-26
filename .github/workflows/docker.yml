@@ -86,6 +86,30 @@ jobs:
             type=semver,pattern={{version}}
             type=ref,event=tag
 
+      # P24-01 §8 release guards — MUST pass before any push step runs.
+      # Guard A: the freshly built image's org.opencontainers.image.version
+      #   must equal internal/version/version.go's Semver at this sha, so a
+      #   label can never disagree with the version source (the 62a3b8e /
+      #   e46023f "two builds under one version string" collision dies here).
+      # Guard B: the built sha must carry a v<semver> tag resolving to exactly
+      #   that commit, and on a v* tag push the pushed ref must BE that tag —
+      #   the "image without a release identity" failure mode (18 tags, newest
+      #   v1.15.0-fud; 1.19.0/1.19.1 never tagged) is refused pre-push.
+      # scripts/check-release-guards.sh exits 1 on any refusal; the guards are
+      # ADDITIVE — the trigger shape (branches [main, r119-build], tags v*,
+      # workflow_dispatch) from P15-14 is unchanged.
+      - name: Guard A — version label equals version source (build, pre-push)
+        run: |
+          set -euo pipefail
+          docker build -q -t "$IMAGE:guards-probe" --build-arg GIT_SHA="${{ github.sha }}" --build-arg VERSION="${{ steps.appver.outputs.semver }}" .
+          IMAGE="$IMAGE:guards-probe" REVISION="${{ github.sha }}" scripts/check-release-guards.sh "$IMAGE:guards-probe" "${{ github.sha }}"
+
+      - name: Guard B — revision sha carries the release tag (pre-push)
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+          REVISION="${{ github.sha }}" scripts/check-release-guards.sh "$IMAGE:guards-probe" "${{ github.sha }}"
+
       - name: Build and push (linux/amd64, linux/arm64)
         id: build
         uses: docker/build-push-action@v6
