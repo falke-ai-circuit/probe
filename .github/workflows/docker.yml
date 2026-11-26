@@ -4,9 +4,20 @@ name: Docker Image
 # The host never builds: it pulls the published image (see docker-compose.yml,
 # P8-14 part b) so /src inside the runtime can never lag the repo again.
 
+# Deployable refs — what a build from each means (do not infer from YAML):
+#   - push to `main`       → production image; the host may run it as-is.
+#   - push to `r119-build` → candidate image from the working branch; same
+#     pipeline, same immutable sha tag. A deploy must verify the image digest
+#     and org.opencontainers.image.revision == the pushed sha before swapping
+#     the stack.
+#   - push of a `v*` tag   → release image; additionally carries the semver tag
+#     from internal/version/version.go.
+#   - workflow_dispatch    → manual rebuild of any ref above.
+# Every build gets an immutable sha tag (type=sha,format=long); `latest` is
+# never pushed (flavor: latest=false), on branch builds included.
 on:
   push:
-    branches: [main]
+    branches: [main, r119-build]
     tags:
       - 'v*'
   workflow_dispatch:
