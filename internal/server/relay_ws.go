@@ -24,6 +24,19 @@ type relayMetadata struct {
 }
 
 // relaySession represents a connected relay and its virtual channels.
+//
+// P15-12 LOCK ORDER (relay-first), binding on every site that touches both
+// relayMu and a session's channelsMu:
+//   - never acquire a session's channelsMu while holding relayMu;
+//   - never hold channelsMu across a relayMu acquisition.
+//
+// Sites obey it by snapshot-and-release: take relayMu, copy out what is
+// needed (session pointers, ids), release, then read channelsMu per session.
+// The captured production hang (528-goroutine dump
+// /opt/data/tmp/probe119/P15-11_GOROUTINE.log) was the inverse order:
+// cleanupRelaySession held channelsMu while waiting on relayMu while
+// relayChannelOwner held relayMu while waiting on channelsMu — 251 readers
+// parked for 145 minutes.
 type relaySession struct {
 	relayID    string
 	magic      byte
@@ -510,29 +523,41 @@ func (s *Server) handleRelayControl(session *relaySession, payload []byte) {
 }
 
 // cleanupRelaySession removes all agents from a disconnected relay.
+//
+// P15-12: relay-first order — snapshot the channels under channelsMu, release
+// the session lock, then take relayMu. The pre-fix shape held channelsMu
+// (deferred Unlock) across both relayMu acquisitions below, closing the ABBA
+// cycle against relayChannelOwner and parking 251 health readers for 145
+// minutes. The snapshot is taken once; the sweep works on the copy.
 func (s *Server) cleanupRelaySession(session *relaySession) {
-	session.channelsMu.Lock()
-	defer session.channelsMu.Unlock()
-	for chanID, vc := range session.channels {
-		if vc.agentID != "" {
-			s.mu.Lock()
-			delete(s.conns, vc.agentID)
-			delete(s.connWriteMu, vc.agentID)
-			s.mu.Unlock()
-			// P21-05: a link that dies takes every route it carried with it.
-			// The map is swept here, before the sockets' owners can be asked.
-			s.dropRelayRoute(vc.agentID)
-			session.link.agentGone(vc.agentID)
-			s.registry.Unregister(vc.agentID)
-			s.sessions.RemoveSession(vc.agentID)
-			s.ClearTokenExpiry(vc.agentID)
-		}
-		delete(session.channels, chanID)
-	}
-
 	// P22-02: the record is written BEFORE the session leaves the map. The
 	// session is deleted here; the peer is not — a killed relay flips to
 	// state=down with its last_seen intact instead of vanishing (§6.3).
+	session.channelsMu.Lock()
+	sweep := make([]*virtualConn, 0, len(session.channels))
+	for chanID, vc := range session.channels {
+		if vc.agentID != "" {
+			sweep = append(sweep, vc)
+		}
+		delete(session.channels, chanID)
+	}
+	session.channelsMu.Unlock()
+	swept := len(session.channels)
+
+	for _, vc := range sweep {
+		s.mu.Lock()
+		delete(s.conns, vc.agentID)
+		delete(s.connWriteMu, vc.agentID)
+		s.mu.Unlock()
+		// P21-05: a link that dies takes every route it carried with it.
+		// The map is swept here, before the sockets' owners can be asked.
+		s.dropRelayRoute(vc.agentID)
+		session.link.agentGone(vc.agentID)
+		s.registry.Unregister(vc.agentID)
+		s.sessions.RemoveSession(vc.agentID)
+		s.ClearTokenExpiry(vc.agentID)
+	}
+
 	s.relayMu.Lock()
 	current := s.relays[session.relayID] == session
 	s.relayMu.Unlock()
@@ -547,7 +572,7 @@ func (s *Server) cleanupRelaySession(session *relaySession) {
 	}
 	session.stop()
 
-	log.Printf("[server] relay %s: cleaned up %d channels", session.relayID, len(session.channels))
+	log.Printf("[server] relay %s: cleaned up %d channels", session.relayID, swept)
 }
 
 // watchRelayLiveness keeps the peer's state honest while the socket is open.

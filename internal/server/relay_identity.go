@@ -367,9 +367,18 @@ func (s *Server) listRelayIdentities() []RelayIdentity {
 	s.relayMu.RLock()
 	for i := range out {
 		if sess, ok := s.relays[out[i].ID]; ok {
+			// P15-12: relay-first order — read the channel count under the
+			// session's own channelsMu before letting relayMu go. The
+			// pre-fix read of sess.channels here was unsynchronised: a
+			// concurrent cleanupRelaySession could observe a torn or
+			// mid-sweep map (miscounted Links, at worst a crash under
+			// -race), so this site now obeys the same order as every
+			// other relayMu+channelsMu site.
+			sess.channelsMu.RLock()
 			out[i].Connected = true
 			out[i].Links = len(sess.channels)
 			out[i].Since = sess.startedAt
+			sess.channelsMu.RUnlock()
 		}
 	}
 	s.relayMu.RUnlock()

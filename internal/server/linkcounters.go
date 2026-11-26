@@ -440,12 +440,19 @@ func (s *Server) handleV1Chain(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// liveRelays copies the relay sessions under the lock.
+// liveRelays copies the relay sessions under the locks. P15-12: relay-first
+// order — snapshot the session set under relayMu, release it, then read
+// channelsMu per session; the two mutexes are never held together.
 func (s *Server) liveRelays() []liveRelay {
 	s.relayMu.RLock()
-	defer s.relayMu.RUnlock()
-	out := make([]liveRelay, 0, len(s.relays))
+	sessions := make([]*relaySession, 0, len(s.relays))
 	for _, rs := range s.relays {
+		sessions = append(sessions, rs)
+	}
+	s.relayMu.RUnlock()
+
+	out := make([]liveRelay, 0, len(sessions))
+	for _, rs := range sessions {
 		lr := liveRelay{
 			relayID:  rs.relayID,
 			channels: make(map[uint32]string),

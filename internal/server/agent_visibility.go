@@ -60,7 +60,14 @@ func (s *Server) AgentDispatchability(agentID string) (bool, string, string) {
 			return false, LivenessSourceRelay,
 				fmt.Sprintf("relay %s holds a channel for agent %s but no route entry was written for it; nothing can be dispatched", relayID, agentID)
 		}
-		if _, direct := s.conns[agentID]; direct {
+		// P15-12: read under s.mu — this pre-existing unlocked s.conns read
+		// races the same delete cleanupRelaySession performs (the -race run
+		// on the deadlock test caught it), and s.mu is never held by a
+		// caller here. Same class as the relay_identity.go:367 defect.
+		s.mu.RLock()
+		_, direct := s.conns[agentID]
+		s.mu.RUnlock()
+		if direct {
 			// A transport with no write mutex cannot be framed safely.
 			return false, LivenessSourceRegistryOnly,
 				"agent has a transport but no per-agent write mutex; dispatch would race another writer"
@@ -85,15 +92,25 @@ func (s *Server) AgentDispatchability(agentID string) (bool, string, string) {
 // relayChannelOwner reports which connected relay holds a channel for agentID.
 // The conn-map is authoritative; this only names a channel that exists before
 // the agent's own registration completed, so the reason can point at it.
+//
+// P15-12: relay-first order — snapshot the session set under relayMu, release
+// it, then read per-session channels. Holding relayMu across channelsMu (the
+// pre-fix shape) is the half of the ABBA cycle that parked the health queue.
 func (s *Server) relayChannelOwner(agentID string) (string, bool) {
 	s.relayMu.RLock()
-	defer s.relayMu.RUnlock()
+	sessions := make([]*relaySession, 0, len(s.relays))
+	ids := make([]string, 0, len(s.relays))
 	for id, sess := range s.relays {
+		sessions = append(sessions, sess)
+		ids = append(ids, id)
+	}
+	s.relayMu.RUnlock()
+	for i, sess := range sessions {
 		sess.channelsMu.RLock()
 		for _, vc := range sess.channels {
 			if vc.agentID == agentID {
 				sess.channelsMu.RUnlock()
-				return id, true
+				return ids[i], true
 			}
 		}
 		sess.channelsMu.RUnlock()
