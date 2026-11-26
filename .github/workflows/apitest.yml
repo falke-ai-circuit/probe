@@ -1,0 +1,110 @@
+name: API Shape Gate
+
+# P26-03 — apitest.py as a standard. Runs the API-shape regression suite on
+# every push to release branches and fails the build on shape drift or any
+# endpoint regression. The golden baseline in scripts/golden/ is the standard
+# of record; updating it is a reviewed manual commit (docs/TESTING.md).
+
+on:
+  push:
+    branches:
+      - main
+      - 'release/**'
+  workflow_dispatch:
+    inputs:
+      drift:
+        description: 'Deliberate drift demo: mutate one golden fingerprint before diffing (proves the gate goes RED)'
+        required: false
+        default: 'false'
+        type: boolean
+
+jobs:
+  api-shape-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Build probe server (release binary, correct semver)
+        run: |
+          GOFLAGS=-mod=vendor CGO_ENABLED=0 go build -trimpath \
+            -ldflags "-X github.com/falke-ai-circuit/probe/internal/version.Semver=1.19.2" \
+            -o /tmp/apitest/probe-server ./cmd/probe-server/
+
+      - name: Boot scratch instance (own datadir, own secret store)
+        run: |
+          mkdir -p /tmp/apitest/datadir/files /tmp/apitest/datadir/runtime
+          cd "$GITHUB_WORKSPACE"   # repo cwd: replicate/source resolves the module root (SourceModuleRoot walk)
+          PROBE_SECRET_STORE=/tmp/apitest/datadir/secrets.json \
+          /tmp/apitest/probe-server \
+            --addr 127.0.0.1:7811 \
+            --token apitest-ci-token \
+            --admin-password apitest-ci-pass-1 \
+            --allowed-cidr 127.0.0.0/8 \
+            --require-api-auth \
+            --files-dir /tmp/apitest/datadir/files \
+            --registry /tmp/apitest/datadir/runtime/registry.json \
+            --operator-db /tmp/apitest/datadir/runtime/operators.json \
+            --enrollment-db /tmp/apitest/datadir/runtime/enrollment.json \
+            --builder-db /tmp/apitest/datadir/runtime/builds.json \
+            --builder-output-dir /tmp/apitest/datadir/runtime/builds \
+            --profiles-db /tmp/apitest/datadir/runtime/profiles.json \
+            --ca-dir /tmp/apitest/datadir/runtime/ca \
+            > /tmp/apitest/server.log 2>&1 &
+          LONGRUN=$!
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:7811/api/v1/health > /dev/null && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:7811/api/v1/health > /dev/null || { cat /tmp/apitest/server.log; exit 1; }
+          echo "LONGRUN=$LONGRUN" >> "$GITHUB_ENV"
+
+      - name: Suite unit tests (helpers)
+        run: python3 scripts/test_apitest.py
+
+      - name: Deliberate-drift mutation (workflow_dispatch drift=true only)
+        if: ${{ github.event.inputs.drift == 'true' }}
+        run: |
+          # Known-defect drill: flip one committed fingerprint (replicate/source
+          # 200 zip -> 500 INTERNAL_ERROR is exactly the bug the review fixed).
+          python3 - <<'EOF'
+          import json
+          p = "scripts/golden/golden_baseline.json"
+          g = json.load(open(p))
+          g["routes"]["GET /api/v1/replicate/source"] = {
+              "status": 500, "ok": False, "error_code": "INTERNAL_ERROR", "data_shape": None}
+          json.dump(g, open(p, "w"), indent=1)
+          print("mutated: GET /api/v1/replicate/source -> 500 INTERNAL_ERROR (drill)")
+          EOF
+
+      - name: Run API shape gate (test mode, golden diff, <=120s budget)
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          set -o pipefail
+          python3 scripts/apitest.py \
+            --base http://127.0.0.1:7811 --mode test \
+            --user admin --password apitest-ci-pass-1 \
+            --expected-version 1.19.2 \
+            --golden scripts/golden/golden_baseline.json --golden-diff \
+            --output /tmp/apitest/results.json 2>&1 | tee /tmp/apitest/gate.log
+          # Budget enforcement: the suite prints TOTAL s.mmm
+          python3 - <<'EOF'
+          import re
+          log = open("/tmp/apitest/gate.log").read()
+          m = re.search(r"TOTAL (\d+)\.(\d{3})s", log)
+          if not m:
+              print("FAIL: no TOTAL line found"); raise SystemExit(1)
+          ms = int(m.group(1)) * 1000 + int(m.group(2))
+          print(f"suite wall time: {ms} ms (budget 120000 ms)")
+          raise SystemExit(0 if ms <= 120000 else 1)
+          EOF
+
+      - name: Stop scratch server
+        if: always()
+        run: |
+          [ -n "$LONGRUN" ] && kill "$LONGRUN" 2>/dev/null || true
+          tail -20 /tmp/apitest/server.log 2>/dev/null || true
