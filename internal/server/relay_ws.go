@@ -18,6 +18,10 @@ type relayMetadata struct {
 	MaxAgents  int    `json:"max_agents,omitempty"`
 	Upstream   string `json:"upstream,omitempty"`
 	AgentCount int    `json:"agent_count,omitempty"`
+	// P17-02 (spec §3): the relay's own version.Semver. Empty = pre-extension
+	// relay (honest absence — the field stays ABSENT, omitempty; never
+	// ""-stamped, never defaulted to the server's own version).
+	Version string `json:"version,omitempty"`
 	// P21-04: the forwarding chain this relay's clients arrived through. The
 	// receiving server refuses a registration whose chain already names it.
 	Chain Chain `json:"chain,omitempty"`

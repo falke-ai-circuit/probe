@@ -43,6 +43,9 @@ type RelayMetadata struct {
 	MaxAgents  int    `json:"max_agents,omitempty"`
 	Upstream   string `json:"upstream,omitempty"`
 	AgentCount int    `json:"agent_count,omitempty"` // updated on channel_open/close
+	// P17-02: the relay's own build version, stamped at registration. Empty on
+	// pre-extension relays (honest absence, never defaulted).
+	Version string `json:"version,omitempty"`
 }
 
 // Frame parses a relay framing header from a byte slice.

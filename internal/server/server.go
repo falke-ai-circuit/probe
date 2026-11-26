@@ -266,6 +266,12 @@ type Server struct {
 	// in tests keep working unchanged; one store, one lock, one document.
 	invMu sync.Mutex
 	inv   *serversStore
+
+	// P17-02: peer backend (peers.go) — the process-wide manager and its
+	// construction lock. Bootstrapped at Start and lazily on first peers
+	// API touch.
+	peersMu sync.Mutex
+	peers   *peerManager
 }
 
 // startTime records when the server process began, used by /health for uptime.
@@ -537,6 +543,9 @@ func (s *Server) registerRoutes() {
 	// REST API v1 — versioned, consistent response format, Go 1.22 patterns.
 	s.registerV1Routes()
 
+	// P17-02: peers CRUD + action (spec §2) — the six routes.
+	s.registerPeersRoutes()
+
 	// OpenAPI 3.0 specification endpoint.
 	s.mux.HandleFunc("GET /openapi.json", s.handleOpenAPI)
 
@@ -573,6 +582,10 @@ func (s *Server) Start() error {
 	// P12-03: ask the agents, do not assume. The ping probe is what turns
 	// "the socket exists" into "the agent answers".
 	s.StartAgentPingProbe()
+
+	// P17-02: peer backend bootstrap (spec §5). Spawns are staggered
+	// goroutines; this call never blocks and boot never waits on a peer.
+	go s.bootstrapPeers()
 
 	// Shutdown hook: when the http server returns (graceful shutdown or
 	// crash), drain the flow event store and stop the flow scheduler.

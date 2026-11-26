@@ -119,6 +119,64 @@ type serverEntry struct {
 	TokenFP          *string           `json:"token_fp"`
 	TokenFPVerified  bool              `json:"token_fp_verified"`
 	TokenFPScope     string            `json:"token_fp_scope"`
+	// P17-02 (spec §3): the peer object additions. peer_meta is built from
+	// relay_register metadata — every key emitted, null when absent (R3;
+	// FM-3.1 unparseable metadata = all keys null, counts from the channel
+	// map, never guesses). link_state rides the §4 machine (live inbound
+	// rows: socket-open evidence; dialed peers: the manager's state).
+	// config_ref is present ONLY when this peer is a configured default_peer
+	// (dialed BY us); null for inbound relays.
+	PeerMeta  *peerMetaRow `json:"peer_meta"`
+	LinkState *string      `json:"link_state"`
+	ConfigRef *configRef   `json:"config_ref"`
+}
+
+// peerMetaRow is one peer's relay_register metadata as the row carries it.
+// Named pointer per key so absent metadata renders nulls, never zeros.
+type peerMetaRow struct {
+	Upstream   *string `json:"upstream"`
+	Listen     *string `json:"listen"`
+	AgentCount *int    `json:"agent_count"`
+	MaxAgents  *int    `json:"max_agents"`
+	// Chain is the Chain object the wire carries ({hops, traversed}) — the
+	// honest form, not a flattened id array.
+	Chain *Chain `json:"chain"`
+}
+
+// configRef names the default_peers entry a peer row answers to.
+type configRef struct {
+	ID     string `json:"id"`
+	Source string `json:"source"`
+}
+
+// peerMetaFromSession builds the §3 peer_meta block. meta == nil (FM-3.1,
+// unparseable) or any absent key → null; never guessed, never defaulted.
+func peerMetaFromSession(meta *relayMetadata) *peerMetaRow {
+	row := &peerMetaRow{}
+	if meta == nil {
+		return row
+	}
+	if meta.Upstream != "" {
+		v := meta.Upstream
+		row.Upstream = &v
+	}
+	if meta.ListenAddr != "" {
+		v := meta.ListenAddr
+		row.Listen = &v
+	}
+	if meta.AgentCount > 0 {
+		v := meta.AgentCount
+		row.AgentCount = &v
+	}
+	if meta.MaxAgents > 0 {
+		v := meta.MaxAgents
+		row.MaxAgents = &v
+	}
+	if meta.Chain.Hops > 0 || len(meta.Chain.Traversed) > 0 {
+		c := meta.Chain
+		row.Chain = &c
+	}
+	return row
 }
 
 // serversResponse is the envelope's data object.
@@ -156,11 +214,33 @@ type peerRecord struct {
 }
 
 // serversDoc is the on-disk document (§6.4). No secrets: fingerprints only.
+// P17-02: version 2 adds default_peers — the operator-intent namespace for
+// peers THIS server dials. It never carries plaintext: token_sealed is a
+// CredentialStore-sealed blob, token_fp its fingerprint.
 type serversDoc struct {
 	Version   int                    `json:"version"`
 	UpdatedAt string                 `json:"updated_at"`
 	Local     serversLocalRecord     `json:"local"`
 	Peers     map[string]*peerRecord `json:"peers"`
+	// P17-02 (spec §2): operator intent, distinct from the runtime `peers`
+	// observation records above. Touched ONLY by the peers API handler
+	// under the store lock (FM-2.3).
+	DefaultPeers map[string]*defaultPeerRecord `json:"default_peers,omitempty"`
+}
+
+// defaultPeerRecord is one operator-configured peer (spec §2). The sealed
+// token lives here — never plaintext, never a hash (spec §6: a hash cannot
+// be presented upstream, sealing is the only correct at-rest form).
+type defaultPeerRecord struct {
+	ID          string `json:"id"`
+	Upstream    string `json:"upstream"`
+	TokenSealed string `json:"token_sealed"`
+	TokenFP     string `json:"token_fp"`
+	Enabled     bool   `json:"enabled"`
+	Listen      string `json:"listen"`
+	MaxAgents   int    `json:"max_agents"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
 }
 
 type serversLocalRecord struct {
@@ -180,6 +260,10 @@ type serversStore struct {
 	retention time.Duration
 	maxPeers  int
 	floor     time.Duration
+
+	// P17-02: set when the document was unreadable or corrupt at load —
+	// peers config is then treated as absent (local mode, spec §5.4).
+	loadFailed bool
 }
 
 // inventory returns the process-wide inventory store, creating it on first
@@ -237,11 +321,15 @@ func (st *serversStore) loadLocked() {
 	if st.doc.Peers == nil {
 		st.doc.Peers = make(map[string]*peerRecord)
 	}
+	if st.doc.DefaultPeers == nil {
+		st.doc.DefaultPeers = make(map[string]*defaultPeerRecord)
+	}
 	st.doc.Version = 1
 	raw, err := os.ReadFile(st.path)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			log.Printf("[servers] servers.json unreadable: %v — serving local only", err)
+			st.loadFailed = true
 		}
 		return
 	}
@@ -254,12 +342,23 @@ func (st *serversStore) loadLocked() {
 		} else {
 			log.Printf("[servers] servers.json corrupt: %v — moved to %s, serving local only", err, quarantine)
 		}
+		st.loadFailed = true
 		return
 	}
 	if doc.Peers == nil {
 		doc.Peers = make(map[string]*peerRecord)
 	}
-	doc.Version = 1
+	if doc.DefaultPeers == nil {
+		// v1 → v2 tolerance (P17-02 FM-2.2): a v1 document has no
+		// default_peers; it is initialised empty. Version bumps to 2 only
+		// when a peer is actually written — loading alone does not rewrite
+		// the document an old binary must still be able to read (it reads
+		// `peers` only; unknown fields are ignored by decode).
+		doc.DefaultPeers = make(map[string]*defaultPeerRecord)
+	}
+	if doc.Version == 0 {
+		doc.Version = 1
+	}
 	st.doc = doc
 }
 
@@ -291,6 +390,9 @@ func (st *serversStore) writeLocked(force bool) {
 	}
 	if !force && time.Since(st.last) < st.floor {
 		return
+	}
+	if st.doc.Version < defaultPeersDocVersion && len(st.doc.DefaultPeers) > 0 {
+		st.doc.Version = defaultPeersDocVersion
 	}
 	st.doc.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	raw, err := json.MarshalIndent(st.doc, "", "  ")
@@ -762,6 +864,7 @@ func (s *Server) peerEntries(now time.Time) []serverEntry {
 			TokenFP:          rec.TokenFP,
 			TokenFPVerified:  false, // the shared token identifies no peer (D2)
 			TokenFPScope:     "shared",
+			PeerMeta:         &peerMetaRow{}, // §3 R3: keys emitted, unknown → null
 		})
 	}
 	st.mu.Unlock()
@@ -825,7 +928,14 @@ func (s *Server) livePeerEntry(st *serversStore, id string, sess *relaySession, 
 		}
 	}
 
-	return serverEntry{
+	// P17-02 (§3): version comes from the relay's own metadata stamp —
+	// honest absence (null) for a pre-extension relay, never defaulted.
+	if sess.metadata != nil && sess.metadata.Version != "" {
+		v := sess.metadata.Version
+		version = &v
+	}
+
+	entry := serverEntry{
 		ID:               id,
 		Name:             id, // peer-reported name arrives with P2
 		Role:             rolePeer,
@@ -845,7 +955,34 @@ func (s *Server) livePeerEntry(st *serversStore, id string, sess *relaySession, 
 		TokenFP:          tokenFP,
 		TokenFPVerified:  false, // the shared token cannot identify a peer (D2)
 		TokenFPScope:     "shared",
+		PeerMeta:         peerMetaFromSession(sess.metadata),
 	}
+	// §3: an inbound relay that WE did not configure carries no config_ref
+	// (a config_ref here would be a forgery of operator intent); its
+	// link_state is the socket-open evidence the row already holds.
+	entry.LinkState = stringPtr(stateReasonSocketOpenMapped(sess))
+	entry.ConfigRef = s.configRefFor(id)
+	return entry
+}
+
+// stateReasonSocketOpenMapped is the §4 vocabulary for an inbound session's
+// link_state: the socket is open by the fact of the row being live.
+func stateReasonSocketOpenMapped(*relaySession) string { return peerStateConnected }
+
+// stringPtr is the one-word pointer helper for row fields.
+func stringPtr(s string) *string { return &s }
+
+// configRefFor reports whether id is a configured default_peer (§3: the ref
+// is present ONLY when this peer was dialed BY us).
+func (s *Server) configRefFor(id string) *configRef {
+	st := s.inventory()
+	st.load()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if _, ok := st.doc.DefaultPeers[id]; ok {
+		return &configRef{ID: id, Source: "default_peers"}
+	}
+	return nil
 }
 
 // peerName: peer_hello.peer.name is P2; until then the id is the label. It is

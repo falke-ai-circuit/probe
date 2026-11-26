@@ -16,6 +16,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/falke-ai-circuit/probe/internal/protocol"
+	"github.com/falke-ai-circuit/probe/internal/version"
 )
 
 // Config holds relay configuration.
@@ -79,6 +80,25 @@ type Relay struct {
 	// nestedMu; served in the status document as downstream.nested.
 	nestedMu sync.Mutex
 	nested   map[string]*nestedLink
+
+	// P17-02: peer-backend signals (uplink_only.go). stopCh releases
+	// RunUplinkOnly; linkDownCb is the per-run exit hook fired once when
+	// the dispatch loop ends. panicCB is FM-1.1's audit hook. All lazily
+	// initialised so Relay literals in existing tests stay valid.
+	signalMu     sync.Mutex
+	stopCh       chan struct{}
+	linkDownCb   func()
+	linkDownFired bool
+	stopOnce     sync.Once
+	panicMu      sync.RWMutex
+	panicCB      func(msg string)
+
+	// P17-02: uplink-up hook (fire-once per Relay), peer backend's
+	// `connected` transition (§4). uplinkSignalsInit lazily initialises
+	// stopCh/uplinkDown so Relay literals in existing tests stay valid.
+	uplinkUpMu  sync.RWMutex
+	uplinkUpCB  func()
+	uplinkUpOnce sync.Once
 }
 
 var upgrader = &websocket.Upgrader{
@@ -109,6 +129,7 @@ func New(cfg Config) *Relay {
 		ipCounts: make(map[string]int),
 		token:    cfg.Token,
 		tokenFP:  TokenFingerprint(cfg.Token),
+		stopCh:   make(chan struct{}),
 	}
 }
 
@@ -148,18 +169,9 @@ func (r *Relay) setToken(secret string) {
 	r.credMu.Unlock()
 }
 
-// Stop gracefully shuts down the relay: stops the HTTP server and closes the upstream connection.
-func (r *Relay) Stop() {
-	r.upstreamMu.Lock()
-	if r.upstream != nil {
-		r.upstream.Close()
-		r.upstream = nil
-	}
-	r.upstreamMu.Unlock()
-	if r.httpSrv != nil {
-		r.httpSrv.Close()
-	}
-}
+// Stop is declared in uplink_only.go (P17-02 dial-only surface), which folds
+// in the original body: releases RunUplinkOnly via stopCh, closes the
+// upstream connection, stops the downstream listener.
 
 // Run starts the relay: connects upstream, then listens for downstream agents.
 func (r *Relay) Run() error {
@@ -264,6 +276,7 @@ func (r *Relay) adoptUpstream(idx int, conn *websocket.Conn) error {
 			ListenAddr: r.cfg.ListenAddr,
 			MaxAgents:  r.cfg.MaxAgents,
 			Upstream:   r.candidates[idx].url,
+			Version:    version.Wire(),
 		},
 	}
 	frame, err := MakeControlFrame(r.magic, reg)
@@ -298,7 +311,12 @@ func (r *Relay) adoptUpstream(idx int, conn *websocket.Conn) error {
 
 // dispatchFromServer reads framed messages from the upstream server and
 // forwards payloads to the correct downstream agent.
+// P17-02 FM-1.1: the loop runs under a recover — a relay panic converts to
+// link-down (retrying at the peer backend) and never crosses into the server
+// process. A link loss fires the per-run hook the dial-only caller blocked on.
 func (r *Relay) dispatchFromServer() {
+	defer r.recoverUplink()
+	defer r.signalUplinkDown()
 	for {
 		r.upstreamMu.Lock()
 		conn := r.upstream
@@ -420,6 +438,18 @@ func (r *Relay) handleRefusal(ref *ForwardRefusal) {
 	log.Printf("[relay] upstream refused registration: %v", err)
 	r.recordUpstreamError(err)
 	r.setRefusal(ref)
+}
+
+// Redial drops the current upstream socket (P17-02 dial-now §2): the
+// blocked dispatch read unblocks, fires the per-run link-down hook, and the
+// peer manager's loop respawns with backoff reset. No-op when no link is up.
+func (r *Relay) Redial() {
+	r.upstreamMu.Lock()
+	c := r.upstream
+	r.upstreamMu.Unlock()
+	if c != nil {
+		c.Close()
+	}
 }
 
 func (r *Relay) upstreamWatcher() {
