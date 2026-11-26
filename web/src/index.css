@@ -485,6 +485,40 @@ table tr.clickable { cursor: pointer; }
   color: var(--green); font-weight: 600;
 }
 
+/* === HOST BADGE (P18-06) — shell-level identity row, reuses page-meta
+      styling contract (dim label + green mono value) so no per-page drift === */
+.main-content > .host-badge {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 18px;
+  color: var(--text-muted); font-size: 12px;
+  font-family: var(--font-mono);
+  padding: 8px 0 12px 0;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.login-container .host-badge {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 12px;
+  justify-content: center;
+  color: var(--text-muted); font-size: 11px;
+  font-family: var(--font-mono);
+  margin-bottom: 20px;
+}
+.host-badge .meta-item {
+  display: flex; align-items: center; gap: 6px;
+}
+.host-badge .hb-unresolved {
+  color: var(--yellow); letter-spacing: 1px;
+}
+.host-badge details { position: relative; }
+.host-badge summary {
+  cursor: pointer; color: var(--text-dim); font-size: 10px;
+  text-transform: uppercase; letter-spacing: 1px;
+  user-select: none;
+}
+.host-badge summary:hover { color: var(--green); }
+.host-badge .hb-expand {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 18px;
+}
+
 /* === INPUTS / SELECTS / SEARCH === */
 .toolbar-input {
   background: var(--bg-input); color: var(--text);

@@ -12,6 +12,7 @@ import Flows from './pages/Flows'
 import Sensors from './pages/Sensors'
 import Network from './pages/Network'
 import Login from './pages/Login'
+import HostBadge from './components/HostBadge'
 import { getToken } from './api/client'
 
 export default function App() {
@@ -26,6 +27,9 @@ export default function App() {
     <div className="app-layout">
       <Sidebar />
       <div className="main-content">
+        {/* P18-06: shell-level host badge, rendered ONCE above <Routes> so it
+            rides on every page. Per-page headers are drift — never add one. */}
+        <HostBadge variant="shell" />
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/agents" element={<Agents />} />

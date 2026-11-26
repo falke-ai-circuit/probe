@@ -40,6 +40,14 @@ export interface HealthInfo {
   active_agents: number
   stale_agents: number
   uptime_seconds: number
+  // P22-02 §3.1: four-key identity block, published UNAUTHENTICATED. Null
+  // when PROBE_PREAUTH_IDENTITY=off — renders UNRESOLVED, never a guess.
+  identity?: {
+    name: string
+    listen_addr: string
+    version?: string | null
+    role: string
+  } | null
 }
 
 export interface BuildConfig {
@@ -312,4 +320,47 @@ export interface PeerConfigView {
   updated_at: string
   link_state: string // '' | connected | retrying | auth-rejected | version-mismatch
   state_detail: LinkStateDetail
+}
+
+// P18-06: server inventory (GET /api/v1/servers, P21-02/P22-02) — mirrors the
+// Go serverEntry/serverCounts servers.go projection. Every key is always
+// emitted by the server; an unknown value is null.
+export interface ServerCounts {
+  direct_agents: number
+  relayed_agents: number
+}
+
+export interface ServerTransport {
+  kind: string
+  url?: string | null
+  port?: number | null
+  ws_state: string
+  connected_at?: string | null
+  source: string
+}
+
+export interface ServerEntry {
+  id: string
+  name: string
+  role: string
+  listen_addr: string
+  listen_addr_raw: string
+  listen_addr_source: string
+  version?: string | null
+  uptime_seconds?: number | null
+  state: string
+  last_seen: string
+  state_reason: string
+  down_since?: string | null
+  transports: ServerTransport[]
+  counts: ServerCounts
+  forward_policy?: string | null
+  max_agents?: number | null
+}
+
+export interface ServersResponse {
+  generated_at: string
+  local_id: string
+  retention_seconds: number
+  servers: ServerEntry[]
 }

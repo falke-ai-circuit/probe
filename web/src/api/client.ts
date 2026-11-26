@@ -2,7 +2,7 @@ import type {
   APIResponse, AgentRecord, HealthInfo, BuildConfig, Profile, Task,
   Operator, EnrollmentToken, AuditEntry, RevokedAgent, FileTransfer,
   SecurityStatus, LoginAttemptsStatus, FlowRecord, FlowRun, FlowTemplate, SurveyEvent,
-  SensorInfo, SensorAssignment, SensorState, PeerConfigView,
+  SensorInfo, SensorAssignment, SensorState, PeerConfigView, ServersResponse,
 } from './types'
 
 const BASE = '/api/v1'
@@ -467,5 +467,9 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ action }),
     }),
+
+  // P18-06: server inventory (P21-02/P22-02) — the ONE badge endpoint.
+  // First entry is this process; see servers.go handleV1Servers.
+  listServers: () => apiFetch<ServersResponse>('/servers'),
 
 }

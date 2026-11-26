@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { login } from '../api/client'
+import HostBadge from '../components/HostBadge'
 import { Radar, LogIn } from 'lucide-react'
 
 export default function Login() {
@@ -23,6 +24,9 @@ export default function Login() {
           <div className="logo-text">PROBE</div>
         </div>
         <div className="login-subtitle">Platform for Remote Operations & Bridge Environment</div>
+        {/* P18-06: second badge surface — same identity line, pre-auth, from
+            the unauthenticated /health identity block. No token needed. */}
+        <HostBadge variant="login" />
         <form onSubmit={handleSubmit}>
           <div className="form-group">
             <label>Username</label>
