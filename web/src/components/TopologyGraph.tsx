@@ -5,7 +5,7 @@ import { Maximize2, Minimize2, RefreshCw, X } from 'lucide-react'
 
 // --- Types ---
 
-interface TopologyNode {
+export interface TopologyNode {
   id: string
   name: string
   version?: string
@@ -16,7 +16,7 @@ interface TopologyNode {
   relayed?: boolean // true if connection goes through a relay
 }
 
-interface TopologyData {
+export interface TopologyData {
   server: { id: string; name: string; version?: string; connected: boolean; active: boolean }
   agents: TopologyNode[]
   relays: TopologyNode[]
@@ -153,7 +153,12 @@ function NodeShape({ node, onClick, onDragStart }: {
 
 // --- Main component ---
 
-export function TopologyGraph() {
+export function TopologyGraph({ data: externalData }: {
+  // Optional pre-fetched topology. When given, the component stops its own
+  // polling and renders the caller's data instead — existing consumers that
+  // pass nothing keep the default self-fetch behaviour.
+  data?: TopologyData | null
+} = {}) {
   const navigate = useNavigate()
   const [data, setData] = useState<TopologyData | null>(null)
   const [error, setError] = useState('')
@@ -208,10 +213,15 @@ export function TopologyGraph() {
   }, [])
 
   useEffect(() => {
+    if (externalData !== undefined) {
+      // Caller-owned data: no polling of our own.
+      setData(externalData)
+      return
+    }
     fetchTopology()
     const interval = setInterval(fetchTopology, 5000)
     return () => clearInterval(interval)
-  }, [fetchTopology])
+  }, [fetchTopology, externalData])
 
   const width = fullscreen ? window.innerWidth - 40 : 900
   const height = fullscreen ? window.innerHeight - 80 : 340

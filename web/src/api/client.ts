@@ -2,7 +2,7 @@ import type {
   APIResponse, AgentRecord, HealthInfo, BuildConfig, Profile, Task,
   Operator, EnrollmentToken, AuditEntry, RevokedAgent, FileTransfer,
   SecurityStatus, LoginAttemptsStatus, FlowRecord, FlowRun, FlowTemplate, SurveyEvent,
-  SensorInfo, SensorAssignment, SensorState,
+  SensorInfo, SensorAssignment, SensorState, PeerConfigView,
 } from './types'
 
 const BASE = '/api/v1'
@@ -23,6 +23,16 @@ export function clearToken() {
   localStorage.removeItem('probe_token')
 }
 
+// ApiError carries the server's typed envelope so callers can branch on the
+// PEER_*/TUNNEL_* code, not just the human message (P18-01: peers surface).
+export class ApiError extends Error {
+  code: string
+  constructor(code: string, message: string) {
+    super(message)
+    this.code = code
+  }
+}
+
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   const token = getToken()
   const res = await fetch(`${BASE}${path}`, {
@@ -41,7 +51,8 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   }
   const body: APIResponse<T> = await res.json()
   if (!body.ok) {
-    throw new Error(body.error?.message || `HTTP ${res.status}`)
+    const code = body.error?.code || `HTTP_${res.status}`
+    throw new ApiError(code, body.error?.message || `HTTP ${res.status}`)
   }
   return body.data as T
 }
@@ -442,5 +453,19 @@ export const api = {
       `/agents/${agentID}/sensors/${name}/disable`,
       { method: 'POST' }
     ),
+
+  // Peers / uplink (P17-02) — POST validates and seals the token server-side;
+  // the secret appears only in a request body, never in any response (§6).
+  listPeers: () =>
+    apiFetch<{ peers: PeerConfigView[] }>('/peers'),
+  createPeer: (cfg: { id: string; upstream: string; token: string; enabled?: boolean; listen?: string; max_agents?: number }) =>
+    apiFetch<PeerConfigView>('/peers', { method: 'POST', body: JSON.stringify(cfg) }),
+  deletePeer: (id: string) =>
+    apiFetch<unknown>(`/peers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  peerAction: (id: string, action: 'enable' | 'disable' | 'dial-now') =>
+    apiFetch<{ id: string; state: string }>(`/peers/${encodeURIComponent(id)}/action`, {
+      method: 'POST',
+      body: JSON.stringify({ action }),
+    }),
 
 }

@@ -284,3 +284,27 @@ export interface SensorAssignment {
   agent_id: string
   sensors: Record<string, SensorState>
 }
+
+// Peers (P17-02): the API projection of a configured default_peer.
+// §6: token_present + token_fp only — the secret never crosses the wire.
+export interface LinkStateDetail {
+  peer_version?: string
+  required_min?: string
+  refusal_code?: string
+  refusal_reason?: string
+  token_unsealable?: boolean
+}
+
+export interface PeerConfigView {
+  id: string
+  upstream: string
+  token_fp: string
+  token_present: boolean
+  enabled: boolean
+  listen: string
+  max_agents: number
+  created_at: string
+  updated_at: string
+  link_state: string // '' | connected | retrying | auth-rejected | version-mismatch
+  state_detail: LinkStateDetail
+}
