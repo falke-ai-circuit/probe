@@ -30,6 +30,11 @@ type ControlMessage struct {
 	// own socket. TokenFP is the fingerprint of Token, so the relay can log
 	// and report which credential it now holds without ever printing it.
 	TokenFP string `json:"token_fp,omitempty"`
+	// P22-05 (F5): the refusal code and reason the upstream names in a
+	// forward_refused answer. Carried in ControlMessage so the relay and the
+	// server share one struct, one spelling, one hop.
+	RefusalCode   string `json:"code,omitempty"`
+	RefusalReason string `json:"reason,omitempty"`
 }
 
 // RelayMetadata carries relay topology information to the server.

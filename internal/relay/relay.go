@@ -219,6 +219,14 @@ func (r *Relay) connectUpstream() error {
 		}
 		if err := r.adoptUpstream(i, conn); err != nil {
 			conn.Close()
+			// P22-05 (F5): a policy refusal is the upstream's answer, not a
+			// candidate's failure. It ends the walk here and it ends the
+			// reconnect loop: retrying cannot make an allowlist admit the
+			// relay. Transport failures keep their old path.
+			if ref, ok := err.(*ForwardRefusal); ok {
+				r.handleRefusal(ref)
+				return err
+			}
 			r.recordCandidateFailure(i, err)
 			failures = append(failures, fmt.Sprintf("%s: %v", c.url, err))
 			log.Printf("[relay] candidate %d/%d %s skipped: %v", i+1, len(r.candidates), c.url, err)
@@ -264,6 +272,14 @@ func (r *Relay) adoptUpstream(idx int, conn *websocket.Conn) error {
 	}
 	if err := conn.WriteMessage(websocket.BinaryMessage, frame); err != nil {
 		return fmt.Errorf("send registration: %w", err)
+	}
+
+	// P22-05 (F5): the registration is answered, not assumed. peer_hello
+	// means the upstream accepted the link; forward_refused means it did
+	// not, and the refusal is the answer — the walk ends and the code
+	// travels the hop as the typed error the refused relay reports.
+	if refusal := r.readRegistrationAnswer(conn); refusal != nil {
+		return refusal
 	}
 
 	r.upstreamMu.Lock()
@@ -354,7 +370,58 @@ func (r *Relay) dispatchFromServer() {
 	}
 }
 
-// upstreamWatcher monitors the upstream connection and reconnects on failure.
+// refusalAnswerTimeout bounds the wait for the upstream's answer to the
+// relay's registration. Same one-frame-one-answer discipline as the server's
+// own forwarder (forward_uplink.go): peer_hello on success, forward_refused
+// on refusal.
+const refusalAnswerTimeout = 5 * time.Second
+
+// readRegistrationAnswer reads the single control frame the upstream answers
+// a relay_register with. nil means accepted (peer_hello — or, tolerantly, a
+// frame the relay does not recognise, which a healthy server does not send on
+// channel 0 at this moment). A ForwardRefusal is returned as-is: it is the
+// typed answer that must survive the hop.
+func (r *Relay) readRegistrationAnswer(conn *websocket.Conn) error {
+	conn.SetReadDeadline(time.Now().Add(refusalAnswerTimeout))
+	_, data, err := conn.ReadMessage()
+	conn.SetReadDeadline(time.Time{})
+	if err != nil {
+		// No answer at all is a transport fact about this candidate, not a
+		// refusal: report it and let the walk (or the watcher) retry.
+		return fmt.Errorf("no answer to registration: %w", err)
+	}
+	_, chanID, payload, err := ParseFrame(data)
+	if err != nil || chanID != 0 {
+		return fmt.Errorf("registration answer unparseable: %w", err)
+	}
+	var ctrl ControlMessage
+	if err := json.Unmarshal(payload, &ctrl); err != nil {
+		return fmt.Errorf("registration answer is not a control frame: %w", err)
+	}
+	if ctrl.Type == "forward_refused" {
+		return &ForwardRefusal{Code: ctrl.RefusalCode, Reason: ctrl.RefusalReason}
+	}
+	if ctrl.Type == "peer_hello" && ctrl.Peer != nil {
+		// The hello arrived during registration instead of in
+		// dispatchFromServer's read loop; record it exactly as the loop
+		// would, or the uplink's own status never learns its peer.
+		r.recordPeerHello(ctrl.Peer)
+	}
+	// Everything else is treated as acceptance so an unrelated control frame
+	// cannot wedge every registration.
+	return nil
+}
+
+// handleRefusal records a policy refusal the way transport failures are
+// recorded, so the operator's log names the code the peer saw, and reports
+// whether the failure is terminal for the reconnect loop.
+func (r *Relay) handleRefusal(ref *ForwardRefusal) {
+	err := error(ref)
+	log.Printf("[relay] upstream refused registration: %v", err)
+	r.recordUpstreamError(err)
+	r.setRefusal(ref)
+}
+
 func (r *Relay) upstreamWatcher() {
 	backoff := 1 * time.Second
 	maxBackoff := 60 * time.Second
@@ -363,6 +430,15 @@ func (r *Relay) upstreamWatcher() {
 		time.Sleep(5 * time.Second)
 		if r.upstreamOK.Load() {
 			backoff = 1 * time.Second
+			continue
+		}
+
+		// P22-05 (F5): a policy refusal is terminal. The refused relay does
+		// not retry: an allowlist, loop or hop-budget decision does not
+		// change by reconnecting, and an endless retry loop against a
+		// refusal that can never succeed is the defect. A transport drop
+		// (dispatchFromServer lost the socket) stays on the retry path.
+		if ref := r.refusalSnapshot(); ref != nil && !ref.Retryable() {
 			continue
 		}
 

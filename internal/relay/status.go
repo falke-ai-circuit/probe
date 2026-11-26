@@ -50,6 +50,20 @@ type UpstreamStatus struct {
 	ConnectedAt string     `json:"connected_at,omitempty"`
 	Peer        *PeerHello `json:"peer,omitempty"` // last known, retained on loss
 	LastError   string     `json:"last_error"`
+	// P22-05 (F5): the policy refusal the upstream named on the wire, so
+	// the status document matches the log line and the peer's own answer.
+	// Present only while the last registration was refused; cleared by the
+	// next successful one.
+	Refusal *ForwardRefusalStatus `json:"refusal,omitempty"`
+}
+
+// ForwardRefusalStatus is the wire-visible form of a retained refusal: the
+// code the upstream sent and its reason, plus whether the relay treats it as
+// terminal (policy refusals are never retried).
+type ForwardRefusalStatus struct {
+	Code      string `json:"code"`
+	Reason    string `json:"reason"`
+	Retryable bool   `json:"retryable"`
 }
 
 // CandidateStatus is one entry of the ordered upstream candidate list, as the
@@ -103,6 +117,10 @@ type uplinkState struct {
 	// link loss; empty until some candidate has completed an upgrade.
 	activeURL  string
 	activePort int
+	// P22-05 (F5): the last policy refusal the upstream named on the wire.
+	// Retained until a successful registration clears it, so an operator
+	// reading this relay's status sees the same code the peer sent.
+	refusal *ForwardRefusal
 }
 
 func (r *Relay) recordPeerHello(peer *PeerHello) {
@@ -114,6 +132,9 @@ func (r *Relay) recordPeerHello(peer *PeerHello) {
 	r.uplink.peer = &cp
 	r.uplink.connectedAt = time.Now().UTC()
 	r.uplink.lastErr = ""
+	// P22-05 (F5): acceptance is the proof the refusal is over. A retained
+	// refusal must not outlive the link that replaced it.
+	r.uplink.refusal = nil
 	r.statusMu.Unlock()
 }
 
@@ -132,6 +153,26 @@ func (r *Relay) clearUpstreamError() {
 	r.statusMu.Unlock()
 }
 
+// setRefusal records the last policy refusal (P22-05). A successful
+// registration clears it, same lifecycle as lastErr.
+func (r *Relay) setRefusal(ref *ForwardRefusal) {
+	cp := *ref
+	r.statusMu.Lock()
+	r.uplink.refusal = &cp
+	r.statusMu.Unlock()
+}
+
+// refusalSnapshot returns the retained refusal, if any.
+func (r *Relay) refusalSnapshot() *ForwardRefusal {
+	r.statusMu.RLock()
+	defer r.statusMu.RUnlock()
+	if r.uplink.refusal == nil {
+		return nil
+	}
+	cp := *r.uplink.refusal
+	return &cp
+}
+
 // Status returns a consistent snapshot of the relay's own state.
 func (r *Relay) Status() Status {
 	r.statusMu.RLock()
@@ -144,6 +185,14 @@ func (r *Relay) Status() Status {
 	lastErr := r.uplink.lastErr
 	activeURL := r.uplink.activeURL
 	activePort := r.uplink.activePort
+	var refusal *ForwardRefusalStatus
+	if r.uplink.refusal != nil {
+		refusal = &ForwardRefusalStatus{
+			Code:      r.uplink.refusal.Code,
+			Reason:    r.uplink.refusal.Reason,
+			Retryable: r.uplink.refusal.Retryable(),
+		}
+	}
 	r.statusMu.RUnlock()
 
 	state := "down"
@@ -165,8 +214,9 @@ func (r *Relay) Status() Status {
 		Transport:  transportName(activePort),
 		Candidates: r.candidatesSnapshot(),
 		State:     state,
-		Peer:      peer,
-		LastError: lastErr,
+		Peer:       peer,
+		LastError:  lastErr,
+		Refusal:    refusal,
 	}
 	if !connectedAt.IsZero() {
 		up.ConnectedAt = connectedAt.Format(time.RFC3339Nano)
