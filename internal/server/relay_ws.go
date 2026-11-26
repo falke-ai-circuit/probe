@@ -198,7 +198,16 @@ func (s *Server) handleRelayConnection(conn *websocket.Conn, firstData []byte) {
 					}
 					// Prefix with relay path for topology visibility
 					agentID = fmt.Sprintf("relay/%s/%s", session.relayID, agentID)
+					// P15-12: the pending-channel → registered-channel
+					// identity flip is written under the session's
+					// channelsMu. Readers walk the same channel
+					// objects under channelsMu.RLock; the unlocked
+					// write here is the vc.agentID data race the
+					// -race run on the lock-order concurrency test
+					// caught upstream (ea28a49, first of the two).
+					session.channelsMu.Lock()
 					vc.agentID = agentID
+					session.channelsMu.Unlock()
 					s.registry.Register(agentID, info.Name, info.Version, info.OS, info.Arch, info.Mode, info.Capabilities)
 					s.sessions.CreateSession(agentID)
 
@@ -286,28 +295,43 @@ func (s *Server) handleRelayControl(session *relaySession, payload []byte) {
 }
 
 // cleanupRelaySession removes all agents from a disconnected relay.
+//
+// P15-12: relay-first order — snapshot the channels under channelsMu, release
+// the session lock, then take relayMu. The pre-fix shape held channelsMu
+// (deferred Unlock) across the relayMu acquisition below, closing the ABBA
+// cycle against AgentDispatchability's relay scan and parking 251 health
+// readers for 145 minutes (the captured production hang:
+// /opt/data/tmp/probe119/P15-11_GOROUTINE.log). The snapshot is taken once;
+// the sweep works on the copy.
 func (s *Server) cleanupRelaySession(session *relaySession) {
 	session.channelsMu.Lock()
-	defer session.channelsMu.Unlock()
+	sweep := make([]*virtualConn, 0, len(session.channels))
 	for chanID, vc := range session.channels {
 		if vc.agentID != "" {
-			s.mu.Lock()
-			delete(s.conns, vc.agentID)
-			delete(s.connWriteMu, vc.agentID)
-			s.mu.Unlock()
-			s.registry.Unregister(vc.agentID)
-			s.sessions.RemoveSession(vc.agentID)
-			s.ClearTokenExpiry(vc.agentID)
+			sweep = append(sweep, vc)
 		}
 		delete(session.channels, chanID)
 	}
+	channelCount := len(sweep)
+	session.channelsMu.Unlock()
 
-	// Remove relay from server's relay registry
+	for _, vc := range sweep {
+		s.mu.Lock()
+		delete(s.conns, vc.agentID)
+		delete(s.connWriteMu, vc.agentID)
+		s.mu.Unlock()
+		s.registry.Unregister(vc.agentID)
+		s.sessions.RemoveSession(vc.agentID)
+		s.ClearTokenExpiry(vc.agentID)
+	}
+
+	// Remove relay from server's relay registry — channelsMu is released
+	// before this acquisition (relay-first; no lock is held across another).
 	s.relayMu.Lock()
 	delete(s.relays, session.relayID)
 	s.relayMu.Unlock()
 
-	log.Printf("[server] relay %s: cleaned up %d channels", session.relayID, len(session.channels))
+	log.Printf("[server] relay %s: cleaned up %d channels", session.relayID, channelCount)
 }
 
 // parseRelayFrame parses a relay framing header.
