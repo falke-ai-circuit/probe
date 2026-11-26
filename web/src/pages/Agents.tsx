@@ -81,7 +81,7 @@ export default function Agents() {
           <span className="dim" style={{ fontSize: 12 }}>{filteredAgents.length} / {agents.length}</span>
         </div>
         <div className="card"><div className="table-container"><table>
-         <thead><tr><th>Name</th><th>OS / Arch</th><th>Status</th><th>Health</th><th>Capabilities</th><th>Connected</th><th>Actions</th></tr></thead>
+         <thead><tr><th>Name</th><th>OS / Arch</th><th>Status</th><th>Health</th><th>Capabilities</th><th>Via relay</th><th>Connected</th><th>Actions</th></tr></thead>
          <tbody>{filteredAgents.map(a => (
            <tr key={a.agent_id}>
              <td><Link to={`/agents/${encodeURIComponent(a.agent_id)}`}>{a.name || a.agent_id}</Link></td>
@@ -97,6 +97,7 @@ export default function Agents() {
                {(a.capabilities || []).map(c => <span key={c} className="badge badge-green" style={{ fontSize: 10 }}>{c}</span>)}
                {(!a.capabilities || a.capabilities.length === 0) && <span className="dim">—</span>}
              </div></td>
+             <td className="dim mono" data-testid={`via-relay-${a.agent_id}`}>{a.via ? a.via : 'direct'}</td>
              <td className="dim">{a.connected_at ? new Date(a.connected_at).toLocaleString() : '—'}</td>
              <td><div className="flex gap-8">
                <Link to={`/agents/${encodeURIComponent(a.agent_id)}`} className="btn btn-sm"><ExternalLink size={14} /> Manage</Link>

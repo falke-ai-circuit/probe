@@ -26,6 +26,11 @@ export interface AgentRecord {
     memory_mb: number
     disk_free_mb: number
   }
+  // P23-09 provenance (P18-02): names the relay carrying this agent's
+  // transport, derived server-side on every read. Empty/absent means the
+  // agent is connected directly — this is the same field P18-01's
+  // Network.tsx consumes via the /topology via/origin chain.
+  via?: string
 }
 
 export interface HealthInfo {
