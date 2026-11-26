@@ -382,7 +382,16 @@ func (s *Server) handleRelayConnection(conn *websocket.Conn, firstData []byte) {
 						log.Printf("[server] relayed agent %s: rate/concurrency limit refused (link %s)", agentID, session.relayID)
 						continue
 					}
+					// P15-12: the pending-channel → registered-channel
+					// identity flip is written under the session's
+					// channelsMu. Readers (relayChannelOwner, liveRelays,
+					// topology, the live peer row) walk the same channel
+					// objects under channelsMu.RLock; the unlocked write
+					// here is the vc.agentID data race the -race run on
+					// the P15-12 concurrency test caught.
+					session.channelsMu.Lock()
 					vc.agentID = agentID
+					session.channelsMu.Unlock()
 					// P21-04: policy decides whether this relayed client is
 					// served here or carried further up OUR uplink. relay_all
 					// recurses; relay and local stop at this server — that is
