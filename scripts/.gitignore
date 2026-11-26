@@ -1,0 +1,6 @@
+# Test suite artifacts
+*.log
+nohup.out
+__pycache__/
+datadir/
+secrets.json

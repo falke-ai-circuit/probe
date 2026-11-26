@@ -1,0 +1,635 @@
+{
+ "captured_from": "http://10.10.10.100:7701",
+ "mode": "prod",
+ "routes": {
+  "POST /api/v1/login": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:operator,token"
+  },
+  "POST /api/v1/login(invalid)": {
+   "status": 401,
+   "ok": false,
+   "error_code": "UNAUTHORIZED",
+   "data_shape": null
+  },
+  "POST /api/v1/login(empty body)": {
+   "status": 400,
+   "ok": false,
+   "error_code": "BAD_REQUEST",
+   "data_shape": null
+  },
+  "GET /agents/{id}/exec": {
+   "status": 405,
+   "ok": null,
+   "error_code": null,
+   "data_shape": null
+  },
+  "GET /api/v1/health": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:active_agents,server_version,stale_agents,status,total_agents,uptime_seconds"
+  },
+  "GET /api/v1/health(server_version)": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:active_agents,server_version,stale_agents,status,total_agents,uptime_seconds"
+  },
+  "GET /api/v1/agents": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "list"
+  },
+  "GET /api/v1/agents/revoked": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:revoked_agents"
+  },
+  "GET /api/v1/audit?limit=50": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "list"
+  },
+  "GET /api/v1/enrollment-tokens": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "list"
+  },
+  "GET /api/v1/builds": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "list"
+  },
+  "GET /api/v1/profiles": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "list"
+  },
+  "GET /api/v1/tasks": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "list"
+  },
+  "GET /api/v1/transfers": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "list"
+  },
+  "GET /api/v1/forward-policies": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": null
+  },
+  "GET /api/v1/security/status": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:allowed_cidr,audit_log_active,blacklist_active,blacklist_count,ip_filter_active,login_rate_limit,mtls,operators_count,require_api_auth,tls"
+  },
+  "GET /api/v1/security/login-attempts": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:lock_seconds,locked_ips,max_failures,tracked_ips,window_seconds"
+  },
+  "GET /api/v1/credentials": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:count,credentials"
+  },
+  "GET /api/v1/topology": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:edges,nodes"
+  },
+  "GET /api/v1/replicate/source": {
+   "status": 200,
+   "ok": null,
+   "error_code": null,
+   "data_shape": null
+  },
+  "GET /openapi.json": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": null
+  },
+  "GET /api/v1/flows": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "list"
+  },
+  "GET /api/v1/flow-runs": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "list"
+  },
+  "GET /api/v1/flow-templates": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "list"
+  },
+  "GET /api/v1/flows/apit-nonexistent": {
+   "status": 404,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:error"
+  },
+  "GET /api/v1/flow-runs/apit-nonexistent": {
+   "status": 404,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:error"
+  },
+  "GET /api/v1/agents/apit-nonexistent": {
+   "status": 404,
+   "ok": false,
+   "error_code": "NOT_FOUND",
+   "data_shape": null
+  },
+  "GET /api/v1/agents/apit-nonexistent/health": {
+   "status": 404,
+   "ok": false,
+   "error_code": "NOT_FOUND",
+   "data_shape": null
+  },
+  "GET /api/v1/agents/apit-nonexistent/audit": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "null"
+  },
+  "GET /api/v1/agents/apit-nonexistent/capabilities": {
+   "status": 404,
+   "ok": false,
+   "error_code": "NOT_FOUND",
+   "data_shape": null
+  },
+  "GET /api/v1/agents/apit-nonexistent/jobs": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:count,jobs"
+  },
+  "GET /api/v1/agents/apit-nonexistent/flows": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:data,ok"
+  },
+  "GET /api/v1/agents/apit-nonexistent/mode": {
+   "status": 404,
+   "ok": null,
+   "error_code": null,
+   "data_shape": null
+  },
+  "GET /api/v1/agents/apit-nonexistent/sensors": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:agent_id,sensors"
+  },
+  "GET /api/v1/agents/apit-nonexistent/survey": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "list"
+  },
+  "GET /api/v1/agents/apit-nonexistent/tunnels": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:data,ok"
+  },
+  "GET /api/v1/agents/apit-nonexistent/stream-frame": {
+   "status": 404,
+   "ok": false,
+   "error_code": "NO_FRAME",
+   "data_shape": null
+  },
+  "GET /api/v1/agents/apit-nonexistent/fs/download": {
+   "status": 400,
+   "ok": false,
+   "error_code": "INVALID_PARAMS",
+   "data_shape": null
+  },
+  "GET /api/v1/agents/apit-nonexistent/forward-policy": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": null
+  },
+  "GET /api/v1/builds/apit-nonexistent": {
+   "status": 404,
+   "ok": false,
+   "error_code": "NOT_FOUND",
+   "data_shape": null
+  },
+  "GET /api/v1/builds/apit-nonexistent/download": {
+   "status": 404,
+   "ok": false,
+   "error_code": "NOT_FOUND",
+   "data_shape": null
+  },
+  "GET /api/v1/builds/apit-nonexistent/vt-scan": {
+   "status": 400,
+   "ok": false,
+   "error_code": "VT_NOT_CONFIGURED",
+   "data_shape": null
+  },
+  "GET /api/v1/profiles/apit-nonexistent": {
+   "status": 404,
+   "ok": false,
+   "error_code": "NOT_FOUND",
+   "data_shape": null
+  },
+  "GET /api/v1/tasks/apit-nonexistent": {
+   "status": 404,
+   "ok": false,
+   "error_code": "NOT_FOUND",
+   "data_shape": null
+  },
+  "GET /api/v1/credentials/apit-nonexistent": {
+   "status": 404,
+   "ok": false,
+   "error_code": "NOT_FOUND",
+   "data_shape": null
+  },
+  "GET /api/v1/transfers/apit-nonexistent": {
+   "status": 404,
+   "ok": false,
+   "error_code": "NOT_FOUND",
+   "data_shape": null
+  },
+  "GET /api/v1/downloads/apit-nonexistent.bin": {
+   "status": 404,
+   "ok": null,
+   "error_code": null,
+   "data_shape": null
+  }
+ },
+ "skipped": [
+  [
+   "POST /api/v1/flows",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/flows/apit-nonexistent/enable",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/flows/apit-nonexistent/disable",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/flows/apit-nonexistent/run-now",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/flows/apit-nonexistent/assign",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/flows/apit-nonexistent/unassign",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/flows/from-template",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "PUT /api/v1/flows/apit-nonexistent",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "DELETE /api/v1/flows/apit-nonexistent",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/exec",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/job-status",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/job-log",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/fs-list",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/fs-read",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/fs-write",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/fs-stat",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/fs-hash",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/fs-move",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/fs-mkdir",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/fs-delete",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/fs/upload",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/watch",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/proc-list",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/proc-kill",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/proc-start",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/capture",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/tunnel",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/tunnel-close",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/sniff",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/sniff-stop",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/mitm-start",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/mitm-stop",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/mitm-traffic",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/debug-attach",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/debug-detach",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/debug-read-mem",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/debug-modules",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/debug-mem-query",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/update",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/socks5-start",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/socks5-stop",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/port-forward",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/port-scan",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/net-connections",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/autostart-enable",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/autostart-disable",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/autostart-status",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/file-search",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/file-download",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/sysinfo",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/transfer",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/stream-start",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/stream-stop",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/pointer-click",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/key-press",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/key-combo",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/text-input",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/mode",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/reconfigure",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/redeploy",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/revoke",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/forward-policy",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/sensors/exec/enable",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/agents/apit-nonexistent/sensors/exec/disable",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "PUT /api/v1/agents/apit-nonexistent/sensors",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "DELETE /api/v1/agents/apit-nonexistent",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/tasks",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/profiles",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/operators",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/reconfigure",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/enroll",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/enrollment-tokens",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/files",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/builds",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/builds/apit-nonexistent/vt-scan",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/security/blacklist",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/transfers/apit-nonexistent/pause",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/transfers/apit-nonexistent/resume",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/transfers/apit-nonexistent/cancel",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "POST /api/v1/transfers/apit-nonexistent/verify",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "PUT /api/v1/credentials/apit-nonexistent",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "DELETE /api/v1/profiles/apit-nonexistent",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "DELETE /api/v1/tasks/apit-nonexistent",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "DELETE /api/v1/operators/apit-nonexistent",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "DELETE /api/v1/builds/apit-nonexistent",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ],
+  [
+   "PUT /api/v1/credentials/apit-suite-cred",
+   "PROD mode: non-GET probe suppressed (non-intrusive guarantee)"
+  ]
+ ],
+ "total_ms": 11598
+}

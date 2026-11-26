@@ -1,0 +1,806 @@
+{
+ "captured_from": "http://127.0.0.1:7811",
+ "mode": "test",
+ "routes": {
+  "POST /api/v1/login(valid)": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:operator,token"
+  },
+  "POST /api/v1/login(invalid)": {
+   "status": 401,
+   "ok": false,
+   "error_code": "UNAUTHORIZED",
+   "data_shape": null
+  },
+  "POST /api/v1/login(empty body)": {
+   "status": 400,
+   "ok": false,
+   "error_code": "BAD_REQUEST",
+   "data_shape": null
+  },
+  "GET /agents/{id}/exec": {
+   "status": 405,
+   "ok": null,
+   "error_code": null,
+   "data_shape": null
+  },
+  "GET /api/v1/health": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:active_agents,server_version,stale_agents,status,total_agents,uptime_seconds"
+  },
+  "GET /api/v1/agents": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "list"
+  },
+  "GET /api/v1/agents/revoked": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:revoked_agents"
+  },
+  "GET /api/v1/audit?limit=50": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "null"
+  },
+  "GET /api/v1/enrollment-tokens": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "list"
+  },
+  "GET /api/v1/builds": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "list"
+  },
+  "GET /api/v1/profiles": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "list"
+  },
+  "GET /api/v1/tasks": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "list"
+  },
+  "GET /api/v1/transfers": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "list"
+  },
+  "GET /api/v1/forward-policies": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": null
+  },
+  "GET /api/v1/security/status": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:audit_log_active,blacklist_active,blacklist_count,ip_filter_active,login_rate_limit,mtls,operators_count,require_api_auth,tls,token_ttl"
+  },
+  "GET /api/v1/security/login-attempts": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:lock_seconds,locked_ips,max_failures,tracked_ips,window_seconds"
+  },
+  "GET /api/v1/credentials": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:count,credentials"
+  },
+  "GET /api/v1/topology": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:edges,nodes"
+  },
+  "GET /api/v1/replicate/source": {
+   "status": 500,
+   "ok": false,
+   "error_code": "INTERNAL_ERROR",
+   "data_shape": null
+  },
+  "GET /openapi.json": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": null
+  },
+  "GET /api/v1/flows": {
+   "status": 503,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:error"
+  },
+  "GET /api/v1/flow-runs": {
+   "status": 503,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:error"
+  },
+  "GET /api/v1/flow-templates": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "list"
+  },
+  "GET /api/v1/flows/apit-nonexistent": {
+   "status": 503,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:error"
+  },
+  "GET /api/v1/flow-runs/apit-nonexistent": {
+   "status": 503,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:error"
+  },
+  "POST /api/v1/flows": {
+   "status": 503,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:error"
+  },
+  "POST /api/v1/flows/apit-nonexistent/enable": {
+   "status": 503,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:error"
+  },
+  "POST /api/v1/flows/apit-nonexistent/disable": {
+   "status": 503,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:error"
+  },
+  "POST /api/v1/flows/apit-nonexistent/run-now": {
+   "status": 503,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:error"
+  },
+  "POST /api/v1/flows/apit-nonexistent/assign": {
+   "status": 503,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:error"
+  },
+  "POST /api/v1/flows/apit-nonexistent/unassign": {
+   "status": 503,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:error"
+  },
+  "POST /api/v1/flows/from-template": {
+   "status": 503,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:error"
+  },
+  "PUT /api/v1/flows/apit-nonexistent": {
+   "status": 503,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:error"
+  },
+  "DELETE /api/v1/flows/apit-nonexistent": {
+   "status": 503,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:error"
+  },
+  "GET /api/v1/agents/apit-nonexistent": {
+   "status": 404,
+   "ok": false,
+   "error_code": "NOT_FOUND",
+   "data_shape": null
+  },
+  "GET /api/v1/agents/apit-nonexistent/health": {
+   "status": 404,
+   "ok": false,
+   "error_code": "NOT_FOUND",
+   "data_shape": null
+  },
+  "GET /api/v1/agents/apit-nonexistent/audit": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "null"
+  },
+  "GET /api/v1/agents/apit-nonexistent/capabilities": {
+   "status": 404,
+   "ok": false,
+   "error_code": "NOT_FOUND",
+   "data_shape": null
+  },
+  "GET /api/v1/agents/apit-nonexistent/jobs": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:count,jobs"
+  },
+  "GET /api/v1/agents/apit-nonexistent/flows": {
+   "status": 503,
+   "ok": false,
+   "error_code": "SERVICE_UNAVAILABLE",
+   "data_shape": null
+  },
+  "GET /api/v1/agents/apit-nonexistent/mode": {
+   "status": 404,
+   "ok": null,
+   "error_code": null,
+   "data_shape": null
+  },
+  "GET /api/v1/agents/apit-nonexistent/sensors": {
+   "status": 503,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:error"
+  },
+  "GET /api/v1/agents/apit-nonexistent/survey": {
+   "status": 503,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:error"
+  },
+  "GET /api/v1/agents/apit-nonexistent/tunnels": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:data,ok"
+  },
+  "GET /api/v1/agents/apit-nonexistent/stream-frame": {
+   "status": 404,
+   "ok": false,
+   "error_code": "NO_FRAME",
+   "data_shape": null
+  },
+  "GET /api/v1/agents/apit-nonexistent/fs/download": {
+   "status": 400,
+   "ok": false,
+   "error_code": "INVALID_PARAMS",
+   "data_shape": null
+  },
+  "GET /api/v1/agents/apit-nonexistent/forward-policy": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": null
+  },
+  "GET /api/v1/builds/apit-nonexistent": {
+   "status": 404,
+   "ok": false,
+   "error_code": "NOT_FOUND",
+   "data_shape": null
+  },
+  "GET /api/v1/builds/apit-nonexistent/download": {
+   "status": 404,
+   "ok": false,
+   "error_code": "NOT_FOUND",
+   "data_shape": null
+  },
+  "GET /api/v1/builds/apit-nonexistent/vt-scan": {
+   "status": 400,
+   "ok": false,
+   "error_code": "VT_NOT_CONFIGURED",
+   "data_shape": null
+  },
+  "GET /api/v1/profiles/apit-nonexistent": {
+   "status": 404,
+   "ok": false,
+   "error_code": "NOT_FOUND",
+   "data_shape": null
+  },
+  "GET /api/v1/tasks/apit-nonexistent": {
+   "status": 404,
+   "ok": false,
+   "error_code": "NOT_FOUND",
+   "data_shape": null
+  },
+  "GET /api/v1/credentials/apit-nonexistent": {
+   "status": 404,
+   "ok": false,
+   "error_code": "NOT_FOUND",
+   "data_shape": null
+  },
+  "GET /api/v1/transfers/apit-nonexistent": {
+   "status": 404,
+   "ok": false,
+   "error_code": "NOT_FOUND",
+   "data_shape": null
+  },
+  "GET /api/v1/downloads/apit-nonexistent.bin": {
+   "status": 404,
+   "ok": null,
+   "error_code": null,
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/exec": {
+   "status": 503,
+   "ok": false,
+   "error_code": "AGENT_UNAVAILABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/job-status": {
+   "status": 400,
+   "ok": false,
+   "error_code": "BAD_REQUEST",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/job-log": {
+   "status": 400,
+   "ok": false,
+   "error_code": "BAD_REQUEST",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/fs-list": {
+   "status": 503,
+   "ok": false,
+   "error_code": "AGENT_UNREACHABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/fs-read": {
+   "status": 503,
+   "ok": false,
+   "error_code": "SERVICE_UNAVAILABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/fs-write": {
+   "status": 503,
+   "ok": false,
+   "error_code": "SERVICE_UNAVAILABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/fs-stat": {
+   "status": 503,
+   "ok": false,
+   "error_code": "SERVICE_UNAVAILABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/fs-hash": {
+   "status": 503,
+   "ok": false,
+   "error_code": "SERVICE_UNAVAILABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/fs-move": {
+   "status": 503,
+   "ok": false,
+   "error_code": "AGENT_UNREACHABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/fs-mkdir": {
+   "status": 503,
+   "ok": false,
+   "error_code": "AGENT_UNREACHABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/fs-delete": {
+   "status": 503,
+   "ok": false,
+   "error_code": "AGENT_UNREACHABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/fs/upload": {
+   "status": 400,
+   "ok": false,
+   "error_code": "INVALID_PARAMS",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/watch": {
+   "status": 400,
+   "ok": false,
+   "error_code": "INVALID_PARAMS",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/proc-list": {
+   "status": 503,
+   "ok": false,
+   "error_code": "SERVICE_UNAVAILABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/proc-kill": {
+   "status": 503,
+   "ok": false,
+   "error_code": "SERVICE_UNAVAILABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/proc-start": {
+   "status": 503,
+   "ok": false,
+   "error_code": "SERVICE_UNAVAILABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/capture": {
+   "status": 503,
+   "ok": false,
+   "error_code": "SERVICE_UNAVAILABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/tunnel": {
+   "status": 400,
+   "ok": false,
+   "error_code": "BAD_REQUEST",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/tunnel-close": {
+   "status": 404,
+   "ok": false,
+   "error_code": "NOT_FOUND",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/sniff": {
+   "status": 400,
+   "ok": false,
+   "error_code": "BAD_REQUEST",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/sniff-stop": {
+   "status": 404,
+   "ok": false,
+   "error_code": "NOT_FOUND",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/mitm-start": {
+   "status": 503,
+   "ok": false,
+   "error_code": "SERVICE_UNAVAILABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/mitm-stop": {
+   "status": 503,
+   "ok": false,
+   "error_code": "SERVICE_UNAVAILABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/mitm-traffic": {
+   "status": 503,
+   "ok": false,
+   "error_code": "SERVICE_UNAVAILABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/debug-attach": {
+   "status": 503,
+   "ok": false,
+   "error_code": "SERVICE_UNAVAILABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/debug-detach": {
+   "status": 503,
+   "ok": false,
+   "error_code": "SERVICE_UNAVAILABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/debug-read-mem": {
+   "status": 503,
+   "ok": false,
+   "error_code": "SERVICE_UNAVAILABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/debug-modules": {
+   "status": 503,
+   "ok": false,
+   "error_code": "SERVICE_UNAVAILABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/debug-mem-query": {
+   "status": 503,
+   "ok": false,
+   "error_code": "SERVICE_UNAVAILABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/update": {
+   "status": 400,
+   "ok": false,
+   "error_code": "BAD_REQUEST",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/socks5-start": {
+   "status": 503,
+   "ok": false,
+   "error_code": "AGENT_UNREACHABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/socks5-stop": {
+   "status": 503,
+   "ok": false,
+   "error_code": "AGENT_UNREACHABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/port-forward": {
+   "status": 503,
+   "ok": false,
+   "error_code": "AGENT_UNREACHABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/port-scan": {
+   "status": 503,
+   "ok": false,
+   "error_code": "AGENT_UNREACHABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/net-connections": {
+   "status": 503,
+   "ok": false,
+   "error_code": "AGENT_UNREACHABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/autostart-enable": {
+   "status": 503,
+   "ok": false,
+   "error_code": "AGENT_UNREACHABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/autostart-disable": {
+   "status": 503,
+   "ok": false,
+   "error_code": "AGENT_UNREACHABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/autostart-status": {
+   "status": 503,
+   "ok": false,
+   "error_code": "AGENT_UNREACHABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/file-search": {
+   "status": 503,
+   "ok": false,
+   "error_code": "AGENT_UNREACHABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/file-download": {
+   "status": 400,
+   "ok": false,
+   "error_code": "BAD_REQUEST",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/sysinfo": {
+   "status": 503,
+   "ok": false,
+   "error_code": "AGENT_UNREACHABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/transfer": {
+   "status": 400,
+   "ok": false,
+   "error_code": "INVALID_PARAMS",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/stream-start": {
+   "status": 503,
+   "ok": false,
+   "error_code": "AGENT_UNREACHABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/stream-stop": {
+   "status": 503,
+   "ok": false,
+   "error_code": "AGENT_UNREACHABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/pointer-click": {
+   "status": 503,
+   "ok": false,
+   "error_code": "AGENT_UNREACHABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/key-press": {
+   "status": 503,
+   "ok": false,
+   "error_code": "AGENT_UNREACHABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/key-combo": {
+   "status": 503,
+   "ok": false,
+   "error_code": "AGENT_UNREACHABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/text-input": {
+   "status": 503,
+   "ok": false,
+   "error_code": "AGENT_UNREACHABLE",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/mode": {
+   "status": 400,
+   "ok": null,
+   "error_code": null,
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/reconfigure": {
+   "status": 400,
+   "ok": null,
+   "error_code": null,
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/redeploy": {
+   "status": 400,
+   "ok": false,
+   "error_code": "INVALID_PARAMS",
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/revoke": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:revoked"
+  },
+  "POST /api/v1/agents/apit-nonexistent/forward-policy": {
+   "status": 400,
+   "ok": null,
+   "error_code": null,
+   "data_shape": null
+  },
+  "POST /api/v1/agents/apit-nonexistent/sensors/exec/enable": {
+   "status": 503,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:error"
+  },
+  "POST /api/v1/agents/apit-nonexistent/sensors/exec/disable": {
+   "status": 503,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:error"
+  },
+  "PUT /api/v1/agents/apit-nonexistent/sensors": {
+   "status": 503,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:error"
+  },
+  "DELETE /api/v1/agents/apit-nonexistent": {
+   "status": 404,
+   "ok": false,
+   "error_code": "NOT_FOUND",
+   "data_shape": null
+  },
+  "POST /api/v1/tasks": {
+   "status": 400,
+   "ok": false,
+   "error_code": "INVALID_PARAMS",
+   "data_shape": null
+  },
+  "POST /api/v1/profiles": {
+   "status": 400,
+   "ok": false,
+   "error_code": "INVALID_PARAMS",
+   "data_shape": null
+  },
+  "POST /api/v1/operators": {
+   "status": 400,
+   "ok": false,
+   "error_code": "INVALID_PARAMS",
+   "data_shape": null
+  },
+  "POST /api/v1/reconfigure": {
+   "status": 400,
+   "ok": null,
+   "error_code": null,
+   "data_shape": null
+  },
+  "POST /api/v1/enroll": {
+   "status": 400,
+   "ok": false,
+   "error_code": "BAD_REQUEST",
+   "data_shape": null
+  },
+  "POST /api/v1/enrollment-tokens": {
+   "status": 201,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:agent_name,created_at,expires_at,token,used"
+  },
+  "POST /api/v1/files": {
+   "status": 400,
+   "ok": false,
+   "error_code": "BAD_REQUEST",
+   "data_shape": null
+  },
+  "POST /api/v1/builds": {
+   "status": 400,
+   "ok": false,
+   "error_code": "INVALID_PARAMS",
+   "data_shape": null
+  },
+  "POST /api/v1/builds/apit-nonexistent/vt-scan": {
+   "status": 400,
+   "ok": false,
+   "error_code": "VT_NOT_CONFIGURED",
+   "data_shape": null
+  },
+  "POST /api/v1/security/blacklist": {
+   "status": 400,
+   "ok": false,
+   "error_code": "INVALID_PARAMS",
+   "data_shape": null
+  },
+  "POST /api/v1/transfers/apit-nonexistent/pause": {
+   "status": 400,
+   "ok": false,
+   "error_code": "INVALID_PARAMS",
+   "data_shape": null
+  },
+  "POST /api/v1/transfers/apit-nonexistent/resume": {
+   "status": 404,
+   "ok": false,
+   "error_code": "NOT_FOUND",
+   "data_shape": null
+  },
+  "POST /api/v1/transfers/apit-nonexistent/cancel": {
+   "status": 400,
+   "ok": false,
+   "error_code": "INVALID_PARAMS",
+   "data_shape": null
+  },
+  "POST /api/v1/transfers/apit-nonexistent/verify": {
+   "status": 400,
+   "ok": false,
+   "error_code": "BAD_REQUEST",
+   "data_shape": null
+  },
+  "PUT /api/v1/credentials/apit-nonexistent": {
+   "status": 400,
+   "ok": false,
+   "error_code": "BAD_REQUEST",
+   "data_shape": null
+  },
+  "DELETE /api/v1/profiles/apit-nonexistent": {
+   "status": 404,
+   "ok": false,
+   "error_code": "NOT_FOUND",
+   "data_shape": null
+  },
+  "DELETE /api/v1/tasks/apit-nonexistent": {
+   "status": 404,
+   "ok": false,
+   "error_code": "NOT_FOUND",
+   "data_shape": null
+  },
+  "DELETE /api/v1/operators/apit-nonexistent": {
+   "status": 404,
+   "ok": false,
+   "error_code": "NOT_FOUND",
+   "data_shape": null
+  },
+  "DELETE /api/v1/builds/apit-nonexistent": {
+   "status": 404,
+   "ok": false,
+   "error_code": "NOT_FOUND",
+   "data_shape": null
+  },
+  "PUT /api/v1/credentials/apit-suite-cred (create)": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:created_at,name,times_used"
+  },
+  "GET /api/v1/credentials/apit-suite-cred (read-after-create)": {
+   "status": 200,
+   "ok": true,
+   "error_code": null,
+   "data_shape": "keys:created_at,name,times_used"
+  }
+ },
+ "skipped": [],
+ "total_ms": 3225
+}
