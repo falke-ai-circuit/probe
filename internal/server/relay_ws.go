@@ -718,6 +718,16 @@ func (s *Server) processAgentMessage(agentID string, env protocol.Envelope) {
 		}
 		s.pendingMu.Unlock()
 
+		// P22-07: tunnel data from a relayed agent is delivered here with the
+		// same dispatch the direct path uses (server_ws.go). Without this the
+		// marker never reached the waiting conn and a create over a relay
+		// refused its own first-byte proof — the direct/relayed data-plane
+		// parity this file's switch otherwise provides.
+		if env.Type == protocol.TypeTunnelData {
+			s.handleTunnelDataFromAgent(env)
+			return
+		}
+
 		// Store in session context
 		s.sessions.AddMemory(agentID, "last_msg_type", env.Type)
 		s.sessions.AddMemory(agentID, fmt.Sprintf("msg_%d", time.Now().UnixMilli()), string(mustMarshalRaw(env)))

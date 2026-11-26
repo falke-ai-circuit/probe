@@ -174,6 +174,17 @@ func (a *Agent) relayTargetToServer(connID string, target net.Conn) {
 
 // handleTunnelData is called when the server sends tunnel_data (client→target).
 // The agent writes the data to the target connection.
+//
+// P22-07: a successful write is FIRE-AND-FORGET — the handler returns a zero
+// envelope and nothing travels back. The previous ACK (a Result envelope
+// echoing env.ID) was received by the server as an unsolicited reply with a
+// request-shaped ID: handleMessages matched it against pendingReqs, where the
+// create's tunnel_open confirmation of the NEXT connection could be evicted by
+// it, and on match-miss it fell through to the tunnel data path as a frame
+// with empty params ("unexpected end of JSON input"). Under repetition that
+// race dropped the confirmations the create waits on and published verified
+// tunnels whose data path never opened. Errors still reply: a failed write to
+// the target must reach the server that sent the data.
 func (a *Agent) handleTunnelData(env protocol.Envelope) protocol.Envelope {
 	var params protocol.TunnelDataParams
 	if err := json.Unmarshal(env.Params, &params); err != nil {
@@ -209,11 +220,9 @@ func (a *Agent) handleTunnelData(env protocol.Envelope) protocol.Envelope {
 		return protocol.NewError(env.ID, protocol.ErrInternal, fmt.Sprintf("write to target failed: %v", err))
 	}
 
-	// Acknowledge — no explicit response needed, but send one for flow control
-	return protocol.NewResult(env.ID, protocol.TypeTunnelData, map[string]interface{}{
-		"tunnel_id": params.TunnelID,
-		"written":   len(data),
-	})
+	// P22-07: fire-and-forget. A successful data write sends NO reply — see
+	// the doc comment above. Errors only.
+	return protocol.Envelope{}
 }
 
 // handleTunnelClose closes a tunnel connection on the agent side.

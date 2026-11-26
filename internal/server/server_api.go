@@ -882,7 +882,7 @@ func (s *Server) forwardToAgentWithTimeout(agentID string, msgType string, param
 		}
 	}
 
-	reqID := fmt.Sprintf("%s-%d", msgType, time.Now().UnixMilli())
+	reqID := fmt.Sprintf("%s-%d-%d", msgType, time.Now().UnixMilli(), s.fwdSeq.Add(1))
 	var paramData json.RawMessage
 	if params != nil {
 		paramData, _ = json.Marshal(params)

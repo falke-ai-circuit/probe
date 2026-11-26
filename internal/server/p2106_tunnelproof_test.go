@@ -156,9 +156,11 @@ func p2106AssertClosed(t *testing.T, port int) {
 	}
 }
 
-// p2106ProbeAgentStub answers the readiness probe with ready=true and treats any
-// other forwarded command as a harmless success. Used for the relayed-agent and
-// loopback-failure cases, where the agent's own dial is not what is under test.
+// p2106ProbeAgentStub answers the readiness probe with ready=true, relays
+// tunnel data (echoing tunnel_data back as target→client so a first-byte
+// marker round-trips — P22-07's create publishes verified only after that),
+// and treats any other forwarded command as a harmless success. No ACK for a
+// successful tunnel_data: the P22-07 contract is fire-and-forget.
 func p2106ProbeAgentStub(t *testing.T, conn *websocket.Conn) {
 	t.Helper()
 	go func() {
@@ -182,6 +184,33 @@ func p2106ProbeAgentStub(t *testing.T, conn *websocket.Conn) {
 				res, _ := json.Marshal(protocol.TunnelProbeResult{TunnelID: p.TunnelID, Target: "stub-target", Ready: true})
 				out, _ := json.Marshal(protocol.Envelope{ID: env.ID, Type: protocol.TypeTunnelProbeResult, Result: res})
 				conn.WriteMessage(websocket.TextMessage, out)
+				continue
+			case protocol.TypeTunnelOpen:
+				var p struct {
+					TunnelID string `json:"tunnel_id"`
+				}
+				json.Unmarshal(env.Params, &p)
+				res, _ := json.Marshal(map[string]interface{}{"tunnel_id": p.TunnelID, "target": "stub-target"})
+				out, _ := json.Marshal(protocol.Envelope{ID: env.ID, Type: protocol.TypeTunnelOpened, Result: res})
+				conn.WriteMessage(websocket.TextMessage, out)
+				continue
+			case protocol.TypeTunnelData:
+				var p protocol.TunnelDataParams
+				if json.Unmarshal(env.Params, &p) != nil || p.Data == "" {
+					continue
+				}
+				echo, _ := json.Marshal(protocol.TunnelDataParams{
+					TunnelID:  p.TunnelID,
+					Direction: "target→client",
+					Data:      p.Data,
+				})
+				out, _ := json.Marshal(protocol.Envelope{
+					ID:     fmt.Sprintf("tun-echo-%d", time.Now().UnixNano()),
+					Type:   protocol.TypeTunnelData,
+					Params: echo,
+				})
+				conn.WriteMessage(websocket.TextMessage, out)
+				// No ACK envelope: successful data is fire-and-forget.
 				continue
 			}
 			res, _ := json.Marshal(map[string]interface{}{"ok": true})

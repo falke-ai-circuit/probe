@@ -349,6 +349,21 @@ func (s *Server) pingAgent(agentID string) error {
 // pongToPending hands a pong to the waiting ping probe, if one is waiting.
 // Returns true when the pong was consumed. Callers still record the pong as
 // proof of life regardless.
+// isPendingReply reports whether envID answers a request the server itself is
+// waiting on (exec result, tunnel_opened, pong for a pending ping probe...).
+// P22-07: admission must not refuse a reply — a refused reply strands the
+// server's own caller with a timeout, the same published-but-dead shape the
+// tunnel fix targets. Read-only: it does not consume the pending entry.
+func (s *Server) isPendingReply(envID string) bool {
+	if envID == "" {
+		return false
+	}
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	_, ok := s.pendingReqs[envID]
+	return ok
+}
+
 func (s *Server) pongToPending(env protocol.Envelope) bool {
 	s.pendingMu.Lock()
 	ch, ok := s.pendingReqs[env.ID]

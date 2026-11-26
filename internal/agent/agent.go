@@ -801,6 +801,15 @@ func (a *Agent) handleCommand(conn *websocket.Conn, env protocol.Envelope) {
 	} else {
 		resp = protocol.NewError(env.ID, protocol.ErrInvalidParams, fmt.Sprintf("unknown command: %s", env.Type))
 	}
+	// P22-07: a zero envelope is the by-convention "nothing to send" reply
+	// (tunnel_data success is fire-and-forget). Writing it would put a frame
+	// with an empty Type and the request's ID on the wire, which the server
+	// reads as an unsolicited response for a request it may still be waiting
+	// on. Skipping the write is the fix; the convention keeps handlers able
+	// to opt out of replying without their own nil-check dance.
+	if resp.Type == "" && resp.ID == "" && resp.Result == nil && resp.Error == nil {
+		return
+	}
 	if err := a.writeMessage(conn, resp); err != nil {
 		log.Printf("write error: %v", err)
 	}

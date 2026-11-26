@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -205,12 +206,19 @@ func p2105RelaySocket(t *testing.T, ts *httptest.Server, relayID, magic, agentNa
 }
 
 // p2105RelayResponder answers framed envelopes on one relay channel.
+// P22-07: writes are serialized through p2105WriteMu — this responder goroutine
+// and the test body write control frames (channel_close) on the SAME conn, and
+// the two unsynchronized WriteMessage calls were the fixture-internal data race
+// the package -race run flagged (pre-existing at the ea28a49/60c5950 baseline).
 func p2105RelayResponder(t *testing.T, conn *websocket.Conn, magic string, chanID uint32, tag string, answered chan<- string) {
 	t.Helper()
+	writeMu := &sync.Mutex{}
+	p2105WriteMu.Store(conn, writeMu)
 	go func() {
 		for {
 			_, data, err := conn.ReadMessage()
 			if err != nil {
+				p2105WriteMu.Delete(conn)
 				return
 			}
 			m, ch, payload, perr := parseRelayFrame(data)
@@ -235,7 +243,11 @@ func p2105RelayResponder(t *testing.T, conn *websocket.Conn, magic string, chanI
 			res, _ := json.Marshal(result)
 			out, _ := json.Marshal(protocol.Envelope{ID: env.ID, Type: env.Type + "_result", Result: res})
 			_ = m
-			if err := conn.WriteMessage(websocket.BinaryMessage, p2104Frame(magic[0], chanID, out)); err != nil {
+			writeMu.Lock()
+			werr := conn.WriteMessage(websocket.BinaryMessage, p2104Frame(magic[0], chanID, out))
+			writeMu.Unlock()
+			if werr != nil {
+				p2105WriteMu.Delete(conn)
 				return
 			}
 			if answered != nil {
@@ -247,6 +259,11 @@ func p2105RelayResponder(t *testing.T, conn *websocket.Conn, magic string, chanI
 		}
 	}()
 }
+
+// p2105WriteMu maps a fixture relay conn to the mutex its writers must take,
+// so the test body can send control frames on the same socket without racing
+// the responder goroutine.
+var p2105WriteMu sync.Map
 
 // TestP2105_RouteMapLifecycleNamedError proves the map is written at
 // registration and removed with the channel — and that a command after the
@@ -267,7 +284,15 @@ func TestP2105_RouteMapLifecycleNamedError(t *testing.T) {
 	}
 
 	done, _ := json.Marshal(map[string]interface{}{"type": "channel_close", "channel_id": 7, "relay_id": "relay-lc"})
-	relayConn.WriteMessage(websocket.BinaryMessage, p2104Frame('Q', 0, done))
+	// The channel_close control frame shares the socket with the responder
+	// goroutine; take the fixture's write mutex the way the responder does.
+	if mu, ok := p2105WriteMu.Load(relayConn); ok {
+		mu.(*sync.Mutex).Lock()
+		relayConn.WriteMessage(websocket.BinaryMessage, p2104Frame('Q', 0, done))
+		mu.(*sync.Mutex).Unlock()
+	} else {
+		relayConn.WriteMessage(websocket.BinaryMessage, p2104Frame('Q', 0, done))
+	}
 	p2105WaitRoute(srv, "eas3", false)
 	p2105WaitRoute(srv, "relay/relay-lc/eas3", false)
 

@@ -308,7 +308,18 @@ func (s *Server) handleMessages(agentID string, conn *websocket.Conn) {
 		// P21-04: the direct path goes through the same admission as a
 		// relayed one. Parity is asserted here and in the relay loop, not
 		// inherited from the transport.
-		if !s.admitInbound(agentID, false) {
+		// P22-07: two exemptions, both because the frame is not
+		// agent-initiated traffic:
+		//   1. tunnel-plane DATA frames — an exec-style admission token per
+		//      echoed byte throttled the tunnel itself, and under repetition
+		//      the read loop silently dropped tunnel_data frames once the
+		//      bucket ran dry (live 9/20, all timeouts on verified ports).
+		//      The tunnel's admission happens once, at create.
+		//   2. replies to a request the SERVER is waiting on (tunnel_opened,
+		//      exec results, pongs) — refusing a reply strands the server's
+		//      own caller with a timeout, which is the same
+		//      published-but-dead shape as the data-plane drop.
+		if env.Type != protocol.TypeTunnelData && !s.isPendingReply(env.ID) && !s.admitInbound(agentID, false) {
 			log.Printf("[server] agent %s: rate/concurrency limit refused", agentID)
 			continue
 		}

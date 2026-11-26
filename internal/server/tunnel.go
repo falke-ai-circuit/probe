@@ -326,13 +326,34 @@ func (s *Server) handleAgentTunnel(w http.ResponseWriter, r *http.Request, agent
 		return
 	}
 
+	// P22-07 requirement 1 — publish AFTER proof, not before. The ordering
+	// is explicit and in one place: an open confirmation proves the agent
+	// holds a target connection, but the FIRST BYTE must actually traverse
+	// the tunnel (server conn → agent → target → agent → server conn) before
+	// verified:true leaves this handler or the port is handed out as ready.
+	// The echo round-trip below IS that proof; verified:true is set only
+	// after it succeeds, and the p2207_firstbyte_test pins the ordering —
+	// flipping the probes off makes that test fail with a create that
+	// answers before a round-trip can have occurred.
+	ok, latency, dialErr = tunnelFirstByteProbe(actualPort)
+	if !ok {
+		s.abandonTunnel(t)
+		s.writeTunnelFailure(w, agentID, &tunnelFailure{
+			Status:  http.StatusBadGateway,
+			Code:    "TUNNEL_FIRST_BYTE_FAILED",
+			Message: fmt.Sprintf("listen port %d accepted a connection but the first byte did not round-trip the tunnel: %s; no listen port was published", actualPort, dialErr),
+			Detail:  map[string]interface{}{"agent_id": agentID, "tunnel_id": t.ID, "port_not_usable": true},
+		})
+		return
+	}
+
 	result := protocol.TunnelOpenResult{
 		ListenPort: actualPort,
 		TunnelID:   t.ID,
 		Verified:   true,
 		Loopback:   &protocol.TunnelLoopbackResult{OK: true, LatencyMS: latency},
 	}
-	log.Printf("[tunnel] opened %s → agent %s → %s:%d (listen :%d, loopback %dms)",
+	log.Printf("[tunnel] opened %s → agent %s → %s:%d (listen :%d, first byte %dms)",
 		t.ID, agentID, params.TargetHost, params.TargetPort, actualPort, latency)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -355,11 +376,46 @@ var (
 	// agent must hold a live target connection for the connection that was
 	// accepted before verified:true is published.
 	tunnelDataPathTimeout = 5 * time.Second
+	// tunnelFirstByteTimeout bounds the first-byte round-trip proof (P22-07):
+	// the marker must come back echoed through the whole tunnel before the
+	// create publishes verified:true.
+	tunnelFirstByteTimeout = 3 * time.Second
 )
 
 // tunnelLoopbackProbe is the server-side proof. It is a variable so a test can
 // force the failure branch deterministically; production dials for real.
 var tunnelLoopbackProbe = dialTunnelLoopback
+
+// tunnelFirstByteProbe is the P22-07 create-time proof that the first byte
+// round-trips the tunnel before the port is published as verified. Production
+// sends a marker through the full data path and waits for it echoed back; the
+// variable indirection lets a test pin the publish-after-proof ordering (and
+// prove the assertion can fail) without spending the production budget.
+var tunnelFirstByteProbe = dialTunnelFirstByte
+
+// dialTunnelFirstByte dials the freshly-opened listen port and pushes one
+// marker byte through it, waiting for the echo. ok=true means a full
+// server→agent→target→agent→server round-trip has completed on this process's
+// own connection — the ordering certificate for verified:true.
+func dialTunnelFirstByte(port int) (bool, int64, string) {
+	start := time.Now()
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), tunnelLoopbackTimeout)
+	if err != nil {
+		return false, 0, err.Error()
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(tunnelFirstByteTimeout))
+	marker := []byte{0x00}
+	if _, err := conn.Write(marker); err != nil {
+		return false, 0, "write: " + err.Error()
+	}
+	buf := make([]byte, 1)
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		return false, 0, "read: " + err.Error()
+	}
+	latency := time.Since(start).Milliseconds()
+	return true, latency, ""
+}
 
 // dialTunnelLoopback dials the freshly-opened listen port from this process and
 // reports the handshake time. ok=false means the port the caller was about to

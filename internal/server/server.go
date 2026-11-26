@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	cryptomanager "github.com/falke-ai-circuit/probe/internal/crypto"
@@ -63,6 +64,13 @@ type Server struct {
 	// a channel and waits on it. handleMessages delivers the response.
 	pendingMu   sync.Mutex
 	pendingReqs map[string]chan protocol.Envelope // requestID -> response channel
+	// fwdSeq disambiguates forwarded-command request IDs (P22-07): reqIDs
+	// built from msgType + UnixMilli alone collide when several commands of
+	// the same type are forwarded within one millisecond (60 concurrent
+	// tunnel_opens in the measured lab run). A collided ID overwrites a
+	// pending waiter's channel entry; the loser's reply orphans in the map
+	// and the collision drops confirmations the create path waits on.
+	fwdSeq atomic.Uint64
 
 	// P8-04: witness records for detached jobs (job_id -> record). The
 	// server cannot execute cleanup on a dead host; it only remembers what
