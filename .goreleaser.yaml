@@ -6,7 +6,11 @@
 # ships the same binary the Dockerfile stage-2 builds (cmd/probe, CGO off) so
 # the tag's Release job can go green. If binary releases are ever dropped,
 # delete release.yml and this file together.
-version: 2
+#
+# version: 1 (not 2) — the pinned goreleaser-action@v5 / distribution
+# goreleaser (latest = 1.26.2 as of 2026-11-26) rejects version 2:
+# "only configurations files on version: 1 are supported" (run 45840699608).
+version: 1
 
 before:
   hooks:
@@ -27,7 +31,7 @@ builds:
       - -s -w -X github.com/falke-ai-circuit/probe/internal/version.Semver={{.Version}}
 
 archives:
-  - formats: [tar.gz]
+  - format: tar.gz
     name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
