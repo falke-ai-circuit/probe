@@ -1,0 +1,45 @@
+# P16-04: minimal goreleaser config — release.yml invoked `goreleaser release
+# --clean` with no config file in the tree (AUDIT.md §7.4 / review F15), so the
+# Release job failed by construction on every v* tag.
+#
+# Scope: the R0 deliverable is the service image (docker.yml); this config
+# ships the same binary the Dockerfile stage-2 builds (cmd/probe, CGO off) so
+# the tag's Release job can go green. If binary releases are ever dropped,
+# delete release.yml and this file together.
+version: 2
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: probe
+    main: ./cmd/probe/
+    binary: probe
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X github.com/falke-ai-circuit/probe/internal/version.Semver={{.Version}}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+
+release:
+  draft: false
