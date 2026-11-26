@@ -30,6 +30,21 @@ type Tunnel struct {
 	connMu  sync.Mutex
 	conns   map[string]net.Conn // connID → local TCP conn
 	nextSeq int
+
+	// openEvents carries the outcome of each accepted connection's agent-side
+	// open. A create that has just proved its listener accepts waits on this
+	// for the connection it dialled, so `verified` is not published until the
+	// route the caller will use actually exists. Sends are non-blocking: a
+	// long-lived tunnel with no waiter must not stall its relay goroutines.
+	openEvents chan tunnelOpenEvent
+}
+
+// tunnelOpenEvent is the per-connection outcome of the agent-side tunnel_open.
+// seq is the accept sequence of the local connection, so a waiter only accepts
+// the event for the connection it opened (a stale event cannot satisfy it).
+type tunnelOpenEvent struct {
+	seq int
+	err error
 }
 
 // newTunnel creates a tunnel, starts the TCP listener, and tells the agent
@@ -53,6 +68,7 @@ func (s *Server) newTunnel(agentID string, targetHost string, targetPort int, li
 		Listener:   ln,
 		Server:     s,
 		conns:      make(map[string]net.Conn),
+		openEvents: make(chan tunnelOpenEvent, 64),
 	}
 
 	s.tunnelMu.Lock()
@@ -75,17 +91,37 @@ func (t *Tunnel) acceptLoop() {
 		}
 		t.connMu.Lock()
 		t.nextSeq++
+		seq := t.nextSeq
 		connID := fmt.Sprintf("%s-c%d", t.ID, t.nextSeq)
 		t.conns[connID] = conn
 		t.connMu.Unlock()
 
-		go t.handleConn(connID, conn)
+		go t.handleConn(connID, seq, conn)
+	}
+}
+
+// acceptedSeq reports the accept sequence of the most recent connection. A
+// create snapshots it before dialling its own loopback connection, so a stale
+// event from an earlier connection cannot stand in for the one it opened.
+func (t *Tunnel) acceptedSeq() int {
+	t.connMu.Lock()
+	defer t.connMu.Unlock()
+	return t.nextSeq
+}
+
+// reportOpen publishes one connection's agent-side open outcome to any create
+// waiting for the data path. It never blocks: with nobody waiting the buffered
+// channel would otherwise fill and stop the relay goroutine that reports.
+func (t *Tunnel) reportOpen(seq int, err error) {
+	select {
+	case t.openEvents <- tunnelOpenEvent{seq: seq, err: err}:
+	default:
 	}
 }
 
 // handleConn relays data between a local TCP connection and the agent's
 // connection to the target via WebSocket frames.
-func (t *Tunnel) handleConn(connID string, localConn net.Conn) {
+func (t *Tunnel) handleConn(connID string, seq int, localConn net.Conn) {
 	// Disable Nagle's algorithm for lower latency
 	if tcpConn, ok := localConn.(*net.TCPConn); ok {
 		tcpConn.SetNoDelay(true)
@@ -117,14 +153,21 @@ func (t *Tunnel) handleConn(connID string, localConn net.Conn) {
 	resp, err := t.Server.forwardToAgentWithTimeout(t.AgentID, protocol.TypeTunnelOpen, openParams, 10*time.Second, "")
 	if err != nil {
 		log.Printf("[tunnel] tunnel_open failed for %s: %v", connID, err)
+		// A create waiting on this connection must learn the route never
+		// existed, so it refuses instead of publishing the port.
+		t.reportOpen(seq, err)
 		return
 	}
 	// Check if agent returned an error
 	if m, ok := resp.(map[string]interface{}); ok && m["error"] != nil {
 		log.Printf("[tunnel] agent rejected tunnel_open for %s: %v", connID, m["error"])
+		t.reportOpen(seq, fmt.Errorf("%v", m["error"]))
 		return
 	}
 	log.Printf("[tunnel] agent confirmed tunnel opened for %s", connID)
+	// The route the caller's bytes will take is now established end to end:
+	// the agent holds a live connection to the target for this local conn.
+	t.reportOpen(seq, nil)
 
 	// Read from local connection, send to agent as tunnel_data
 	buf := make([]byte, 64*1024)
@@ -251,6 +294,10 @@ func (s *Server) handleAgentTunnel(w http.ResponseWriter, r *http.Request, agent
 		return
 	}
 
+	// The create dials its own loopback connection; the sequence snapshot
+	// before the dial is what identifies that connection's open event.
+	loopbackSeq := t.acceptedSeq()
+
 	ok, latency, dialErr := tunnelLoopbackProbe(actualPort)
 	if !ok {
 		s.abandonTunnel(t)
@@ -259,6 +306,22 @@ func (s *Server) handleAgentTunnel(w http.ResponseWriter, r *http.Request, agent
 			Code:    "TUNNEL_LOOPBACK_FAILED",
 			Message: fmt.Sprintf("listen port %d did not accept a connection from the server: %s", actualPort, dialErr),
 			Detail:  map[string]interface{}{"agent_id": agentID, "tunnel_id": t.ID, "port_not_dialable": true},
+		})
+		return
+	}
+
+	// A dialable listener is not a working tunnel: accept() succeeds before
+	// the agent has opened its side, so a port published here can accept a
+	// caller's connection and then drop it. Wait for the agent's tunnel_open
+	// answer on THAT connection — the same route the caller's bytes take —
+	// before anything is published.
+	if pathErr := s.confirmTunnelDataPath(t, loopbackSeq, tunnelDataPathTimeout); pathErr != nil {
+		s.abandonTunnel(t)
+		s.writeTunnelFailure(w, agentID, &tunnelFailure{
+			Status:  http.StatusBadGateway,
+			Code:    "TUNNEL_DATA_PATH_FAILED",
+			Message: fmt.Sprintf("listen port %d accepted the server's loopback connection but the agent opened no route through it: %v; no listen port was published", actualPort, pathErr),
+			Detail:  map[string]interface{}{"agent_id": agentID, "tunnel_id": t.ID, "port_not_usable": true},
 		})
 		return
 	}
@@ -287,6 +350,11 @@ var (
 	tunnelReadyTimeout = 5 * time.Second
 	// tunnelLoopbackTimeout bounds the server's dial of the port it opened.
 	tunnelLoopbackTimeout = 2 * time.Second
+	// tunnelDataPathTimeout bounds the wait for the agent's tunnel_open answer
+	// on the loopback connection. It is the create's data-path proof: the
+	// agent must hold a live target connection for the connection that was
+	// accepted before verified:true is published.
+	tunnelDataPathTimeout = 5 * time.Second
 )
 
 // tunnelLoopbackProbe is the server-side proof. It is a variable so a test can
@@ -305,6 +373,29 @@ func dialTunnelLoopback(port int) (bool, int64, string) {
 	latency := time.Since(start).Milliseconds()
 	conn.Close()
 	return true, latency, ""
+}
+
+// confirmTunnelDataPath waits for the agent's tunnel_open answer on the
+// connection accepted after afterSeq — the loopback connection the create just
+// dialled. nil means the agent holds a live connection to the target for that
+// local conn, so a caller's bytes have a route at the moment verified:true is
+// published. Any other answer means the port accepts and carries nothing, which
+// is a refusal, not a success with a caveat.
+func (s *Server) confirmTunnelDataPath(t *Tunnel, afterSeq int, timeout time.Duration) error {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	for {
+		select {
+		case ev := <-t.openEvents:
+			if ev.seq <= afterSeq {
+				// An event for an earlier connection cannot prove this one.
+				continue
+			}
+			return ev.err
+		case <-deadline.C:
+			return fmt.Errorf("the agent did not confirm the tunnel connection within %v", timeout)
+		}
+	}
 }
 
 // tunnelFailure is a refused create: typed code, the sentence the caller sees,
@@ -341,8 +432,8 @@ func (s *Server) confirmTunnelTarget(agentID string, t *Tunnel) *tunnelFailure {
 			Message: fmt.Sprintf("agent %s did not confirm the tunnel target within %v; no listen port was published",
 				agentID, tunnelReadyTimeout),
 			Detail: map[string]interface{}{
-				"agent_id": agentID,
-				"tunnel_id": t.ID,
+				"agent_id":   agentID,
+				"tunnel_id":  t.ID,
 				"timeout_ms": tunnelReadyTimeout.Milliseconds(),
 				"ran":        false,
 			},

@@ -99,6 +99,20 @@ func p2106StartRealAgent(t *testing.T, srv *Server, ts *httptest.Server, name st
 	return a
 }
 
+// p2106WaitConn waits until the arrival path has stored the agent's live
+// connection. That entry is the fact the create's dispatch predicate reads, so
+// a create issued before it exists is refused as an absent agent — a different
+// contract than the one under test.
+func p2106WaitConn(t *testing.T, srv *Server, agentID string) {
+	t.Helper()
+	p2104Wait(t, "connection for "+agentID, func() bool {
+		srv.mu.RLock()
+		_, ok := srv.conns[agentID]
+		srv.mu.RUnlock()
+		return ok
+	})
+}
+
 // p2106Create performs the create call and returns status + raw body.
 func p2106Create(t *testing.T, ts *httptest.Server, agentID string, targetPort, listenPort int) (int, string) {
 	t.Helper()
@@ -294,12 +308,17 @@ func TestP2106_AgentBindFailureIs502WithoutPort(t *testing.T) {
 // that never answers the probe produces a distinct 502, no port, and a torn-down
 // listener. The wait is shortened here; production waits tunnelReadyTimeout (5s).
 func TestP2106_TimeoutIs502AndListenerClosed(t *testing.T) {
-	_, ts, cleanup := p2104Server(t)
+	srv, ts, cleanup := p2104Server(t)
 	defer cleanup()
 
 	conn := p2104DialAgent(t, ts, "p2106-mute")
 	defer conn.Close()
 	p2106MuteAgentStub(t, conn)
+	// The create's dispatch predicate reads the conn-map; a create issued
+	// before the arrival path has stored the connection is refused as an
+	// absent agent, which is a different contract than the timeout under
+	// test. Wait for the route the predicate reads — no assertion changes.
+	p2106WaitConn(t, srv, "p2106-mute")
 
 	old := tunnelReadyTimeout
 	tunnelReadyTimeout = 300 * time.Millisecond
@@ -323,12 +342,13 @@ func TestP2106_TimeoutIs502AndListenerClosed(t *testing.T) {
 // dial the port it opened, that is a failure response, not a success with a
 // caveat. The dial is forced to fail so the branch is deterministic.
 func TestP2106_LoopbackFailureIsRefused(t *testing.T) {
-	_, ts, cleanup := p2104Server(t)
+	srv, ts, cleanup := p2104Server(t)
 	defer cleanup()
 
 	conn := p2104DialAgent(t, ts, "p2106-loopback")
 	defer conn.Close()
 	p2106ProbeAgentStub(t, conn)
+	p2106WaitConn(t, srv, "p2106-loopback")
 
 	old := tunnelLoopbackProbe
 	tunnelLoopbackProbe = func(int) (bool, int64, string) {
