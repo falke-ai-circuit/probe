@@ -4,3 +4,4 @@ nohup.out
 __pycache__/
 datadir/
 secrets.json
+apitest_results.json
