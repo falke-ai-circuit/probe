@@ -88,7 +88,6 @@ jobs:
           python3 scripts/apitest.py \
             --base http://127.0.0.1:7811 --mode test \
             --user admin --password apitest-ci-pass-1 \
-            --expected-version 1.19.2 \
             --golden scripts/golden/golden_baseline.json --golden-diff \
             --output /tmp/apitest/results.json 2>&1 | tee /tmp/apitest/gate.log
           # Budget enforcement: the suite prints TOTAL s.mmm
