@@ -3,17 +3,17 @@
 # Deploy (host pulls, it does not build):  docker compose up -d
 # Bring-up that reports what it is:        ./scripts/bringup.sh
 #
-# IMAGE PIN — do not change this to a floating tag.
-#   ghcr.io/falke-ai-circuit/probe:e46023f1cd074ce524f30d82eba54d95775cb350
-#   @sha256:1051de24cb6e0c8a7c4414ca1b97e38628af05de1c8dbf1c2d3c54a42a509373
-# The tag is the commit the image was built from (e46023f, "P16-01: build
-# linux/amd64 + linux/arm64 as one manifest list"), the digest is the digest the
-# registry serves for that tag: one OCI index whose real members are
-# linux/amd64 and linux/arm64 (the two unknown/unknown entries are buildx
-# provenance attestations, not platforms). Both architectures resolve from this
-# one pin, so an arm64 host does not have to fall back to an amd64 image under
-# emulation. The amd64 member has been executed; the arm64 member has been
-# pulled and inspected but not yet run on arm64 hardware.
+# IMAGE PIN — do not change this to a floating tag. BUMP RULE: when a deploy
+# moves the image, move this pin in the SAME change as the deploy. Verify the
+# new digest with `docker inspect <image> --format '{{json .RepoDigests}}'` on
+# THE HOST THAT PULLED IT (the host that runs the stack) and paste the line as
+# tag@digest here; never pin a digest you have not seen in that output.
+#   ghcr.io/falke-ai-circuit/probe:62a3b8e68d983713626b3c0ecc0992fcebd37529
+#   @sha256:df0cac38ae1bafa92be9ec0cacabee2be643be304e8d0da0edcb1e5b05fe1c26
+# The tag is the commit the image was built from (62a3b8e), the digest below is
+# what that tag resolves to, verified against the RepoDigests reported by the
+# production host (CT100, /docker/operator-op01 — the checkpoint this repo may
+# legitimately trail).
 # `image:` carries both, so a re-tag on the registry cannot silently change what
 # a deploy gets. There is deliberately no `build:` key: the image is published by
 # .github/workflows/docker.yml, and a compose file that can build would let the
@@ -36,10 +36,24 @@
 #   - Login audit logging to /data/logs/audit.jsonl
 #   - IP blacklist configurable via PROBE_BLACKLIST_CIDR env
 #   - /ws WebSocket endpoint open from any IP (agents connect from anywhere)
+#
+# DEPLOY-TIME DIVERGENCES — live on CT100 but deliberately NOT mirrored here:
+#   1. container_name: live runs as operator-op01-probe-1; this repo keeps
+#      falke-probe. Renaming here would orphan the live container on the next
+#      `compose up`; the live name is a deployment choice (P11-03 deferral).
+#   2. Networks: live attaches the service to an external `falke-net` (with the
+#      `probe` alias) plus a project bridge `operator-net`. The repo file stays
+#      network-neutral; attaching external networks is a per-deployment edit —
+#      mirroring them here would break stacks without that network.
+#   3. Healthcheck: live uses a bash /dev/tcp probe because the pinned image
+#      ships no curl/wget/nc/busybox, so this file's curl test cannot run. The
+#      repo keeps curl (the bring-up.sh proof path documents the measurement);
+#      a deployment that uses this pinned image must apply the /dev/tcp variant
+#      or install a fetch tool in the image.
 
 services:
   probe:
-    image: ghcr.io/falke-ai-circuit/probe:e46023f1cd074ce524f30d82eba54d95775cb350@sha256:1051de24cb6e0c8a7c4414ca1b97e38628af05de1c8dbf1c2d3c54a42a509373
+    image: ghcr.io/falke-ai-circuit/probe:62a3b8e68d983713626b3c0ecc0992fcebd37529@sha256:df0cac38ae1bafa92be9ec0cacabee2be643be304e8d0da0edcb1e5b05fe1c26
     container_name: falke-probe
     restart: unless-stopped
     ports:
