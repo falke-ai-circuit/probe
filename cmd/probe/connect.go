@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -208,11 +209,14 @@ func runConnect(args []string) {
 
 	ag := agent.New(cfg)
 
-	if cfg.Mode == "inbound" {
-		fmt.Fprintf(os.Stderr, "Listening on %s as '%s' (mode: inbound)\n", cfg.Addr, name)
-	} else {
-		fmt.Fprintf(os.Stderr, "Connecting to %s as '%s' (mode: %s)\n", cfg.URL, name, mode)
-	}
+	// The banner names what this process registers as, so the name comes from
+	// the agent AFTER New(): New resolves a canary's identity from the
+	// installation's config file (P15-07), and the launch-time `name` variable
+	// — derived from the artifact's embedded build config — can carry a
+	// different (build) name that would make the canary log contradict itself
+	// (P15-09). Registration is unaffected; this print must tell the same
+	// truth about it.
+	printConnectBanner(os.Stderr, ag.Name(), cfg, mode)
 
 	// Handle SIGINT/SIGTERM
 	sigCh := make(chan os.Signal, 1)
@@ -243,6 +247,17 @@ func runConnect(args []string) {
 	case <-time.After(5 * time.Second):
 		log.Println("agent did not stop within 5s; exiting (the run-state record will read stale, which the status command reports as not_running)")
 	}
+}
+
+func printConnectBanner(w io.Writer, identity string, cfg agent.Config, mode string) {
+	// P15-09: the banner names what this process registers as, so identity is
+	// the agent's post-New() name — for a canary, the config-resolved identity
+	// — never the artifact-derived launch name.
+	if cfg.Mode == "inbound" {
+		fmt.Fprintf(w, "Listening on %s as '%s' (mode: inbound)\n", cfg.Addr, identity)
+		return
+	}
+	fmt.Fprintf(w, "Connecting to %s as '%s' (mode: %s)\n", cfg.URL, identity, mode)
 }
 
 func printConnectUsage() {

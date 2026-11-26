@@ -1572,6 +1572,17 @@ func decodeBase64(s string) ([]byte, error) {
 	return result, nil
 }
 
+// Name reports the identity this agent holds AFTER construction — for a
+// canary, the resolved canary base name (configured + "-canary", P15-07),
+// not the artifact-derived launch name. Callers that print the identity at
+// startup (the connect banner, P15-09) must use this value so the log states
+// the same name the agent registers under.
+func (a *Agent) Name() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.cfg.Name
+}
+
 // SendPrompt sends an exec command to the connected server and displays results.
 func (a *Agent) SendPrompt(prompt string) {
 	a.mu.Lock()
