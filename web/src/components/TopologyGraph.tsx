@@ -42,21 +42,26 @@ function computeLayout(data: TopologyData, width: number): { nodes: PositionedNo
   const relayedAgents = data.agents.filter(a => a.relayed).sort((a, b) => a.id.localeCompare(b.id))
   const relays = (data.relays || []).sort((a, b) => a.id.localeCompare(b.id))
 
-  // Direct agents in row 2
+  // Row 2: direct agents and relays. When BOTH groups exist they occupy
+  // disjoint x-ranges (direct group left of cx, relay group right of cx) so
+  // the server→direct and server→relay edges render as two distinct segments
+  // instead of overlapping at cx. Single-group layouts keep the exact same
+  // geometry as before (both centers collapse to cx).
+  const bothGroups = directAgents.length > 0 && relays.length > 0
+  const directCenter = bothGroups ? cx / 2 : cx
   const directSpacing = Math.min(140, width / Math.max(directAgents.length, 1))
-  const directStart = cx - (directAgents.length - 1) * directSpacing / 2
+  const directStart = directCenter - (directAgents.length - 1) * directSpacing / 2
   directAgents.forEach((a, i) => {
-    const x = directAgents.length === 1 ? cx : directStart + i * directSpacing
+    const x = directAgents.length === 1 ? directCenter : directStart + i * directSpacing
     nodes.push({ ...a, type: 'agent', x, y: 50 + rowGap })
     edges.push({ from: data.server.id, to: a.id, relayed: false })
   })
 
-  // Relays in row 2 (appended after direct agents)
-  const relayStart = directAgents.length
+  // Relays in row 2 (offset right of the direct-agent range when both exist)
   const relaySpacing = Math.min(180, width / Math.max(relays.length, 1))
+  const relayCenter = bothGroups ? cx + (width - cx) / 2 : cx
   relays.forEach((r, i) => {
-    const idx = relayStart + i
-    const x = relays.length === 1 && directAgents.length === 0 ? cx : cx - (relays.length - 1) * relaySpacing / 2 + i * relaySpacing
+    const x = relayCenter - (relays.length - 1) * relaySpacing / 2 + i * relaySpacing
     nodes.push({ ...r, type: 'relay', x, y: 50 + rowGap })
     edges.push({ from: data.server.id, to: r.id, relayed: false })
   })
