@@ -5,6 +5,12 @@ on:
     tags:
       - 'v*'
 
+# Minimal scope: the default GITHUB_TOKEN is contents read-only, so
+# `goreleaser release` publishing the GitHub release 403s
+# ("Resource not accessible by integration", run 45841508038).
+permissions:
+  contents: write
+
 jobs:
   goreleaser:
     runs-on: ubuntu-latest
