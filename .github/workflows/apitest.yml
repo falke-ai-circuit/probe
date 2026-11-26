@@ -85,10 +85,14 @@ jobs:
         run: |
           cd "$GITHUB_WORKSPACE"
           set -o pipefail
+          # NOTE: no --expected-version here — cmd/probe-server never calls
+          # SetVersion, so health.server_version is always '' for this binary
+          # (measured in CI run 45856518026). Version truth is asserted by the
+          # prod-mode run against the deployed release (48/48, see
+          # docs/TESTING.md), not by the scratch-instance gate.
           python3 scripts/apitest.py \
             --base http://127.0.0.1:7811 --mode test \
             --user admin --password apitest-ci-pass-1 \
-            --expected-version 1.19.2 \
             --golden scripts/golden/golden_baseline.json --golden-diff \
             --output /tmp/apitest/results.json 2>&1 | tee /tmp/apitest/gate.log
           # Budget enforcement: the suite prints TOTAL s.mmm
