@@ -156,8 +156,23 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if link != nil {
-		log.Printf("[server] agent %s forwarded upstream via %s (policy enforced, not mirrored live here)", agentID, link.Via)
-		go s.pipeForwardedAgent(agentID, conn, link)
+		log.Printf("[server] agent %s forwarded upstream via %s (policy enforced, mirrored; serving locally too)", agentID, link.Via)
+		// P22-06: dual registration — the client stays a live local row AND
+		// appears upstream as relay/<link>/<name>. The mirror hook in
+		// handleMessages carries its frames upstream from now on, and the
+		// link map records the channel so a policy toggle can pull it back
+		// down live without touching the client's socket.
+		s.registry.Register(agentID, info.Name, info.Version, info.OS, info.Arch, info.Mode, info.Capabilities)
+		s.sessions.CreateSession(agentID)
+		s.mu.Lock()
+		s.conns[agentID] = conn
+		s.connWriteMu[agentID] = &sync.Mutex{}
+		s.mu.Unlock()
+		s.noteForwardLink(agentID, link)
+		if s.tokenTTL > 0 {
+			s.SetTokenExpiry(agentID, time.Now().Add(s.tokenTTL))
+		}
+		go s.handleMessages(agentID, conn)
 		return
 	}
 
@@ -234,6 +249,14 @@ func (s *Server) handleMessages(agentID string, conn *websocket.Conn) {
 		s.mu.Unlock()
 		// Only unregister if the connection was ours (not replaced by a new agent)
 		if stillOurs {
+			// P22-06: a forwarded agent that disconnects takes its upstream
+			// channel down with it — the upstream registration must not
+			// outlive the client that owns it.
+			if link, fwd := s.forwardLinkedAgent(agentID); fwd {
+				link.Close()
+				s.forgetForwardLink(agentID)
+				s.dropMirrored(agentID)
+			}
 			s.registry.Unregister(agentID)
 			s.sessions.RemoveSession(agentID)
 			s.ClearTokenExpiry(agentID)
@@ -250,6 +273,16 @@ func (s *Server) handleMessages(agentID string, conn *websocket.Conn) {
 		if err != nil {
 			log.Printf("[server] read error from %s: %v", agentID, err)
 			return
+		}
+
+		// P22-06: a forwarded agent's frames mirror upstream, raw as
+		// received — the uplink carries exactly what the agent sent (the
+		// same payload shape pipeForwardedAgent carried). A mirror failure
+		// never stops local serving: the local row is the serving truth.
+		if link, fwd := s.forwardLinkedAgent(agentID); fwd {
+			if serr := link.Send(data); serr != nil {
+				log.Printf("[forward] mirror to upstream for %s failed: %v", agentID, serr)
+			}
 		}
 
 		var env protocol.Envelope

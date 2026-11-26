@@ -48,6 +48,7 @@ func main() {
 	serverName := flag.String("server-name", "", "human label for this server, published in /api/v1/servers and the pre-auth identity block (default: PROBE_SERVER_NAME env, else the OS host name). The bind address is never used as a name.")
 	// P21-07: installed relay allowlist + fingerprint-only identity records.
 	relayAllowlist := flag.String("relay-allowlist", "", "comma-separated relay identities admitted to forward downstream clients: id, id:token_fp8, or *:token_fp8. Omitted = allow all; given empty = deny all.")
+	forwardAll := flag.Bool("forward-all", false, "server-wide relay_all default: every untagged client of this server is forwarded upstream (explicit per-agent 'local' rows always win). Default: untagged clients stay local.")
 	relayIdentityPath := flag.String("relay-identity-db", "", "relay identity records file (fingerprints only; default: PROBE_RELAY_IDENTITY_DB env or /tmp/probe-relay-identities.json)")
 	vtAPIKey := flag.String("vt-api-key", "", "VirusTotal API key for auto-scan after build and manual scan API (default: PROBE_VT_API_KEY env)")
 	showVersion := flag.Bool("version", false, "Print version and exit")
@@ -193,6 +194,11 @@ func main() {
 	srv.SetRequireAPIAuth(*requireAPIAuth)
 	srv.SetEnrollmentPath(*enrollmentPath)
 	srv.SetCADir(*caDir)
+	// P22-06: the server-wide untagged default. Explicit per-agent rows win.
+	if *forwardAll {
+		srv.SetForwardDefaultAll(true)
+		log.Printf("[server] forward-all default: untagged clients forward upstream (relay_all)")
+	}
 	srv.SetBuilderPath(*builderPath, *builderOutputDir)
 	// P9-11: one resolved, persistent artifacts directory. Fail loud at boot
 	// rather than at the first build: an unwritable volume is a deployment

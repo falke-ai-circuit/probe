@@ -200,6 +200,15 @@ type Server struct {
 	// have their traffic forwarded upstream. "local" = keep local only.
 	forwardMu       sync.RWMutex
 	forwardPolicies map[string]string // agentID → "local" | "relay" | "relay_all"
+	// P22-06: the -forward-all default. When true, an agent with NO explicit
+	// policy behaves relay_all instead of local; explicit per-agent rows
+	// always win. Read through forwardDefaultAll, set at boot.
+	forwardAll bool
+	// P22-06: open toggle-owned upstream links, keyed by the agent id the
+	// operator addressed. Written by noteForwardLink/forgetForwardLink under
+	// forwardMu. Distinct from the mirror (read-only record) and from
+	// forwardArrival pipes (which own their links inside their goroutine).
+	forwardLinks map[string]*ForwardedLink
 
 	// P21-04: enforcement. forwarder is the uplink link this server dials
 	// when a policy says forward; nil means no uplink, which makes this
@@ -344,15 +353,23 @@ func (s *Server) SetForwardPolicy(agentID string, action string) {
 }
 
 // GetForwardPolicy returns the forwarding policy for an agent.
-// Returns "relay" by default (if no policy set and the server has a relay).
-// Returns "local" if explicitly set to local.
+// P22-06: the UNTAGGED default is "local" — an untagged neighbour is never
+// forwarded by inheritance, so `relay` keeps its documented meaning (only
+// the tagged client). A server-wide -forward-all flag (SetForwardDefaultAll)
+// flips the untagged default to relay_all for operators who want every
+// client forwarded; explicit per-agent rows always win over it.
 func (s *Server) GetForwardPolicy(agentID string) string {
 	s.forwardMu.RLock()
-	defer s.forwardMu.RUnlock()
-	if policy, ok := s.forwardPolicies[agentID]; ok {
+	policy, ok := s.forwardPolicies[agentID]
+	all := s.forwardAll
+	s.forwardMu.RUnlock()
+	if ok {
 		return policy
 	}
-	return "relay" // default: relay all
+	if all {
+		return PolicyRelayAll
+	}
+	return PolicyLocal
 }
 
 // GetForwardPolicies returns a snapshot of all forward policies.

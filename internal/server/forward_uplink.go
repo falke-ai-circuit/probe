@@ -55,13 +55,20 @@ type UplinkForwarder struct {
 	linkID      string
 
 	writeMu sync.Mutex // one writer per socket
-	mu      sync.Mutex
-	conn    *websocket.Conn
-	magic   byte
-	nextCh  uint32
-	links   map[uint32]func([]byte) // upstream channel -> local deliver
-	closed  bool
-	onLoss  func() // mirror liveness callback
+	// connectMu serializes dial+registration: the conn==nil check and the
+	// dial must be one atomic step, or two near-simultaneous forwards dial
+	// two sockets and the upstream's second relay_register displaces the
+	// session that carries the first forward's channels (measured in the
+	// P22-06 batch toggle test: the toggle-off channel_close landed on the
+	// wrong session and the row never left the upstream).
+	connectMu sync.Mutex
+	mu        sync.Mutex
+	conn      *websocket.Conn
+	magic     byte
+	nextCh    uint32
+	links     map[uint32]*uplinkChannel // upstream channel -> local deliver + refusal hook
+	closed    bool
+	onLoss    func() // mirror liveness callback
 }
 
 // NewUplinkForwarder builds a forwarder for an upstream URL. linkID is this
@@ -76,7 +83,7 @@ func NewUplinkForwarder(upstreamURL, token, linkID string) *UplinkForwarder {
 		linkID:      linkID,
 		magic:       0x02 + (b[0] % 0xFD),
 		nextCh:      1,
-		links:       make(map[uint32]func([]byte)),
+		links:       make(map[uint32]*uplinkChannel),
 	}
 }
 
@@ -124,11 +131,16 @@ func normalizeUpstreamURL(raw string) string {
 
 // connect dials the upstream and completes registration for the given chain.
 // The chain is sent in the registration, not per agent: one link, one path.
+// The whole check-and-dial runs under connectMu so concurrent forwards share
+// one socket instead of racing into two registrations.
 func (f *UplinkForwarder) connect(chain Chain) error {
+	f.connectMu.Lock()
+	defer f.connectMu.Unlock()
 	f.mu.Lock()
 	conn := f.conn
+	closed := f.closed
 	f.mu.Unlock()
-	if conn != nil {
+	if conn != nil || closed {
 		return nil
 	}
 
@@ -231,7 +243,10 @@ func (f *UplinkForwarder) dispatch() {
 		if chanID == 0 {
 			// A refusal aimed at ONE channel must reach that channel's client
 			// instead of disappearing as a disconnect: the client is still
-			// connected to the downstream server and can be told why.
+			// connected to the downstream server and can be told why. P22-06:
+			// the channel's local twin (registry row, mirror, link record) is
+			// torn down FIRST — a refusal means the upstream registration
+			// never happened, so the registry must agree.
 			var ctrl struct {
 				Type      string `json:"type"`
 				ChannelID uint32 `json:"channel_id"`
@@ -240,32 +255,47 @@ func (f *UplinkForwarder) dispatch() {
 			}
 			if json.Unmarshal(payload, &ctrl) == nil && ctrl.Type == "forward_refused" {
 				f.mu.Lock()
-				deliver := f.links[ctrl.ChannelID]
+				ch := f.links[ctrl.ChannelID]
 				f.mu.Unlock()
-				if deliver != nil {
+				if ch != nil {
+					if ch.onRefused != nil {
+						ch.onRefused(ctrl.Code, ctrl.Reason)
+					}
 					out, _ := json.Marshal(map[string]string{
 						"type": "error", "code": ctrl.Code, "error": ctrl.Reason,
 					})
-					deliver(out)
+					ch.deliver(out)
 				}
 			}
 			continue
 		}
 		f.mu.Lock()
-		deliver := f.links[chanID]
+		ch := f.links[chanID]
 		f.mu.Unlock()
-		if deliver != nil {
-			deliver(payload)
+		if ch != nil {
+			ch.deliver(payload)
 		}
 	}
 }
 
+// uplinkChannel is one forwarded agent's slot on the uplink: where upstream
+// frames are delivered locally, and (P22-06) what happens when the upstream
+// refuses this channel after it opened — the refusal means the upstream
+// registration never happened, so the channel's local twin must be torn
+// down before anyone is told the registration failed.
+type uplinkChannel struct {
+	deliver   func([]byte)
+	onRefused func(code, reason string)
+}
+
 // ForwardRegistration is what ForwardAgent needs: the agent's id, the chain to
-// extend, and where upstream frames should be delivered locally.
+// extend, where upstream frames should be delivered locally, and optionally
+// what to do when the upstream refuses this channel after it opened.
 type ForwardRegistration struct {
-	AgentID string
-	Chain   Chain
-	Deliver func([]byte)
+	AgentID   string
+	Chain     Chain
+	Deliver   func([]byte)
+	OnRefused func(code, reason string)
 }
 
 // ForwardedLink is one agent's channel on the uplink.
@@ -328,7 +358,7 @@ func (f *UplinkForwarder) ForwardAgent(req ForwardRegistration, first []byte) (*
 	chID := f.nextCh
 	f.nextCh++
 	if req.Deliver != nil {
-		f.links[chID] = req.Deliver
+		f.links[chID] = &uplinkChannel{deliver: req.Deliver, onRefused: req.OnRefused}
 	}
 	c := f.conn
 	f.mu.Unlock()

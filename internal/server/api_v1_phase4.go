@@ -363,46 +363,17 @@ func (s *Server) handleV1ForwardPolicy(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method == http.MethodPost {
 		var req struct {
-			Action string `json:"action"` // "relay" or "local"
+			Action string `json:"action"` // "relay", "relay_all" or "local"
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid JSON", http.StatusBadRequest)
 			return
 		}
-		if req.Action != "relay" && req.Action != "local" {
-			http.Error(w, "action must be 'relay' or 'local'", http.StatusBadRequest)
-			return
-		}
-
-		// Send forward_policy to the agent via WebSocket
-		params := mustMarshalRawV1(struct {
-			Agent  string `json:"agent"`
-			Action string `json:"action"`
-		}{agentID, req.Action})
-
-		resp, err := s.forwardToAgentWithTimeout(agentID, protocol.TypeForwardPolicy, params, 10*time.Second, "")
-		if err != nil {
-			// Agent might not be connected to US (it's local to the server-as-relay node)
-			// Still set the policy locally
-			s.SetForwardPolicy(agentID, req.Action)
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"ok":     true,
-				"agent":  agentID,
-				"policy": req.Action,
-				"note":   "policy set locally (agent not directly connected)",
-			})
-			return
-		}
-
-		s.SetForwardPolicy(agentID, req.Action)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"ok":     true,
-			"agent":  agentID,
-			"policy": req.Action,
-			"result": resp,
-		})
+		// P22-06: all three actions run the same path — setter validation,
+		// persistence and the live uplink application (forward_toggle.go).
+		// A policy that only persisted could never take effect mid-run: the
+		// toggle closes/opens the exact upstream channel the agent owns.
+		s.handleV1ForwardPolicySet(w, agentID, req.Action)
 		return
 	}
 

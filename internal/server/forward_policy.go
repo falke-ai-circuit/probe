@@ -380,7 +380,12 @@ func (s *Server) uplinkForward() *UplinkForwarder {
 // failure. first is the client's first payload (its AgentInfo envelope), which
 // is also the upstream's registration signal on the new channel.
 func (s *Server) forwardArrival(agentID string, chain Chain, deliver func([]byte), first []byte) (*ForwardedLink, error) {
-	policy := s.GetForwardPolicy(agentID)
+	// P22-06: the policy resolver is forwardPolicyFor — the suffix-aware
+	// lookup that maps a relayed row (relay/<link>/<name>) onto the
+	// per-name policy row, and honours the -forward-all default. Deciding
+	// from GetForwardPolicy here would lose the suffix and strand every
+	// relayed client behind the untagged default.
+	policy := s.forwardPolicyFor(agentID)
 	f := s.uplinkForward()
 	dec, err := DecideForward(agentID, policy, s.serverChainID(), s.forwardLinkID(), f != nil, chain)
 	if err != nil {
@@ -389,7 +394,20 @@ func (s *Server) forwardArrival(agentID string, chain Chain, deliver func([]byte
 	if !dec.Forward {
 		return nil, nil
 	}
-	link, err := f.ForwardAgent(ForwardRegistration{AgentID: agentID, Chain: chain, Deliver: deliver}, first)
+	link, err := f.ForwardAgent(ForwardRegistration{
+		AgentID: agentID,
+		Chain:   chain,
+		Deliver: deliver,
+		// P22-06: a post-open refusal means the upstream registration never
+		// happened, so the local twin (registry row, session, link record,
+		// mirror) is torn down BEFORE the refusal travels downstream —
+		// otherwise a loop refusal leaves a dual-registered row behind and
+		// the chain "terminates" nowhere.
+		OnRefused: func(code, reason string) {
+			s.refuseTeardownForwardedAgent(agentID)
+			log.Printf("[forward] upstream refused agent %s after channel open (%s: %s) — local twin torn down", agentID, code, reason)
+		},
+	}, first)
 	if err != nil {
 		return nil, err
 	}
@@ -402,30 +420,14 @@ func (s *Server) forwardArrival(agentID string, chain Chain, deliver func([]byte
 		ForwardedAt:    nowRFC3339(),
 		ChainTraversed: append([]string(nil), chain.Traversed...),
 	})
+	s.noteForwardLink(agentID, link)
 	return link, nil
 }
 
-// pipeForwardedAgent carries a direct client's frames onto its uplink link.
-// It owns the connection from here on: handleWebSocket returns before
-// handleMessages is ever started.
-func (s *Server) pipeForwardedAgent(agentID string, conn *websocket.Conn, link *ForwardedLink) {
-	defer func() {
-		link.Close()
-		s.dropMirrored(agentID)
-		conn.Close()
-		log.Printf("[forward] agent %s via %s disconnected", agentID, link.Via)
-	}()
-	for {
-		_, data, err := conn.ReadMessage()
-		if err != nil {
-			return
-		}
-		if serr := link.Send(data); serr != nil {
-			log.Printf("[forward] agent %s via %s: %v", agentID, link.Via, serr)
-			return
-		}
-	}
-}
+// P22-06: pipeForwardedAgent is gone — a forwarded direct client now keeps
+// its socket on this server (dual registration in handleWebSocket) and its
+// frames mirror upstream from handleMessages, so a policy toggle can take
+// effect mid-run without touching the client's connection.
 
 // writeForwardRefusal tells a client why it was not admitted, in the protocol
 // envelope shape an agent already understands, then the caller closes.
@@ -532,16 +534,24 @@ func (s *Server) refuseRelayChannel(session *relaySession, channelID uint32, err
 // silently take the default and never recurse.
 func (s *Server) forwardPolicyFor(agentID string) string {
 	s.forwardMu.RLock()
-	defer s.forwardMu.RUnlock()
-	if p, ok := s.forwardPolicies[agentID]; ok {
+	p, ok := s.forwardPolicies[agentID]
+	all := s.forwardAll
+	s.forwardMu.RUnlock()
+	if ok {
 		return p
 	}
 	if i := strings.LastIndex(agentID, "/"); i >= 0 && i+1 < len(agentID) {
-		if p, ok := s.forwardPolicies[agentID[i+1:]]; ok {
+		s.forwardMu.RLock()
+		p, ok = s.forwardPolicies[agentID[i+1:]]
+		s.forwardMu.RUnlock()
+		if ok {
 			return p
 		}
 	}
-	return PolicyRelay
+	if all {
+		return PolicyRelayAll
+	}
+	return PolicyLocal
 }
 
 // SetForwarderID names this server when it acts as a forwarding hop.
