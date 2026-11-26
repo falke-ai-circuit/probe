@@ -152,4 +152,16 @@ No failing test name in the plain `-count=1` run. The 2 skips are the same named
 
 **Fixed and now live-verified at c1f7123: F3/`via=`** — a refused agent reads `FORWARD_MAX_AGENTS … link … (limit=1 current=1)` instead of `bad handshake`, and every relayed agent row now carries `via=<relay-id>` that matches the transport the dispatcher actually uses.
 
-**Nothing was fixed, committed, or edited in the tree. Nothing was pushed or deployed. No production host touched. The repo worktree was untouched (still clean); all binaries came from the `git archive` export; all numbers describe `c1f7123` and nothing else.** Raw evidence: /opt/data/tmp/probe119/p2311/ (logs: srv/relay-nl/relay-cap/agent-refused, live20.json, tunnel_f4.log, lockorder_race20.log, pkg_race.log, .p23_suite11.json).
+**Nothing was fixed or edited in the tree, and nothing was pushed or deployed. No production host touched. All binaries came from the `git archive` export; the review artefact was committed doc-only (`aa6ac84`, `reviews/2026-11-26-review-P23-11/REVIEW.md`).**
+
+## Worktree moved during this unit (recorded so the sha is not misread)
+
+At measurement start the worktree was CLEAN at `c1f7123`. While this unit ran, a sibling lane
+placed five uncommitted files in the shared tree: `internal/relay/mux.go`, `relay.go`, `status.go`
+(modified) and `internal/relay/p2205_refusal_test.go`, `internal/relay/refusal.go` (new,
+timestamps 10:35–10:48 — inside this unit's window). **Every number above describes `c1f7123` =
+`git archive HEAD` and nothing else; those files are P22-05 in flight, were not read as source for
+any verdict, were not run, and are not mine to commit** (committing another lane's WIP would cross
+a live lane and the unit's no-fixes/no-commits rule on source).
+
+Raw evidence: /opt/data/tmp/probe119/p2311/ (logs: srv/relay-nl/relay-cap/agent-refused, live20.json, tunnel_f4.log, lockorder_race20.log, pkg_race.log, .p23_suite11.json).
