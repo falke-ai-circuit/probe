@@ -35,7 +35,7 @@ windows: check-version-artifact
 # `--version` with the intended semver. Build one with -X and assert the exact
 # output, so a release that skips the linkage fails here instead of passing a
 # manifest it never proved.
-VERSION ?= 1.19.1
+VERSION ?= 1.19.2
 check-version-artifact:
 	@mkdir -p ./build/matrix
 	@GOFLAGS=-mod=vendor $(GOBUILD) -trimpath \
