@@ -184,6 +184,14 @@ type Config struct {
 	CanaryMode bool
 	// CanaryOldPID is the PID of the old process to stop after a successful swap.
 	CanaryOldPID int
+	// ConfiguredName is the identity this INSTALLATION is configured with, as
+	// opposed to the identity of the artifact currently running. A canary
+	// resolves it from the config file at ConfigPath (configuredNameFromFile):
+	// that file is read on every start and is not rewritten by an update, so it
+	// is the value a promotion must restore. Empty means "no file-backed
+	// identity" — an embedded-config build with no config beside it — and
+	// promotion falls back to stripping one canary suffix from the launch name.
+	ConfiguredName string
 	// Version is the build version this agent reports to the server as
 	// agent_info.Version. Callers pass the same string their banner prints
 	// (typically version.Display()); it is normalised to the bare wire form
@@ -323,6 +331,22 @@ func (a *Agent) writeMessage(conn *websocket.Conn, env protocol.Envelope) error 
 
 // New creates a new agent.
 func New(cfg Config) *Agent {
+	// A canary's identity belongs to the installation, not to the artifact it
+	// runs. The launch name is derived from the artifact's embedded config —
+	// which is stamped with the BUILD name — so appending -canary to it and
+	// trimming one suffix back at promotion drifts one suffix per update cycle
+	// and never returns to the configured identity (P15-07). Resolve the
+	// configured name once, from the config file the process is running with,
+	// and use it for both the canary name and the promotion.
+	if cfg.CanaryMode {
+		if configured := configuredNameFromFile(cfg.ConfigPath); configured != "" {
+			launchName := cfg.Name
+			cfg.ConfiguredName = configured
+			cfg.Name = configured + canaryNameSuffix
+			log.Printf("[identity] canary identity from install config %s: name=%s (launch name was %q)",
+				cfg.ConfigPath, configured, strings.TrimSuffix(launchName, canaryNameSuffix))
+		}
+	}
 	// Auto-sandbox: if permissions is "sandboxed" and sandbox_dir is empty,
 	// use the current working directory as the sandbox.
 	if cfg.Permissions == "sandboxed" && cfg.SandboxDir == "" {

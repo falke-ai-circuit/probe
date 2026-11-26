@@ -93,8 +93,16 @@ var canaryExit = os.Exit
 // swap. Not all hosts run under a service manager (systemd / Windows SCM /
 // Android foreground service), so the canary itself becomes the canonical
 // process instead of relying on a service to restart it: canary mode is cleared,
-// the -canary suffix is stripped, and the published run-state record is
+// the configured identity is restored, and the published run-state record is
 // re-derived.
+//
+// The identity restored here is ConfiguredName — the name in this
+// installation's config file, resolved at construction (see New and
+// configuredNameFromFile). Stripping one -canary suffix is only the fallback:
+// it recovers the name THIS PROCESS was launched with, and for an embedded
+// build that name is the build's, not the installation's. Trimming it therefore
+// moved the canonical row back onto the previous artifact's build name one
+// cycle, then onto a throwaway row the next (P15-07, P15-02 item 4c).
 //
 // canonicalExe is the path the swap just placed the verified bytes at. Re-deriving
 // it from os.Executable() alone is not enough on every platform (a process can
@@ -106,7 +114,11 @@ var canaryExit = os.Exit
 func (a *Agent) promoteToCanonical(canonicalExe string) {
 	a.mu.Lock()
 	a.cfg.CanaryMode = false
-	a.cfg.Name = strings.TrimSuffix(a.cfg.Name, canaryNameSuffix)
+	if a.cfg.ConfiguredName != "" {
+		a.cfg.Name = a.cfg.ConfiguredName
+	} else {
+		a.cfg.Name = strings.TrimSuffix(a.cfg.Name, canaryNameSuffix)
+	}
 	name := a.cfg.Name
 	a.mu.Unlock()
 
