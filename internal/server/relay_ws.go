@@ -728,7 +728,18 @@ func (s *Server) processAgentMessage(agentID string, env protocol.Envelope) {
 		conn := s.conns[agentID]
 		s.mu.RUnlock()
 		if vc, ok := conn.(*virtualConn); ok {
-			vc.WriteJSON(pong)
+			// P23-13: seal the pong like every other agent-ward write — an
+			// E2E-active agent decrypts everything inbound; handing it a
+			// plaintext TEXT pong would leave the relayed leg the only one
+			// where the posture is one-sided. Same seal as the direct leg's
+			// pong (server_ws.go). Inactive posture: plain JSON via WriteJSON.
+			if mt, payload, e2 := s.encryptAgentFrame(pong); e2 == nil {
+				if mt == websocket.TextMessage {
+					vc.WriteJSON(pong)
+				} else {
+					vc.WriteMessage(mt, payload)
+				}
+			}
 		}
 		s.registry.Heartbeat(agentID)
 
