@@ -44,6 +44,13 @@ import (
 //	                          refusal pre-flight is VISIBLE here
 //	"ok_tls_mtls"           — TLS + client CA configured
 //
+// P19-05R F7 visibility qualifier (docs-only note): `mtls_active` and
+// `ok_tls_mtls` reflect CA-file PRESENCE at boot, not live handshake
+// verification — expired/mismatched certs boot and still read
+// `ok_tls_mtls`. The state tells an operator the P19-01 wss dial refusal
+// pre-flight posture, not that a handshake would succeed today. Recorded
+// operator-side in docs/SECURITY.md §4 as well.
+//
 // Token-rotation `ttl_seconds` = 0 means rotation is DISABLED — that state is
 // only reachable through the --allow-disabled-token-ttl opt-out, which
 // ValidateTokenTTL enforced at boot (P19-01 guard kept intact, not re-run
