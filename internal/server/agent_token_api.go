@@ -109,9 +109,16 @@ func (s *Server) handleV1RotateAgentToken(w http.ResponseWriter, r *http.Request
 
 	// One lock scope over the store: the rotated-slot write replaces the
 	// previous rotated token, which is the cut point for the superseded one.
-	s.tokenMu.Lock()
-	s.rotatedTokens[agentID] = newToken
-	s.tokenMu.Unlock()
+	// P19-06: the store call applies the map write under tokenMu (put) while
+	// holding the store's own lock, and mirrors the row to disk atomically.
+	perr := s.rotatedTokenStore.set(agentID, newToken, func() {
+		s.tokenMu.Lock()
+		s.rotatedTokens[agentID] = newToken
+		s.tokenMu.Unlock()
+	})
+	if perr != nil {
+		log.Printf("[server] P19-06 WARNING: rotated token for %s NOT persisted: %v", agentID, perr)
+	}
 
 	// Deliver on the agent's own transport. Protocol framing identical to
 	// InitiateTokenRotation (the proactive loop's path); writing via the

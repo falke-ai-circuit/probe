@@ -1549,14 +1549,25 @@ func (a *Agent) handleTokenRotate(env protocol.Envelope) protocol.Envelope {
 	})
 }
 
-// persistToken writes the token to the configured TokenFile with 0600 perms.
+// persistToken writes the token to the configured TokenFile with 0600 perms,
+// atomically (tmp + rename, jobs.go writeStateAtomic precedent): a crash or
+// concurrent reader mid-write must never surface a truncated token file — a
+// half-written token file is exactly how an agent bricks itself (P19-05R F2).
 // It is called by handleTokenRotate after a successful rotation so reconnects
 // pick up the new token automatically.
 func (a *Agent) persistToken(token string) error {
 	if a.cfg.TokenFile == "" {
 		return nil
 	}
-	return os.WriteFile(a.cfg.TokenFile, []byte(token), 0600)
+	tmp := a.cfg.TokenFile + ".tmp"
+	if err := os.WriteFile(tmp, []byte(token), 0600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, a.cfg.TokenFile); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // LoadPersistedToken reads a previously persisted token from TokenFile. It
@@ -1941,6 +1952,20 @@ func (a *Agent) pickupRotatedToken() (string, bool) {
 	tok, err := LoadPersistedToken(a.cfg.TokenFile)
 	if err != nil || tok == "" {
 		log.Printf("P19-04: token file %s unreadable after mtime change: %v", a.cfg.TokenFile, err)
+		return "", false
+	}
+	// P19-06 (P19-05R F2): a material gate before adoption. The file may
+	// hold garbage (truncation, a corrupted write from the pre-atomic
+	// persistToken, an editor artifact) — adopting it silently bricks the
+	// agent at the 5x401 bound. Tokens this system issues are printable
+	// ASCII (generateToken hex / "tok-<nano>" fallback both qualify); a
+	// file failing the plausible-material shape is refused and the loop
+	// continues counting toward the typed refusal instead.
+	if !protocol.IsPlausibleToken(tok) {
+		log.Printf("P19-06: token file %s holds implausible material (len=%d); refusing pickup", a.cfg.TokenFile, len(tok))
+		lastPersistedTokenMtimeMu.Lock()
+		lastPersistedTokenMtime = info.ModTime()
+		lastPersistedTokenMtimeMu.Unlock()
 		return "", false
 	}
 	a.mu.Lock()

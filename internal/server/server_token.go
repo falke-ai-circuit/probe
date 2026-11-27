@@ -212,10 +212,14 @@ func (s *Server) InitiateTokenRotation(agentID string, newToken string) error {
 	if err := conn.WriteJSON(env); err != nil {
 		return fmt.Errorf("send token_rotate: %w", err)
 	}
-	// Store rotated token so server accepts it on reconnect
-	s.tokenMu.Lock()
-	s.rotatedTokens[agentID] = newToken
-	s.tokenMu.Unlock()
+	// Store rotated token so server accepts it on reconnect (P19-06: and
+	// mirror the write to the persistent store so the slot survives restart).
+	err := s.rotatedTokenStore.set(agentID, newToken, func() {
+		s.rotatedTokens[agentID] = newToken
+	})
+	if err != nil {
+		log.Printf("[server] P19-06 WARNING: rotated token for %s NOT persisted: %v", agentID, err)
+	}
 	log.Printf("[server] rotated token stored for agent %s", agentID)
 	return nil
 }

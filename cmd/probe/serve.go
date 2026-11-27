@@ -31,6 +31,7 @@ func runServe(args []string) {
 	requireAPIAuth := fs.Bool("require-api-auth", false, "Require bearer-token auth on HTTP API endpoints (/api/agents, /api/agent/*, /download/*). When false (default), missing auth is logged as a warning but allowed through.")
 	proxyFlags := fs.String("proxy", "", "Reverse proxy: path=target (repeatable via comma). Example: /logreport=http://localhost:8642. When empty, defaults to /logreport=http://localhost:8642 for backward compatibility.")
 	enrollmentPath := fs.String("enrollment-db", "", "enrollment tokens file path (default: PROBE_ENROLLMENT_DB env or /tmp/probe-enrollment.json)")
+	rotatedTokensPath := fs.String("rotated-tokens-db", "", "rotated agent tokens file path (P19-06; default: PROBE_ROTATED_TOKENS_DB env or /tmp/probe-rotated-tokens.json)")
 	caDir := fs.String("ca-dir", "", "directory for CA cert/key storage (default: PROBE_CA_DIR env or /tmp/probe-ca)")
 	builderPath := fs.String("builder-db", "", "agent builder records file path (default: PROBE_BUILDER_DB env or /tmp/probe-builds.json)")
 	builderOutputDir := fs.String("builder-output-dir", "", "directory for built agent binaries (default: PROBE_BUILDER_OUTPUT_DIR env or /tmp/probe-builds)")
@@ -82,6 +83,14 @@ func runServe(args []string) {
 	}
 	if *enrollmentPath == "" {
 		*enrollmentPath = "/tmp/probe-enrollment.json"
+	}
+	// P19-06: rotated-token persistence follows the sibling flag/env/tmpdefault
+	// pattern exactly (enrollment-db is the model).
+	if *rotatedTokensPath == "" {
+		*rotatedTokensPath = os.Getenv("PROBE_ROTATED_TOKENS_DB")
+	}
+	if *rotatedTokensPath == "" {
+		*rotatedTokensPath = "/tmp/probe-rotated-tokens.json"
 	}
 	if *caDir == "" {
 		*caDir = os.Getenv("PROBE_CA_DIR")
@@ -195,6 +204,8 @@ func runServe(args []string) {
 		log.Fatalf("relay identity db: %v", err)
 	}
 	srv.SetEnrollmentPath(*enrollmentPath)
+	// P19-06: load persisted rotated tokens before accepting connections.
+	srv.SetRotatedTokensPath(*rotatedTokensPath)
 	srv.SetCADir(*caDir)
 	srv.SetBuilderPath(*builderPath, *builderOutputDir)
 	if *builderGoPath != "" {

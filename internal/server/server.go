@@ -98,8 +98,12 @@ type Server struct {
 
 	tokenTTL      time.Duration        // configured token TTL (0 = rotation disabled)
 	tokenExpiry   map[string]time.Time // agentID -> token expiry time
-	tokenMu       sync.Mutex           // guards tokenExpiry + rotatedTokens
-	rotatedTokens map[string]string    // agentID -> last rotated token
+	// P19-04/P19-06: token-expiry and rotated-token slot state. tokenMu also
+	// guards the rotatedTokens map; rotatedTokenStore (nil in tests that
+	// build a Server without SetRotatedTokensPath) mirrors writes to disk.
+	tokenMu           sync.Mutex             // guards tokenExpiry + rotatedTokens
+	rotatedTokens     map[string]string      // agentID -> last rotated token
+	rotatedTokenStore *rotatedTokenStore     // P19-06: persistence (may be nil)
 	tokenStop     chan struct{}        // closes to stop rotation goroutine
 	tokenWG       sync.WaitGroup       // waits for rotation goroutine on shutdown
 
@@ -730,6 +734,19 @@ func (s *Server) SetAuditPath(path string) {
 // file path. Must be called before Start/StartTLS.
 func (s *Server) SetEnrollmentPath(path string) {
 	s.enrollment = NewEnrollmentManager(path)
+}
+
+// SetRotatedTokensPath configures persistent rotated-token storage (P19-06).
+// When set, the rotatedTokens map is loaded from the file at construction of
+// the store and every subsequent rotation is mirrored there atomically, so a
+// server restart no longer empties the slot (P19-05R F1). Must be called
+// before Start/StartTLS. Empty path = persistence off (test rigs).
+func (s *Server) SetRotatedTokensPath(path string) {
+	s.rotatedTokenStore = newRotatedTokenStore(path)
+	if s.rotatedTokens == nil {
+		s.rotatedTokens = make(map[string]string)
+	}
+	s.rotatedTokenStore.postLoad(s.rotatedTokens, &s.tokenMu)
 }
 
 // SetCADir configures the directory where the server CA (self-signed cert

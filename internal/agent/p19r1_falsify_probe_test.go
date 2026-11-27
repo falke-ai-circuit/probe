@@ -98,8 +98,19 @@ func TestP19R1_F3b_Consecutive401sExitAfter5(t *testing.T) {
 // gone — recovery against a server that lost rotatedTokens cannot succeed.
 // (Direct analogue of the restart-orphan path; handleTokenRotate is the
 // production line agent.go:1526-1550.)
+//
+// P19-06 SUPERSESSION (named per the brief's A2 decision): the F2 GARBAGE-
+// ADOPTION step below was the BUG as reviewer-measured — pickup adopted
+// "\x00\x01truncated-fragment". P19-06 adds the material gate
+// (protocol.IsPlausibleToken), so a garbage file is now REFUSED. This test
+// keeps its F1 network half (the typed 5x401 exit) but the garbage steps are
+// superseded by TestP19R26_GarbagePickupRefused in p19r26_token_resilience_test.go;
+// the plausible-token pickup adversarial case is re-tested there via a valid
+// file write (TestP1904_PickupRotatedTokenAdoptsChangedFile still covers the
+// positive adoption path).
 func TestP19R1_F1_F2_NoRecoveryAfterLocalRotation(t *testing.T) {
-	// F2 half: pickup adopts ANY differing content — no syntax/validation gate.
+	// F2 half, superseded expectation: the same garbage file the reviewer
+	// used must now be REFUSED, not adopted (inversion documented above).
 	a := &Agent{cfg: Config{Token: "tok-OLD"}}
 	dir := t.TempDir()
 	tf := filepath.Join(dir, "token")
@@ -109,22 +120,18 @@ func TestP19R1_F1_F2_NoRecoveryAfterLocalRotation(t *testing.T) {
 	a.cfg.TokenFile = tf
 	lastPersistedTokenMtime = time.Time{} // baseline: mtime will differ from zero value
 	tok, ok := a.pickupRotatedToken()
-	if !ok || tok != "\x00\x01truncated-fragment" || tok == "tok-OLD" {
-		t.Fatalf("F2: expected garbage adoption, got ok=%v tok=%q", ok, tok)
+	if ok || tok != "" {
+		t.Fatalf("P19-06: expected garbage refusal at this head, got ok=%v tok=%q", ok, tok)
 	}
-	// adoption path = cfg.Token overwrite (agent.go:438): old value lost.
 	a.mu.Lock()
-	a.cfg.Token = tok
+	current := a.cfg.Token
 	a.mu.Unlock()
-	a.mu.Lock()
-	lost := a.cfg.Token != "tok-OLD"
-	a.mu.Unlock()
-	if !lost {
-		t.Fatal("F2: old in-process token survived adoption (expected loss)")
+	if current != "tok-OLD" {
+		t.Fatalf("P19-06: refused pickup still clobbered the in-process token: %q", current)
 	}
-	t.Logf("F2-EVID mtime+content-gated adoption of garbage token succeeded; in-process old token discarded")
+	t.Logf("F2-EVID (superseded P19-06): garbage pickup now REFUSED by the material gate")
 
-	// F1 half: after adoption, refusing server -> 5 401s -> typed exit, and
+	// F1 half: refusing server -> 5 401s -> typed exit, and
 	// NO returned opportunity to restore "tok-OLD" exists in the loop.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
