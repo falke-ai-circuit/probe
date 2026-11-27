@@ -200,6 +200,29 @@ export interface LoginAttemptsStatus {
   lock_seconds: number
 }
 
+// P18-04 (§11.4) — read-only effective network/security toggles.
+// Mirrors internal/server settingsPayload; carries paths and booleans only,
+// never cert/key/token material (P17-03).
+export interface SettingsStatus {
+  e2e: { enabled: boolean; state: string }
+  tls: {
+    enabled: boolean
+    cert_path: string
+    key_path: string
+    client_ca_path: string
+    ca_configured: boolean
+    mtls_active: boolean
+    state: string
+  }
+  token_rotation: { ttl_seconds: number; ttl: string; active: boolean; guard: string }
+  relay_downstream: {
+    policy: string
+    tokens_required: boolean
+    allow_any_downstream: boolean
+    allowlist: string[]
+  }
+}
+
 // Flow runtime (v1.13.0) — types mirror the Go Flow/Step/Run structs.
 
 export interface FlowStep {

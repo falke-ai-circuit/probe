@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { api } from '../api/client'
-import type { Operator, EnrollmentToken, RevokedAgent, AuditEntry, SecurityStatus } from '../api/types'
+import type { Operator, EnrollmentToken, RevokedAgent, AuditEntry, SecurityStatus, SettingsStatus } from '../api/types'
 import { Shield, ShieldAlert, ShieldCheck, Ban, Activity, Lock } from 'lucide-react'
 
 const ROLES = ['admin', 'operator', 'viewer']
@@ -11,6 +11,7 @@ export default function Settings() {
   const [revoked, setRevoked] = useState<RevokedAgent[]>([])
   const [audit, setAudit] = useState<AuditEntry[]>([])
   const [security, setSecurity] = useState<SecurityStatus | null>(null)
+  const [settings, setSettings] = useState<SettingsStatus | null>(null)
   const [blacklistInput, setBlacklistInput] = useState('')
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
@@ -26,18 +27,20 @@ export default function Settings() {
 
   const loadAll = async () => {
     try {
-      const [ops, toks, rev, aud, sec] = await Promise.all([
+      const [ops, toks, rev, aud, sec, cfg] = await Promise.all([
         api.listOperators().catch(() => []),
         api.listEnrollmentTokens().catch(() => []),
         api.listRevokedAgents().catch(() => []),
         api.queryAudit({ limit: 50 }).catch(() => []),
         api.getSecurityStatus().catch(() => null),
+        api.getSettings().catch(() => null),
       ])
       setOperators(ops || [])
       setTokens(toks || [])
       setRevoked(rev || [])
       setAudit(aud || [])
       setSecurity(sec)
+      setSettings(cfg)
     } catch (e) {
       setError((e as Error).message)
     }
@@ -294,6 +297,64 @@ export default function Settings() {
             <div style={{ padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>
               <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Lock Duration</div>
               <div className="mono">{Math.floor(security.login_rate_limit.lock_seconds / 60)}m</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* P18-04: effective network/security toggles (read-only) */}
+      {settings && (
+        <div className="card">
+          <div className="card-title"><Shield size={16} style={{ verticalAlign: 'middle', marginRight: 6 }} />Effective Network / Security Toggles</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, marginBottom: 16 }}>
+            <div style={{ padding: '12px', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 4 }}>E2E Encryption</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                {settings.e2e.enabled ? <ShieldCheck size={14} className="green" /> : <ShieldAlert size={14} className="red" />}
+                <span className={settings.e2e.enabled ? 'green' : 'red'}>{settings.e2e.enabled ? 'Enabled' : 'Disabled'}</span>
+              </div>
+              <div className="mono dim" style={{ fontSize: 11, marginTop: 4 }}>{settings.e2e.state}</div>
+            </div>
+            <div style={{ padding: '12px', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 4 }}>TLS / mTLS</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                {settings.tls.state === 'ok_tls_mtls' && <ShieldCheck size={14} className="green" />}
+                {settings.tls.state === 'tls_without_client_ca' && <ShieldAlert size={14} className="red" />}
+                {settings.tls.state === 'ok_plain_http' && <ShieldAlert size={14} className="red" />}
+                <span className={settings.tls.state === 'ok_tls_mtls' ? 'green' : settings.tls.state === 'tls_without_client_ca' ? 'red' : 'dim'}>
+                  {settings.tls.enabled ? (settings.tls.mtls_active ? 'TLS + mTLS' : 'TLS (no client CA)') : 'Plain HTTP'}
+                </span>
+              </div>
+              {settings.tls.state === 'tls_without_client_ca' && (
+                <div className="mono" style={{ fontSize: 11, marginTop: 4, color: 'var(--red, #d9534f)' }}>
+                  downgrade-visible: wss dials will be refused until a client CA is configured
+                </div>
+              )}
+              {settings.tls.cert_path && <div className="mono dim" style={{ fontSize: 11, marginTop: 4 }}>cert: {settings.tls.cert_path}</div>}
+              {settings.tls.key_path && <div className="mono dim" style={{ fontSize: 11 }}>key: {settings.tls.key_path}</div>}
+              {settings.tls.client_ca_path && <div className="mono dim" style={{ fontSize: 11 }}>client CA: {settings.tls.client_ca_path}</div>}
+            </div>
+            <div style={{ padding: '12px', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 4 }}>Token Rotation</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                {settings.token_rotation.active ? <ShieldCheck size={14} className="green" /> : <ShieldAlert size={14} className="red" />}
+                <span className={settings.token_rotation.active ? 'green' : 'red'}>
+                  {settings.token_rotation.active ? settings.token_rotation.ttl : 'Disabled (ttl=0)'}
+                </span>
+              </div>
+              <div className="mono dim" style={{ fontSize: 11, marginTop: 4 }}>{settings.token_rotation.guard}</div>
+            </div>
+            <div style={{ padding: '12px', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 4 }}>Relay Downstream</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                {settings.relay_downstream.tokens_required ? <Lock size={14} className="green" /> : <ShieldAlert size={14} className="red" />}
+                <span className={settings.relay_downstream.tokens_required ? 'green' : 'red'}>
+                  {settings.relay_downstream.tokens_required ? `Tokens required (${settings.relay_downstream.policy})` : '--allow-any-downstream active'}
+                </span>
+              </div>
+              {settings.relay_downstream.allowlist.length > 0 && (
+                <div className="mono dim" style={{ fontSize: 11, marginTop: 4 }}>{settings.relay_downstream.allowlist.join(', ')}</div>
+              )}
             </div>
           </div>
         </div>

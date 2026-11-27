@@ -1,7 +1,7 @@
 import type {
   APIResponse, AgentRecord, HealthInfo, BuildConfig, Profile, Task,
   Operator, EnrollmentToken, AuditEntry, RevokedAgent, FileTransfer,
-  SecurityStatus, LoginAttemptsStatus, FlowRecord, FlowRun, FlowTemplate, SurveyEvent,
+  SecurityStatus, LoginAttemptsStatus, SettingsStatus, FlowRecord, FlowRun, FlowTemplate, SurveyEvent,
   SensorInfo, SensorAssignment, SensorState, PeerConfigView, ServersResponse,
 } from './types'
 
@@ -363,6 +363,9 @@ export const api = {
   // Security management
   getSecurityStatus: () =>
     apiFetch<SecurityStatus>('/security/status'),
+  // P18-04: effective network/security toggles, read-only.
+  getSettings: () =>
+    apiFetch<SettingsStatus>('/settings'),
   manageBlacklist: (action: string, cidrs?: string[]) =>
     apiFetch<{ blacklist?: string[]; blacklist_count?: number }>('/security/blacklist', {
       method: 'POST',

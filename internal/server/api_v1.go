@@ -542,6 +542,10 @@ func (s *Server) registerV1Routes() {
 	s.mux.HandleFunc("GET /api/v1/relays", s.handleV1Relays)
 	s.mux.HandleFunc("POST /api/v1/relays/{id}/rotate", s.handleV1RotateRelayCredential)
 
+	// P18-04 (§11.4): read-only surface for the effective network/security
+	// toggle values. Secrets-free by type construction (P17-03).
+	s.registerSettingsRoutes()
+
 	// P21-08: one chain object per path, with per-hop state and the failing
 	// hop named. Its own endpoint: topology stays an edge list.
 	s.mux.HandleFunc("GET /api/v1/chain", s.handleV1Chain)
