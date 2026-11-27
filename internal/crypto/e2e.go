@@ -79,37 +79,76 @@ func (e *E2E) Decrypt(data []byte) ([]byte, error) {
 type Manager struct {
 	e2e    *E2E
 	enabled bool
+	keyErr  error
 }
 
-// NewManager creates a new E2E manager. If token is empty, E2E is disabled.
+// NewManager creates a new E2E manager.
+//
+// Posture (P23-14): "enabled but the key could not be built" is a LOUD state,
+// never a silent fallback to plaintext. When enabled is true and the cipher
+// construction fails (empty token is the only way today), the manager reports
+// Enabled()==true with a nil cipher; IsActive() is false and Decrypt fails
+// closed. A caller that constructed it with enabled=true MUST check
+// CipherError() at startup and refuse to serve/connect on a non-nil error —
+// the manager is not the component that decides to ship plaintext.
+//
+// enabled=false keeps the pass-through semantics the disabled case always had.
 func NewManager(token string, enabled bool) *Manager {
 	m := &Manager{enabled: enabled}
-	if enabled && token != "" {
-		e2e, err := NewE2E(token)
-		if err == nil {
-			m.e2e = e2e
+	if enabled {
+		if token == "" {
+			m.keyErr = fmt.Errorf("e2e enabled but token is empty — no key can be derived")
+			return m
 		}
+		e2e, err := NewE2E(token)
+		if err != nil {
+			// AES-256 with a 32-byte SHA-256 key cannot fail in practice,
+			// but a failure must never masquerade as "disabled": record it.
+			m.keyErr = fmt.Errorf("e2e key construction failed: %w", err)
+			return m
+		}
+		m.e2e = e2e
 	}
 	return m
 }
 
-// Encrypt encrypts plaintext if E2E is enabled, otherwise returns plaintext as-is.
+// Encrypt encrypts plaintext when the cipher is active. When the manager was
+// constructed enabled but its key never built, Encrypt fails closed — it never
+// passes plaintext through under a posture that promised encryption.
 func (m *Manager) Encrypt(plaintext []byte) ([]byte, error) {
 	if m.e2e == nil {
+		if m.keyErr != nil {
+			return nil, fmt.Errorf("encrypt unavailable: %w", m.keyErr)
+		}
 		return plaintext, nil
 	}
 	return m.e2e.Encrypt(plaintext)
 }
 
-// Decrypt decrypts ciphertext if E2E is enabled, otherwise returns ciphertext as-is.
+// Decrypt decrypts ciphertext when the cipher is active. When the manager was
+// constructed enabled but its key never built, Decrypt fails closed.
 func (m *Manager) Decrypt(data []byte) ([]byte, error) {
 	if m.e2e == nil {
+		if m.keyErr != nil {
+			return nil, fmt.Errorf("decrypt unavailable: %w", m.keyErr)
+		}
 		return data, nil
 	}
 	return m.e2e.Decrypt(data)
 }
 
-// IsActive returns true if E2E encryption is active (enabled + key derived).
+// IsActive returns true if E2E encryption is active (cipher built). An
+// enabled-but-broken manager is NOT active: its Decrypt fails closed, so the
+// server's posture checks stay truthful and cannot mistake it for disabled.
 func (m *Manager) IsActive() bool {
 	return m.e2e != nil
 }
+
+// Enabled reports the configured posture, independent of whether the cipher
+// actually built. Enabled() && !IsActive() means construction failed — a
+// startup error the caller must surface, not a silent downgrade.
+func (m *Manager) Enabled() bool { return m.enabled }
+
+// CipherError returns the key-construction failure of an enabled manager, or
+// nil when the manager is disabled or the cipher built cleanly.
+func (m *Manager) CipherError() error { return m.keyErr }

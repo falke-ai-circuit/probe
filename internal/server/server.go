@@ -410,9 +410,27 @@ func (s *Server) SetE2E(token string, enabled bool) {
 	// opened on first use so an unconfigured server never touches /var/lib.
 	s.credHandles = newHandleRegistry()
 	s.redactor = NewRedactor()
+	if s.e2eMgr.CipherError() != nil {
+		// P23-14 (b): an enabled-but-broken posture is a loud startup error,
+		// never a silent plaintext server. SetE2E still installs the manager
+		// (the WS paths fail closed on it), but the log names the failure —
+		// and the entrypoints check the same error before serving.
+		log.Printf("[server] E2E REQUESTED BUT KEY CONSTRUCTION FAILED: %v — plaintext is REFUSED on the WS paths, not silently accepted", s.e2eMgr.CipherError())
+	}
 	if s.e2eMgr.IsActive() {
 		log.Printf("[server] E2E encryption enabled (AES-256-GCM)")
 	}
+}
+
+// E2ECipherError reports the key-construction failure of an enabled E2E
+// posture (P23-14 b), so an entrypoint can fail loud at startup instead of
+// serving a server whose WS paths will refuse every frame. nil when E2E is
+// disabled or the cipher built cleanly.
+func (s *Server) E2ECipherError() error {
+	if s.e2eMgr == nil {
+		return nil
+	}
+	return s.e2eMgr.CipherError()
 }
 
 // SetTokenTTL configures the server-side token rotation interval. When ttl > 0

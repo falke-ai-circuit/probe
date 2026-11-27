@@ -39,6 +39,25 @@ func (s *Server) writeToAgentLocked(agentID string, conn Conn, v interface{}) er
 // completion path can be tested without a three-second sleep per run.
 var updatePromotionKillDelay = 3 * time.Second
 
+// decryptAgentPayload is the ONE decrypt-before-parse helper (P23-14 c): the
+// direct read loop (handleMessages, below) and the relay channel loop
+// (relay_ws.go) both hand their inbound payloads through it. When the E2E
+// posture is active the payload is decrypted; when inactive it passes through
+// unchanged. The bool reports whether the posture is active, so a caller can
+// distinguish "plaintext by posture" from "decrypted" when it must refuse
+// plaintext traffic (P23-14 b). A decrypt failure is an error, never a
+// pass-through: "broken key" must not be indistinguishable from "cleartext".
+func (s *Server) decryptAgentPayload(data []byte) ([]byte, bool, error) {
+	if s.e2eMgr == nil || !s.e2eMgr.IsActive() {
+		return data, false, nil
+	}
+	plain, err := s.e2eMgr.Decrypt(data)
+	if err != nil {
+		return nil, true, err
+	}
+	return plain, true, nil
+}
+
 // completeUpdatePromotion is the completion half of an update: after the
 // promoted agent has reconnected, it waits for it to stabilise, orders the
 // predecessor process killed through the new connection, and clears the dead
@@ -94,7 +113,8 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	// Read first message — detect relay vs direct agent.
 	// Relay connections send BinaryMessage with framing header.
-	// Direct agents send TextMessage with JSON Envelope.
+	// Direct agents send TextMessage (plaintext posture) or BinaryMessage
+	// (E2E-sealed envelope) with JSON Envelope.
 	msgType, firstData, err := conn.ReadMessage()
 	if err != nil {
 		log.Printf("[server] failed to read first message: %v", err)
@@ -115,7 +135,8 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		if s.e2eMgr != nil && s.e2eMgr.IsActive() {
 			plaintext, derr := s.e2eMgr.Decrypt(firstData)
 			if derr != nil {
-				// Relay connection — handle in relay mode
+				// P23-12 classification by GCM auth: a frame that fails to
+				// decrypt is relay framing, not a broken agent key.
 				s.handleRelayConnection(conn, firstData)
 				return
 			}
@@ -126,6 +147,18 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			s.handleRelayConnection(conn, firstData)
 			return
 		}
+	}
+
+	// P23-14 (b) NO SILENT DOWNGRADE: an E2E-active server refuses a
+	// plaintext TEXT hello instead of registering it. The codes are the ones
+	// docs/SECURITY.md §2 names for this family (E2E_KEY_REQUIRED for the
+	// strict/shared-token case). Fail closed: never register a client the
+	// posture says must be encrypted.
+	if msgType == websocket.TextMessage && s.e2eMgr != nil && s.e2eMgr.IsActive() {
+		log.Printf("[server] e2e: refusing plaintext agent hello (posture on) — E2E_KEY_REQUIRED")
+		writeForwardRefusal(conn, "E2E_KEY_REQUIRED", fmt.Errorf("server requires end-to-end encryption; agent sent a plaintext hello (E2E_KEY_REQUIRED)"))
+		conn.Close()
+		return
 	}
 
 	// Direct agent connection — parse first message as JSON Envelope
@@ -305,24 +338,32 @@ func (s *Server) handleMessages(agentID string, conn *websocket.Conn) {
 			}
 		}
 
+		// P23-14 (b)+(c): one shared decrypt-before-parse helper. When the
+		// posture is active but the frame is a plaintext TEXT frame, that is
+		// the downgrade the posture forbids — refused in place (the agent
+		// cannot have negotiated back to cleartext mid-session), never
+		// decrypted ("probably plaintext") and never parsed. A decrypt
+		// failure on a binary frame is logged and dropped: a broken key is
+		// an error, not a pass-through.
+		if s.e2eMgr != nil && s.e2eMgr.IsActive() && msgType == websocket.TextMessage {
+			log.Printf("[server] e2e: plaintext frame from %s on an e2e-active server — refusing (E2E_KEY_REQUIRED)", agentID)
+			ref := &ForwardRefusalError{Code: "E2E_KEY_REQUIRED", AgentID: agentID, Reason: "server requires e2e; agent sent plaintext after registration"}
+			_ = conn.WriteMessage(websocket.TextMessage, forwardRefusalPayload(ref))
+			continue
+		}
+		plain, active, derr := s.decryptAgentPayload(data)
+		if derr != nil {
+			log.Printf("[server] e2e decrypt error from %s: %v", agentID, derr)
+			continue
+		}
+		if active {
+			data = plain
+		}
+
 		var env protocol.Envelope
-		if msgType == websocket.BinaryMessage && s.e2eMgr != nil && s.e2eMgr.IsActive() {
-			// E2E encrypted message — decrypt first
-			plaintext, err := s.e2eMgr.Decrypt(data)
-			if err != nil {
-				log.Printf("[server] e2e decrypt error from %s: %v", agentID, err)
-				continue
-			}
-			if err := json.Unmarshal(plaintext, &env); err != nil {
-				log.Printf("[server] json decode error from %s: %v", agentID, err)
-				continue
-			}
-		} else {
-			// Plaintext JSON message (backward compat)
-			if err := json.Unmarshal(data, &env); err != nil {
-				log.Printf("[server] json decode error from %s: %v", agentID, err)
-				continue
-			}
+		if err := json.Unmarshal(data, &env); err != nil {
+			log.Printf("[server] json decode error from %s: %v", agentID, err)
+			continue
 		}
 
 		// P21-04: the direct path goes through the same admission as a

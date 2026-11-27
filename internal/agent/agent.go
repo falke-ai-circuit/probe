@@ -190,8 +190,10 @@ type Config struct {
 	// E2EEnabled enables AES-GCM end-to-end encryption of protocol payloads.
 	// When true, all messages between agent and server are encrypted with
 	// a key derived from the token (SHA-256). Relays see only encrypted bytes.
-	// Default: false (backward compat).
-	E2EEnabled bool
+	// Default: true (P19-01 §11.4 posture; P23-14: the config file carries
+	// "e2e_enabled" and an explicit false is the operator's opt-out — the
+	// absent tag here was the bug that made the field config-deaf).
+	E2EEnabled bool `json:"e2e_enabled,omitempty"`
 	// CanaryMode marks this process as an update canary: it connects under a
 	// distinct name, proves the connection is stable, then atomically swaps
 	// itself into the canonical binary path and stops the old process — only

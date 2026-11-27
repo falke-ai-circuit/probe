@@ -188,6 +188,11 @@ func main() {
 	srv.SetTokenTTL(*tokenTTL)
 	// P19-01 §11.4: E2E defaults ON (matches `probe serve`); --e2e disables.
 	srv.SetE2E(*token, *e2e)
+	// P23-14 (b): --e2e with no token is an enabled-but-broken posture —
+	// fail loud at startup, never serve a silently-plaintext server.
+	if err := srv.E2ECipherError(); err != nil {
+		log.Fatalf("e2e enabled but key construction failed: %v (set a token or pass --e2e=false)", err)
+	}
 	// F1: the version string was parsed for the banner but never handed to
 	// the server, so /api/v1/health served "server_version":"" on this
 	// binary while `probe serve` reported correctly. One line, same source.

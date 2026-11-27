@@ -496,6 +496,19 @@ func nowRFC3339() string { return time.Now().UTC().Format(time.RFC3339Nano) }
 // it reaches the allowlist. Empty stays empty: P7 owns what a fingerprint is.
 func refFingerprint(fp string) string { return strings.TrimSpace(fp) }
 
+// forwardRefusalPayload marshals the one-frame refusal an agent/relay peer
+// understands. Shared by the direct path (writeForwardRefusal) and the
+// in-session path (handleMessages P23-14 refusal) so the wire shape has one
+// author.
+func forwardRefusalPayload(fr *ForwardRefusalError) []byte {
+	payload, _ := json.Marshal(map[string]string{
+		"type":  "error",
+		"code":  fr.Code,
+		"error": fr.Error(),
+	})
+	return payload
+}
+
 // refuseRelayRegistration answers a relay registration with one
 // forward_refused control frame on channel 0, then closes the socket. The
 // frame carries the code, so a forwarder can surface the named refusal instead
