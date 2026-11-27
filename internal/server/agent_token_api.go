@@ -124,7 +124,7 @@ func (s *Server) handleV1RotateAgentToken(w http.ResponseWriter, r *http.Request
 	// InitiateTokenRotation (the proactive loop's path); writing via the
 	// resolved transport keeps relayed agents servable by the same route.
 	var delivered bool
-	if werr := writeTokenRotateEnvelope(tr, env); werr != nil {
+	if werr := s.writeTokenRotateEnvelope(agentID, tr, env); werr != nil {
 		log.Printf("[server] P19-04 token rotation DELIVERY FAILED for agent %s via %s: %v", agentID, tr.Source, werr)
 		s.auditTokenRotate(agentID, tokenFingerprint(newToken), false, tr.Source, "delivery failed: "+werr.Error())
 		writeErrorDetail(w, http.StatusBadGateway,
@@ -168,13 +168,15 @@ func (s *Server) agentTokenFPLocked(agentID string) string {
 
 // writeTokenRotateEnvelope sends the rotate envelope over the agent's own
 // transport using the transport's lock discipline (per-agent mutex for direct
-// sockets; virtualConn/relay locks itself).
-func writeTokenRotateEnvelope(tr resolvedTransport, env protocol.Envelope) error {
+// sockets; virtualConn/relay locks itself). P23-13: the envelope is sealed
+// under the active E2E posture like every other agent-ward write — the new
+// token must never ride the wire in cleartext.
+func (s *Server) writeTokenRotateEnvelope(agentID string, tr resolvedTransport, env protocol.Envelope) error {
 	if tr.NeedsWriteLock && tr.WriteMu != nil {
 		tr.WriteMu.Lock()
 		defer tr.WriteMu.Unlock()
 	}
-	return tr.Conn.WriteJSON(env)
+	return s.writeEncryptedJSON(agentID, tr.Conn, env)
 }
 
 // The protocol framing and audit write live in small helpers so the handler

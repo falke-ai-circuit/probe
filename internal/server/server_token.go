@@ -209,7 +209,7 @@ func (s *Server) InitiateTokenRotation(agentID string, newToken string) error {
 		Type:   protocol.TypeAuthRefresh,
 		Params: paramData,
 	}
-	if err := conn.WriteJSON(env); err != nil {
+	if err := s.writeEncryptedJSON(agentID, conn, env); err != nil {
 		return fmt.Errorf("send token_rotate: %w", err)
 	}
 	// Store rotated token so server accepts it on reconnect (P19-06: and

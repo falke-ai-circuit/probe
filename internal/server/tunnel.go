@@ -230,7 +230,7 @@ func (t *Tunnel) sendToAgent(env protocol.Envelope) {
 		tr.WriteMu.Lock()
 		defer tr.WriteMu.Unlock()
 	}
-	if err := tr.Conn.WriteJSON(env); err != nil {
+	if err := t.Server.writeEncryptedJSON(t.AgentID, tr.Conn, env); err != nil {
 		log.Printf("[tunnel] send to agent failed: %v", err)
 	}
 }

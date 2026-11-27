@@ -233,7 +233,7 @@ func (s *Server) sendCredentialDelivery(agentID string, h *credHandle, mode stri
 	if tr.NeedsWriteLock {
 		tr.WriteMu.Lock()
 	}
-	err = conn.WriteJSON(env)
+	err = s.writeEncryptedJSON(agentID, conn, env)
 	if tr.NeedsWriteLock {
 		tr.WriteMu.Unlock()
 	}

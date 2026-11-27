@@ -19,7 +19,6 @@ import (
 	"github.com/falke-ai-circuit/probe/internal/version"
 )
 
-
 // logInit creates a dual writer (stderr + log file) and replaces the default log output.
 // This ensures we have a persistent record of agent activity even when the binary
 // runs in silent mode with no console (e.g., from a scheduled task or service).
@@ -52,13 +51,18 @@ var appVersion = version.Display()
 
 // clientFlags holds the parsed command line for the probe-client entrypoint.
 type clientFlags struct {
-	configPath   string
+	configPath string
 	// configExplicit records whether --config was actually passed. The default
 	// value "probe-client.json" is a filename, not a decision: resolution must
 	// be able to tell "the operator named this file" from "nobody said".
 	configExplicit bool
-	canary       bool
-	canaryOldPID int
+	canary         bool
+	canaryOldPID   int
+	// e2eFlag/e2eExplicit: the --e2e flag and whether it was actually passed
+	// (P23-16). An explicit flag overrides the config file's e2e_enabled;
+	// with the flag absent the config pointer decides (absent = default on).
+	e2eFlag     bool
+	e2eExplicit bool
 }
 
 // parseClientArgs parses the argv of the probe-client entrypoint. It is the
@@ -82,6 +86,9 @@ func parseClientArgs(argv []string) (clientFlags, error) {
 		if f.Name == "config" {
 			out.configExplicit = true
 		}
+		if f.Name == "e2e" {
+			out.e2eExplicit = true
+		}
 	})
 	if fs.NArg() > 0 {
 		return out, fmt.Errorf("unexpected arguments: %v", fs.Args())
@@ -96,6 +103,7 @@ func newClientFlagSet(out *clientFlags) *flag.FlagSet {
 	fs := flag.NewFlagSet("probe-client", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&out.configPath, "config", "probe-client.json", "Path to JSON config file")
+	fs.BoolVar(&out.e2eFlag, "e2e", false, "Force E2E payload encryption on (overrides the config file's e2e_enabled)")
 	fs.BoolVar(&out.canary, "canary", false, "Canary mode: connect, prove healthy, then swap into canonical path and stop the old process")
 	fs.IntVar(&out.canaryOldPID, "canary-old-pid", 0, "PID of the old process to stop after a successful swap")
 	return fs
@@ -110,23 +118,49 @@ var configB64 = ""
 
 // ConfigFile is the JSON structure for the config file.
 type ConfigFile struct {
-	Server      string `json:"server"`      // e.g. "100.64.0.1:7700"
-	Token       string `json:"token"`       // auth token
-	Name        string `json:"name"`        // display name for this agent
-	Mode        string `json:"mode"`        // "silent" or "interactive"
-	Listen      string `json:"listen"`      // inbound listen address (optional)
-	MaxRetries  int    `json:"maxRetries"`  // 0 = infinite
-	BackoffMin  string `json:"backoffMin"`  // e.g. "1s"
-	BackoffMax  string `json:"backoffMax"`  // e.g. "60s"
-	TokenFile   string `json:"tokenFile"`   // path to persist rotated token
-	Cert        string `json:"cert"`        // CA cert for TLS verification
-	ClientCert  string `json:"clientCert"`  // client cert for mTLS
-	ClientKey   string `json:"clientKey"`   // client key for mTLS
-	CertFile    string `json:"certFile"`    // TLS cert for inbound server
-	KeyFile     string `json:"keyFile"`     // TLS key for inbound server
-	Permissions string `json:"permissions"` // "read-only", "standard", "full" (default: "full")
-	SandboxDir  string `json:"sandbox_dir"`  // restrict fs ops to this directory (empty = no restriction)
+	Server       string   `json:"server"`       // e.g. "100.64.0.1:7700"
+	Token        string   `json:"token"`        // auth token
+	Name         string   `json:"name"`         // display name for this agent
+	Mode         string   `json:"mode"`         // "silent" or "interactive"
+	Listen       string   `json:"listen"`       // inbound listen address (optional)
+	MaxRetries   int      `json:"maxRetries"`   // 0 = infinite
+	BackoffMin   string   `json:"backoffMin"`   // e.g. "1s"
+	BackoffMax   string   `json:"backoffMax"`   // e.g. "60s"
+	TokenFile    string   `json:"tokenFile"`    // path to persist rotated token
+	Cert         string   `json:"cert"`         // CA cert for TLS verification
+	ClientCert   string   `json:"clientCert"`   // client cert for mTLS
+	ClientKey    string   `json:"clientKey"`    // client key for mTLS
+	CertFile     string   `json:"certFile"`     // TLS cert for inbound server
+	KeyFile      string   `json:"keyFile"`      // TLS key for inbound server
+	Permissions  string   `json:"permissions"`  // "read-only", "standard", "full" (default: "full")
+	SandboxDir   string   `json:"sandbox_dir"`  // restrict fs ops to this directory (empty = no restriction)
 	Capabilities []string `json:"capabilities"` // capabilities to advertise to server (empty = all, backward compat)
+	// P23-16: pointer so an explicit "e2e_enabled": false is honoured
+	// verbatim; absent resolves to default-on (P19-01 §11.4 posture) via
+	// connectE2EPosture.
+	E2EEnabled *bool `json:"e2e_enabled"`
+}
+
+// resolveE2EEnabled is the P19-01 default-on resolver (single precedence
+// primitive): an explicit pointer value wins verbatim, an absent field takes
+// the default (true). Mirrors cmd/probe/config.go so both entrypoints share
+// one posture contract (P23-16).
+func resolveE2EEnabled(def bool, p *bool) bool {
+	if p != nil {
+		return *p
+	}
+	return def
+}
+
+// connectE2EPosture resolves the agent's E2E posture for runClient (P23-16).
+// Precedence: an explicit --e2e flag wins over the config file's e2e_enabled;
+// with the flag absent the config pointer decides (absent = default true per
+// P19-01 §11.4). Returns the effective posture handed to agent.Config.
+func connectE2EPosture(flagOn bool, flagExplicit bool, cfgVal *bool) bool {
+	if flagExplicit {
+		return flagOn
+	}
+	return resolveE2EEnabled(true, cfgVal)
 }
 
 // printUsage writes a clean help/usage banner to stderr.
@@ -167,6 +201,9 @@ Config file fields:
                          full: no restrictions
   sandbox_dir  string  Restrict all filesystem operations to this directory (empty = no restriction)
                          In "sandboxed" mode, if empty, auto-uses the agent's startup directory
+  e2e_enabled  bool    End-to-end AES-GCM encryption of protocol payloads (default: true).
+                         Set to false only in trusted networks; an E2E-strict server refuses
+                         plaintext agents with E2E_KEY_REQUIRED. --e2e overrides the file.
 
 Example config (probe-client.json):
 
@@ -336,7 +373,7 @@ func runClient() {
 
 	cfg := agent.Config{
 		Mode:           "outbound",
-		Version:         appVersion,
+		Version:        appVersion,
 		URL:            fcfg.Server,
 		Addr:           fcfg.Listen,
 		Token:          tokenVal,
@@ -350,13 +387,17 @@ func runClient() {
 		BackoffMin:     backoffMin,
 		BackoffMax:     backoffMax,
 		TokenFile:      tokenFile,
-		Permissions:     fcfg.Permissions,
-		SandboxDir:      fcfg.SandboxDir,
-		Capabilities:    fcfg.Capabilities,
-		ConfigPath:      configPath,
-		EmbeddedConfig:  configB64 != "",
-		CanaryMode:      opts.canary,
-		CanaryOldPID:    opts.canaryOldPID,
+		Permissions:    fcfg.Permissions,
+		SandboxDir:     fcfg.SandboxDir,
+		Capabilities:   fcfg.Capabilities,
+		ConfigPath:     configPath,
+		EmbeddedConfig: configB64 != "",
+		// P23-16: the config file's e2e_enabled reaches agent.Config here —
+		// absent resolves default-on (P19-01 §11.4), explicit false opts out.
+		// An explicit --e2e flag, when passed, overrides the file value.
+		E2EEnabled:   connectE2EPosture(opts.e2eFlag, opts.e2eExplicit, fcfg.E2EEnabled),
+		CanaryMode:   opts.canary,
+		CanaryOldPID: opts.canaryOldPID,
 	}
 
 	// Ensure the WebSocket URL includes the /ws path the server expects
