@@ -369,6 +369,21 @@ func (s *Server) handleRelayConnection(conn *websocket.Conn, firstData []byte) {
 			continue
 		}
 
+		// P23-14 (c) DECRYPT-BEFORE-PARSE: a relayed agent's channel payload
+		// is sealed with the same key the direct path decrypts with
+		// (server_ws.go). Without this, an E2E-active agent behind a relay
+		// never registers ("envelope parse error: invalid character ':'") and
+		// the channel closes agent-less. One shared helper, not a second copy
+		// of the decrypt logic.
+		plain, active, derr := s.decryptAgentPayload(payload)
+		if derr != nil {
+			log.Printf("[server] relay %s channel %d: e2e decrypt error: %v", reg.RelayID, chanID, derr)
+			continue
+		}
+		if active {
+			payload = plain
+		}
+
 		// Parse payload as protocol.Envelope
 		var env protocol.Envelope
 		if err := json.Unmarshal(payload, &env); err != nil {

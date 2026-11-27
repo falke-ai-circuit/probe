@@ -58,14 +58,24 @@ func runConnect(args []string) {
 	canaryMode := fs.Bool("canary", false, "Canary mode: connect, prove healthy, then swap into canonical path and stop the old process")
 	canaryOldPID := fs.Int("canary-old-pid", 0, "PID of the old process to stop after a successful swap")
 	statusFile := fs.String("status-file", "", "path for the run-state record read by --service-status (default: $PROBE_STATUS_FILE, $PROBE_STATE_DIR, or the platform state dir)")
+	// P23-14 (a): the agent's E2E posture must be expressible at launch, not
+	// only through the config file. Default ON per P19-01 §11.4, matching the
+	// server posture; an explicit --e2e=false is the opt-out.
+	e2eFlag := fs.Bool("e2e", true, "End-to-end encrypt protocol payloads (default: on; --e2e=false opts out)")
 	fs.Parse(args)
 
 	// configExplicit records whether --config was passed at all: the default
 	// "probe-client.json" is a filename, not an operator decision.
 	configExplicit := false
+	// P23-14 (a): --e2e was passed explicitly, so it overrides the config's
+	// e2e_enabled rather than deferring to it.
+	e2eExplicit := false
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "config" {
 			configExplicit = true
+		}
+		if f.Name == "e2e" {
+			e2eExplicit = true
 		}
 	})
 
@@ -190,7 +200,9 @@ func runConnect(args []string) {
 		Capabilities:   fcfg.Capabilities,
 		// P19-01 §11.4: E2E defaults ON for every agent start; the config's
 		// e2e_enabled overrides explicitly (pointer, absent = default on).
-		E2EEnabled:      resolveE2EEnabled(true, fcfg.E2EEnabled),
+		// P23-14 (a): --e2e, when passed, overrides the config value; absent
+		// both, the default is on.
+		E2EEnabled:      connectE2EPosture(*e2eFlag, e2eExplicit, fcfg.E2EEnabled),
 		ConfigPath:     *configPath,
 		EmbeddedConfig: configB64 != "",
 		CanaryMode:     *canaryMode,
@@ -330,4 +342,14 @@ func runInteractive(ag *agent.Agent) {
 	if err := scanner.Err(); err != nil {
 		log.Printf("stdin error: %v", err)
 	}
+}
+// connectE2EPosture resolves the agent's E2E posture for runConnect (P23-14 a).
+// Precedence: an explicit --e2e flag wins over the config file's e2e_enabled;
+// with the flag absent the config pointer decides (absent = default true per
+// P19-01 §11.4). Returns the effective posture.
+func connectE2EPosture(flagOn bool, flagExplicit bool, cfgVal *bool) bool {
+	if flagExplicit {
+		return flagOn
+	}
+	return resolveE2EEnabled(true, cfgVal)
 }

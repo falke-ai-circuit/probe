@@ -144,8 +144,13 @@ func TestP2312_C6_HelloBinaryCipherRegisters(t *testing.T) {
 	}
 }
 
-// TestP2312_C6_HelloPlaintextRegisters — the 1/22 control: the same hello as
-// plaintext TextMessage JSON registers normally, with no relay-parser line.
+// TestP2312_C6_HelloPlaintextRegisters — the 1/22 control, UPDATED BY P23-14
+// (b): with the E2E posture on, a plaintext TEXT hello is no longer
+// registered — it is refused with the typed E2E_KEY_REQUIRED code and the
+// socket closes. That refusal IS the fix: "not encrypted" must not read as
+// "probably plaintext". (At the pre-P23-14 HEAD this test asserted a
+// registration; that behaviour was the silent-downgrade defect this unit
+// closes, and the assertion flips with it.)
 func TestP2312_C6_HelloPlaintextRegisters(t *testing.T) {
 	_, wsURL := p2312StartWSServer(t)
 
@@ -160,9 +165,9 @@ func TestP2312_C6_HelloPlaintextRegisters(t *testing.T) {
 		t.Fatalf("first-frame write: %v", err)
 	}
 
-	p2312WaitForLog(t, &logBuf, "agent connected: p2312-plain-agent")
-	if s := logBuf.String(); strings.Contains(s, "expected relay registration") {
-		t.Fatalf("plaintext hello must never reach the relay parser: %s", s)
+	p2312WaitForLog(t, &logBuf, "E2E_KEY_REQUIRED")
+	if s := logBuf.String(); strings.Contains(s, "agent connected: p2312-plain-agent") {
+		t.Fatalf("plaintext agent registered on an e2e-active server — silent downgrade: %s", s)
 	}
 }
 

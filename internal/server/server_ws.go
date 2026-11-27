@@ -39,6 +39,70 @@ func (s *Server) writeToAgentLocked(agentID string, conn Conn, v interface{}) er
 // completion path can be tested without a three-second sleep per run.
 var updatePromotionKillDelay = 3 * time.Second
 
+// decryptAgentPayload is the ONE decrypt-before-parse helper (P23-14 c): the
+// direct read loop (handleMessages, below) and the relay channel loop
+// (relay_ws.go) both hand their inbound payloads through it. When the E2E
+// posture is active the payload is decrypted; when inactive it passes through
+// unchanged. The bool reports whether the posture is active, so a caller can
+// distinguish "plaintext by posture" from "decrypted" when it must refuse
+// plaintext traffic (P23-14 b). A decrypt failure is an error, never a
+// pass-through: "broken key" must not be indistinguishable from "cleartext".
+func (s *Server) decryptAgentPayload(data []byte) ([]byte, bool, error) {
+	if s.e2eMgr == nil || !s.e2eMgr.IsActive() {
+		return data, false, nil
+	}
+	plain, err := s.e2eMgr.Decrypt(data)
+	if err != nil {
+		return nil, true, err
+	}
+	return plain, true, nil
+}
+
+// encryptAgentFrame is the outbound half of the same posture (P23-13 live
+// wire finding): with E2E active, the server does NOT write commands to the
+// agent in cleartext — the first live capture showed exec params riding the
+// wire as readable JSON on the server→agent leg while the agent→server leg
+// was ciphertext. Every agent-ward envelope write goes through here: sealed
+// as a BinaryMessage when the posture is active, TextMessage JSON otherwise.
+// Caller owns the per-connection write lock; this helper only seals.
+func (s *Server) encryptAgentFrame(env protocol.Envelope) (int, []byte, error) {
+	if s.e2eMgr == nil || !s.e2eMgr.IsActive() {
+		data, err := json.Marshal(env)
+		return websocket.TextMessage, data, err
+	}
+	plain, err := json.Marshal(env)
+	if err != nil {
+		return websocket.BinaryMessage, nil, err
+	}
+	sealed, err := s.e2eMgr.Encrypt(plain)
+	if err != nil {
+		return websocket.BinaryMessage, nil, err
+	}
+	return websocket.BinaryMessage, sealed, nil
+}
+
+// writeEncryptedJSON marshals env, seals it under the active posture, and
+// writes it on conn under the caller-provided locking already held. It is the
+// one call every direct-connection agent-ward write uses (P23-13).
+// PARENT FIX (orchestrator, c0b4c6d regression): when the posture is INACTIVE
+// the write must go through conn.WriteJSON exactly as before this commit -
+// every transport shim (direct conn, virtualConn, test harness conns) hooks
+// its reply logic on WriteJSON; WriteMessage bypasses those hooks and strands
+// the caller until the timeout. Active posture keeps the sealed-BinaryMessage
+// WriteMessage path, which no E2E-off deploy ever exercises.
+func (s *Server) writeEncryptedJSON(agentID string, conn Conn, env protocol.Envelope) error {
+	msgType, payload, err := s.encryptAgentFrame(env)
+	if err != nil {
+		return err
+	}
+	if msgType == websocket.TextMessage {
+		// E2E inactive: plain JSON envelope, written through WriteJSON so
+		// transport shims and test conns keep their reply hooks firing.
+		return conn.WriteJSON(env)
+	}
+	return conn.WriteMessage(msgType, payload)
+}
+
 // completeUpdatePromotion is the completion half of an update: after the
 // promoted agent has reconnected, it waits for it to stabilise, orders the
 // predecessor process killed through the new connection, and clears the dead
@@ -94,7 +158,8 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	// Read first message — detect relay vs direct agent.
 	// Relay connections send BinaryMessage with framing header.
-	// Direct agents send TextMessage with JSON Envelope.
+	// Direct agents send TextMessage (plaintext posture) or BinaryMessage
+	// (E2E-sealed envelope) with JSON Envelope.
 	msgType, firstData, err := conn.ReadMessage()
 	if err != nil {
 		log.Printf("[server] failed to read first message: %v", err)
@@ -115,7 +180,8 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		if s.e2eMgr != nil && s.e2eMgr.IsActive() {
 			plaintext, derr := s.e2eMgr.Decrypt(firstData)
 			if derr != nil {
-				// Relay connection — handle in relay mode
+				// P23-12 classification by GCM auth: a frame that fails to
+				// decrypt is relay framing, not a broken agent key.
 				s.handleRelayConnection(conn, firstData)
 				return
 			}
@@ -126,6 +192,18 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			s.handleRelayConnection(conn, firstData)
 			return
 		}
+	}
+
+	// P23-14 (b) NO SILENT DOWNGRADE: an E2E-active server refuses a
+	// plaintext TEXT hello instead of registering it. The codes are the ones
+	// docs/SECURITY.md §2 names for this family (E2E_KEY_REQUIRED for the
+	// strict/shared-token case). Fail closed: never register a client the
+	// posture says must be encrypted.
+	if msgType == websocket.TextMessage && s.e2eMgr != nil && s.e2eMgr.IsActive() {
+		log.Printf("[server] e2e: refusing plaintext agent hello (posture on) — E2E_KEY_REQUIRED")
+		writeForwardRefusal(conn, "E2E_KEY_REQUIRED", fmt.Errorf("server requires end-to-end encryption; agent sent a plaintext hello (E2E_KEY_REQUIRED)"))
+		conn.Close()
+		return
 	}
 
 	// Direct agent connection — parse first message as JSON Envelope
@@ -305,24 +383,32 @@ func (s *Server) handleMessages(agentID string, conn *websocket.Conn) {
 			}
 		}
 
+		// P23-14 (b)+(c): one shared decrypt-before-parse helper. When the
+		// posture is active but the frame is a plaintext TEXT frame, that is
+		// the downgrade the posture forbids — refused in place (the agent
+		// cannot have negotiated back to cleartext mid-session), never
+		// decrypted ("probably plaintext") and never parsed. A decrypt
+		// failure on a binary frame is logged and dropped: a broken key is
+		// an error, not a pass-through.
+		if s.e2eMgr != nil && s.e2eMgr.IsActive() && msgType == websocket.TextMessage {
+			log.Printf("[server] e2e: plaintext frame from %s on an e2e-active server — refusing (E2E_KEY_REQUIRED)", agentID)
+			ref := &ForwardRefusalError{Code: "E2E_KEY_REQUIRED", AgentID: agentID, Reason: "server requires e2e; agent sent plaintext after registration"}
+			_ = conn.WriteMessage(websocket.TextMessage, forwardRefusalPayload(ref))
+			continue
+		}
+		plain, active, derr := s.decryptAgentPayload(data)
+		if derr != nil {
+			log.Printf("[server] e2e decrypt error from %s: %v", agentID, derr)
+			continue
+		}
+		if active {
+			data = plain
+		}
+
 		var env protocol.Envelope
-		if msgType == websocket.BinaryMessage && s.e2eMgr != nil && s.e2eMgr.IsActive() {
-			// E2E encrypted message — decrypt first
-			plaintext, err := s.e2eMgr.Decrypt(data)
-			if err != nil {
-				log.Printf("[server] e2e decrypt error from %s: %v", agentID, err)
-				continue
-			}
-			if err := json.Unmarshal(plaintext, &env); err != nil {
-				log.Printf("[server] json decode error from %s: %v", agentID, err)
-				continue
-			}
-		} else {
-			// Plaintext JSON message (backward compat)
-			if err := json.Unmarshal(data, &env); err != nil {
-				log.Printf("[server] json decode error from %s: %v", agentID, err)
-				continue
-			}
+		if err := json.Unmarshal(data, &env); err != nil {
+			log.Printf("[server] json decode error from %s: %v", agentID, err)
+			continue
 		}
 
 		// P21-04: the direct path goes through the same admission as a
@@ -355,7 +441,27 @@ func (s *Server) handleMessages(agentID string, conn *websocket.Conn) {
 			// connection serializes through connWriteMu, so the race cannot
 			// form — for any payload size, which is why chunk size was never
 			// the real threshold.
-			s.writeToAgentLocked(agentID, conn, pong)
+			// P23-13: the pong goes out sealed like every other frame.
+			// (compile fix, parent close): conn is concrete *websocket.Conn in
+			// handleMessages and virtualConn never reaches this loop; assert
+			// through the Conn interface instead of a dead concrete type-assert.
+			var connI Conn = conn
+			if mt, payload, e2 := s.encryptAgentFrame(pong); e2 == nil {
+				if _, isVirtual := connI.(*virtualConn); isVirtual {
+					_ = connI.WriteMessage(mt, payload)
+				} else {
+					s.mu.RLock()
+					mu := s.connWriteMu[agentID]
+					s.mu.RUnlock()
+					if mu != nil {
+						mu.Lock()
+						_ = connI.WriteMessage(mt, payload)
+						mu.Unlock()
+					} else {
+						_ = connI.WriteMessage(mt, payload)
+					}
+				}
+			}
 			s.registry.Heartbeat(agentID)
 
 		case protocol.TypePong:

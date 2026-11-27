@@ -181,6 +181,11 @@ func runServe(args []string) {
 	// frames and this server is the matching peer. SetE2E with an empty token
 	// stays inactive.
 	srv.SetE2E(*token, *e2e)
+	// P23-14 (b): --e2e with no token is an enabled-but-broken posture —
+	// fail loud at startup, never serve a silently-plaintext server.
+	if err := srv.E2ECipherError(); err != nil {
+		log.Fatalf("e2e enabled but key construction failed: %v (set a token or pass --e2e=false)", err)
+	}
 	srv.SetVersion(appVersion)
 	srv.SetUplinkRelayStatus(*relayStatus)
 	srv.SetAdvertisedAddr(*advertisedAddr)
