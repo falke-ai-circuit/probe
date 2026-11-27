@@ -89,6 +89,15 @@ func (s *Server) writeEncryptedJSON(agentID string, conn Conn, env protocol.Enve
 	if err != nil {
 		return err
 	}
+	if msgType == websocket.TextMessage {
+		// PARENT FIX (regression in the sweep): with the posture INACTIVE the
+		// write must go through conn.WriteJSON exactly as before — transport
+		// shims (direct shim, virtualConn, test-harness conns) hook their
+		// reply logic on WriteJSON; WriteMessage bypasses those hooks and
+		// strands the caller until the timeout. Active posture keeps the
+		// sealed-BinaryMessage WriteMessage path.
+		return conn.WriteJSON(env)
+	}
 	return conn.WriteMessage(msgType, payload)
 }
 
