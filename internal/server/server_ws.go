@@ -58,6 +58,40 @@ func (s *Server) decryptAgentPayload(data []byte) ([]byte, bool, error) {
 	return plain, true, nil
 }
 
+// encryptAgentFrame is the outbound half of the same posture (P23-13 live
+// wire finding): with E2E active, the server does NOT write commands to the
+// agent in cleartext — the first live capture showed exec params riding the
+// wire as readable JSON on the server→agent leg while the agent→server leg
+// was ciphertext. Every agent-ward envelope write goes through here: sealed
+// as a BinaryMessage when the posture is active, TextMessage JSON otherwise.
+// Caller owns the per-connection write lock; this helper only seals.
+func (s *Server) encryptAgentFrame(env protocol.Envelope) (int, []byte, error) {
+	if s.e2eMgr == nil || !s.e2eMgr.IsActive() {
+		data, err := json.Marshal(env)
+		return websocket.TextMessage, data, err
+	}
+	plain, err := json.Marshal(env)
+	if err != nil {
+		return websocket.BinaryMessage, nil, err
+	}
+	sealed, err := s.e2eMgr.Encrypt(plain)
+	if err != nil {
+		return websocket.BinaryMessage, nil, err
+	}
+	return websocket.BinaryMessage, sealed, nil
+}
+
+// writeEncryptedJSON marshals env, seals it under the active posture, and
+// writes it on conn under the caller-provided locking already held. It is the
+// one call every direct-connection agent-ward write uses (P23-13).
+func (s *Server) writeEncryptedJSON(agentID string, conn Conn, env protocol.Envelope) error {
+	msgType, payload, err := s.encryptAgentFrame(env)
+	if err != nil {
+		return err
+	}
+	return conn.WriteMessage(msgType, payload)
+}
+
 // completeUpdatePromotion is the completion half of an update: after the
 // promoted agent has reconnected, it waits for it to stabilise, orders the
 // predecessor process killed through the new connection, and clears the dead
@@ -396,7 +430,27 @@ func (s *Server) handleMessages(agentID string, conn *websocket.Conn) {
 			// connection serializes through connWriteMu, so the race cannot
 			// form — for any payload size, which is why chunk size was never
 			// the real threshold.
-			s.writeToAgentLocked(agentID, conn, pong)
+			// P23-13: the pong goes out sealed like every other frame.
+			// (compile fix, parent close): conn is concrete *websocket.Conn in
+			// handleMessages and virtualConn never reaches this loop; assert
+			// through the Conn interface instead of a dead concrete type-assert.
+			var connI Conn = conn
+			if mt, payload, e2 := s.encryptAgentFrame(pong); e2 == nil {
+				if _, isVirtual := connI.(*virtualConn); isVirtual {
+					_ = connI.WriteMessage(mt, payload)
+				} else {
+					s.mu.RLock()
+					mu := s.connWriteMu[agentID]
+					s.mu.RUnlock()
+					if mu != nil {
+						mu.Lock()
+						_ = connI.WriteMessage(mt, payload)
+						mu.Unlock()
+					} else {
+						_ = connI.WriteMessage(mt, payload)
+					}
+				}
+			}
 			s.registry.Heartbeat(agentID)
 
 		case protocol.TypePong:
