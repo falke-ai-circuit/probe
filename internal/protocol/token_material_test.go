@@ -24,11 +24,12 @@ func TestP19R26_IsPlausibleTokenClosesTheMaterialGate(t *testing.T) {
 		}
 	}
 	plausible := []string{
-		"tok-A",
-		"tok-OLD",
-		"rotated-token-NEW",
-		"dead-token",
-		generateTokenShaped(), // 48-char hex: the real generator's shape
+		"tok-A-2026",            // operator hand-seeded shape, >= MinTokenLength
+		"tok-OLD-99",            // same
+		"rotated-token-NEW",     // p1904-suite fixture token
+		"dead-token",            // p1904-suite fixture token
+		generateTokenShaped(),   // 48-char hex: the real generator's shape
+		"tok-1770000000000000",  // the generateToken fallback's "tok-<nano>" family
 	}
 	for _, s := range plausible {
 		if !IsPlausibleToken(s) {
