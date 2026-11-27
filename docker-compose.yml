@@ -77,8 +77,12 @@ services:
       - --allowed-cidr
       - 100.64.0.0/10,10.10.10.0/24,172.16.0.0/12
       - --require-api-auth
+      # P19-04: rotation runs at its 24h default (the flag below restores the
+      # explicit value the compose file previously zeroed). The P19-01 guard
+      # stays: --token-ttl=0 still requires --allow-disabled-token-ttl, so an
+      # operator who wants rotation OFF must say so visibly.
       - --token-ttl
-      - "0"
+      - "24h"
       - --registry
       - /data/runtime/registry.json
       - --operator-db

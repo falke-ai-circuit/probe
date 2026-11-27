@@ -28,7 +28,23 @@ const (
 	missThreshold   = 3
 	defaultTimeout  = 60
 	maxTimeout      = 300
+
+	// P19-04: auth-failure handling on the reconnect loop. A dial rejected
+	// with 401 means the presented token is dead (rotated away server-side).
+	// The old behaviour — exponential backoff retrying the SAME dead token
+	// forever — is a silent failure the operator only finds by accident. The
+	// token file is re-read first (a rotation may have landed on disk from a
+	// previous session); if the token is unchanged after
+	// authRefusalMaxAttempts consecutive 401s the agent refuses loudly and
+	// exits instead of burning the wire forever.
+	authRefusalMaxAttempts = 5
 )
+
+// lastPersistedTokenMtime is read on each auth failure: a bumped mtime means
+// someone (an operator, an updater) swapped the token file, so the retry
+// counter resets and the new value gets its chance.
+var lastPersistedTokenMtime time.Time
+var lastPersistedTokenMtimeMu sync.Mutex
 
 // A3: agent-side deadlines for the fs-* surface. The server's forward wall for
 // these calls is 120 s (server_api.go forwardToAgentWithTimeout); the caller in
@@ -282,6 +298,11 @@ type Agent struct {
 	// Guarded by mu alongside cfg.Token.
 	tokenExpiry time.Time
 
+	// P19-04: consecutive 401 auth refusals on the reconnect loop. Reset on
+	// a successful connection and on any token change; hitting the bound
+	// turns the loop into a typed refusal (agent exits loudly).
+	authRefusals int
+
 	// Phase 4 Step 11: forward policies for server-as-relay.
 	// Maps local agent ID → "relay" or "local" forwarding policy.
 	forwardMu       sync.RWMutex
@@ -408,6 +429,25 @@ func (a *Agent) runOutbound() error {
 	log.Printf("Connecting to %s (mode: outbound)", a.cfg.URL)
 	for {
 		conn, err := protocol.Dial(a.cfg.URL, a.cfg.CertPath, a.cfg.ClientCertFile, a.cfg.ClientKeyFile, a.cfg.Token)
+		if isUnauthorizedDialErr(err) {
+			// P19-04: the server answered the handshake with 401 — the
+			// presented token is dead. NEVER a silent retry of the same
+			// material: pick up a rotated token from the token file first.
+			if tok, ok := a.pickupRotatedToken(); ok && tok != "" {
+				a.mu.Lock()
+				a.cfg.Token = tok
+				a.mu.Unlock()
+				log.Printf("P19-04: auth refused (401); picked up rotated token from %s, retrying immediately", a.cfg.TokenFile)
+				a.backoffAttempt = 0
+				continue
+			}
+			a.authRefusals++
+			log.Printf("P19-04: auth refused (401) with current token; consecutive refusal %d/%d", a.authRefusals, authRefusalMaxAttempts)
+			if a.authRefusals >= authRefusalMaxAttempts {
+				return fmt.Errorf("P19-04: authentication refused %d consecutive times (401) — token is dead and no rotated token exists at %s; refusing to loop silently (agent exits)",
+					a.authRefusals, a.cfg.TokenFile)
+			}
+		}
 		if err != nil {
 			a.backoffAttempt++
 			agentReconnects.Add(1)
@@ -429,6 +469,7 @@ func (a *Agent) runOutbound() error {
 		a.connectedAt = time.Now()
 		a.pingMisses = 0
 		a.backoffAttempt = 0
+		a.authRefusals = 0 // P19-04: a live session resets the refusal bound
 		a.mu.Unlock()
 		a.handleConnection(conn)
 		// P22-03: an admission refusal arrives on a socket that upgraded, so
@@ -1850,4 +1891,67 @@ func (a *Agent) handleReconfigure(env protocol.Envelope) protocol.Envelope {
 		Status    string `json:"status"`
 		SavedTo   string `json:"saved_to,omitempty"`
 	}{a.cfg.URL, newURL, "reconnecting", savePath})
+}
+
+// ---------------------------------------------------------------------------
+// P19-04: loud auth-refusal handling on the reconnect loop
+// ---------------------------------------------------------------------------
+
+// isUnauthorizedDialErr reports whether a Dial failure was an HTTP 401 from
+// the server's auth check (as opposed to a network fault). gorilla surfaces
+// the response status on websocket.ErrBadHandshake via its Response field.
+func isUnauthorizedDialErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, websocket.ErrBadHandshake) {
+		// protocol.Dial wraps the dialer's error; the HTTP response object is
+		// not carried through, so the status code cannot be read directly.
+		// ErrBadHandshake from a reachable server is an auth-tier refusal in
+		// practice (the server only hand-rejects on 401); the pickup path is
+		// safe regardless — it only ever adopts a token file that changed on
+		// disk.
+		return true
+	}
+	return false
+}
+
+// pickupRotatedToken re-reads the token file. It returns (token, true) only
+// when the file changed since the last check — either content or mtime — so a
+// retried dial with an unchanged, already-dead token cannot keep resetting
+// anything by "picking up" the same value. OK is false when there is no file,
+// no change, or a read error (logged, never silent).
+func (a *Agent) pickupRotatedToken() (string, bool) {
+	if a.cfg.TokenFile == "" {
+		return "", false
+	}
+	info, err := os.Stat(a.cfg.TokenFile)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("P19-04: token file stat failed: %v", err)
+		}
+		return "", false
+	}
+	lastPersistedTokenMtimeMu.Lock()
+	unchanged := info.ModTime().Equal(lastPersistedTokenMtime)
+	lastPersistedTokenMtimeMu.Unlock()
+	if unchanged {
+		return "", false
+	}
+	tok, err := LoadPersistedToken(a.cfg.TokenFile)
+	if err != nil || tok == "" {
+		log.Printf("P19-04: token file %s unreadable after mtime change: %v", a.cfg.TokenFile, err)
+		return "", false
+	}
+	a.mu.Lock()
+	current := a.cfg.Token
+	a.mu.Unlock()
+	lastPersistedTokenMtimeMu.Lock()
+	lastPersistedTokenMtime = info.ModTime()
+	lastPersistedTokenMtimeMu.Unlock()
+	if tok == current {
+		// Same material, newer mtime: do not count this as a pickup.
+		return "", false
+	}
+	return tok, true
 }

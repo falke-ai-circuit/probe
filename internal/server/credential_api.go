@@ -24,6 +24,9 @@ func (s *Server) registerCredentialRoutes() {
 	s.mux.HandleFunc("PUT /api/v1/credentials/{name}", s.handleV1PutCredential)
 	s.mux.HandleFunc("GET /api/v1/credentials/{name}", s.handleV1GetCredential)
 	s.mux.HandleFunc("GET /api/v1/credentials", s.handleV1ListCredentials)
+	// P19-04: per-agent auth-token rotation on the credentials family.
+	// POST only — a rotation is a state change; no GET ever rotates.
+	s.registerAgentTokenRoutes()
 }
 
 // handleV1PutCredential stores a value. The response echoes the name and
