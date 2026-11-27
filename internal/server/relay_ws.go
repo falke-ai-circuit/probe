@@ -311,6 +311,17 @@ func (s *Server) handleRelayConnection(conn *websocket.Conn, firstData []byte) {
 	}
 
 	// Main loop: read framed messages from relay and dispatch
+	session.conn.SetPongHandler(func(string) error {
+		// P23-04R2: a WebSocket-level Pong never reaches ReadMessage (the
+		// gorilla default PongHandler consumes it), so watchRelayLiveness's
+		// evidence rule had no delivery path for pongs on the relay socket —
+		// any idle relay was taken down at exactly 2×interval with the false
+		// pong_timeout. The pong IS positive evidence (P22-02 docstring);
+		// stamp it where it actually arrives. No protocol change: relay
+		// application framing (magic|chanID|json) is untouched.
+		session.touch()
+		return nil
+	})
 	for {
 		msgType, data, err := conn.ReadMessage()
 		if err != nil {
