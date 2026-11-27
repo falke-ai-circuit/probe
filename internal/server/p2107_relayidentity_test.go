@@ -322,8 +322,8 @@ func TestP2107_RotationReformsOneNodeOnly(t *testing.T) {
 	portA := p2106FreePort(t)
 	portB := p2106FreePort(t)
 
-	relayA := relay.New(relay.Config{UpstreamURL: wsURL, ListenAddr: fmt.Sprintf("127.0.0.1:%d", portA), Token: "test-token", RelayID: "relay-a", MaxAgents: 10})
-	relayB := relay.New(relay.Config{UpstreamURL: wsURL, ListenAddr: fmt.Sprintf("127.0.0.1:%d", portB), Token: "test-token", RelayID: "relay-b", MaxAgents: 10})
+	relayA := relay.New(relay.Config{UpstreamURL: wsURL, ListenAddr: fmt.Sprintf("127.0.0.1:%d", portA), Token: "test-token", RelayID: "relay-a", MaxAgents: 10, AllowAnyDownstream: true})
+	relayB := relay.New(relay.Config{UpstreamURL: wsURL, ListenAddr: fmt.Sprintf("127.0.0.1:%d", portB), Token: "test-token", RelayID: "relay-b", MaxAgents: 10, AllowAnyDownstream: true})
 	go func() { _ = relayA.Run() }()
 	go func() { _ = relayB.Run() }()
 	t.Cleanup(func() { relayA.Stop(); relayB.Stop() })

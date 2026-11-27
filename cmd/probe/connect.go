@@ -44,6 +44,9 @@ type ConfigFile struct {
 	Permissions  string   `json:"permissions"`
 	SandboxDir   string   `json:"sandbox_dir"`
 	Capabilities []string `json:"capabilities"`
+	// P19-01: pointer so an explicit "e2e_enabled": false is honoured while
+	// an absent field resolves to default-on via resolveE2EEnabled.
+	E2EEnabled   *bool    `json:"e2e_enabled,omitempty"`
 }
 
 // runConnect starts the PROBE client/agent (leaf node).
@@ -185,6 +188,9 @@ func runConnect(args []string) {
 		Permissions:    fcfg.Permissions,
 		SandboxDir:     fcfg.SandboxDir,
 		Capabilities:   fcfg.Capabilities,
+		// P19-01 §11.4: E2E defaults ON for every agent start; the config's
+		// e2e_enabled overrides explicitly (pointer, absent = default on).
+		E2EEnabled:      resolveE2EEnabled(true, fcfg.E2EEnabled),
 		ConfigPath:     *configPath,
 		EmbeddedConfig: configB64 != "",
 		CanaryMode:     *canaryMode,

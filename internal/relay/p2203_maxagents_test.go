@@ -62,6 +62,8 @@ func p2203Start(t *testing.T, maxAgents int) (string, *Relay) {
 		Token:        "relay-token",
 		MaxAgents:    maxAgents,
 		DialTimeout:  2 * time.Second,
+
+		AllowAnyDownstream: true, // P19-01: max-agents pin, not an admission pin
 	})
 	go func() { _ = rl.Run() }()
 	t.Cleanup(rl.Stop)

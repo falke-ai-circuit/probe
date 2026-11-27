@@ -419,6 +419,19 @@ func (s *Server) SetTokenTTL(ttl time.Duration) {
 	s.tokenTTL = ttl
 }
 
+// ValidateTokenTTL is the P19-01 hardening rule for the token-rotation
+// interval. An explicitly-passed --token-ttl=0 disables proactive rotation
+// entirely and is refused unless the operator also passes the explicit
+// opt-out; the flag-not-set case and the 24h default are unchanged. Shared by
+// both server entrypoints (cmd/probe serve, cmd/probe-server) so the two
+// mains cannot drift.
+func ValidateTokenTTL(ttlSet bool, ttl time.Duration, allowZero bool) error {
+	if ttlSet && ttl == 0 && !allowZero {
+		return fmt.Errorf("--token-ttl=0 disables token rotation; pass --allow-disabled-token-ttl to accept this explicitly")
+	}
+	return nil
+}
+
 // SetAllowedCIDR configures IP filtering for WebUI/API HTTP routes. Only
 // requests from the given CIDR(s) (plus localhost) are allowed. The /ws
 // WebSocket endpoint is always open from any IP. When cidr is empty or

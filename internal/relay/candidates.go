@@ -12,12 +12,15 @@ package relay
 // path for it.
 
 import (
+	"crypto/tls"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/falke-ai-circuit/probe/internal/protocol"
 )
 
 // defaultDialTimeout bounds one candidate's upgrade attempt. It is deliberately
@@ -73,13 +76,30 @@ func (r *Relay) dialTimeout() time.Duration {
 }
 
 // dial opens one candidate. The returned error is exactly what the operator
-// will read back in last_error for that candidate.
+// will read back in last_error for that candidate. P19-01: a wss:// candidate
+// is dialled with TLS verification against Config.UpstreamCAFile — a missing
+// CA fails the candidate loudly (the explicit PROBE_TLS_SKIP_VERIFY opt-out
+// still applies, process-wide). mTLS client cert + key ride the same config.
 func (r *Relay) dial(c candidate) (*websocket.Conn, error) {
 	headers := http.Header{}
 	headers.Set("Authorization", "Bearer "+r.Token())
 
 	d := *websocket.DefaultDialer
 	d.HandshakeTimeout = r.dialTimeout()
+	if strings.HasPrefix(c.url, "wss:") {
+		tlsCfg, err := protocol.TLSConfigFor(r.cfg.UpstreamCAFile)
+		if err != nil {
+			return nil, fmt.Errorf("wss upstream without CA: %w", err)
+		}
+		if r.cfg.UpstreamClientCert != "" && r.cfg.UpstreamClientKey != "" {
+			cert, err := tls.LoadX509KeyPair(r.cfg.UpstreamClientCert, r.cfg.UpstreamClientKey)
+			if err != nil {
+				return nil, fmt.Errorf("load upstream client cert: %w", err)
+			}
+			tlsCfg.Certificates = []tls.Certificate{cert}
+		}
+		d.TLSClientConfig = tlsCfg
+	}
 	conn, _, err := d.Dial(c.url, headers)
 	return conn, err
 }

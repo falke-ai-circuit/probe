@@ -7,9 +7,11 @@ import (
 	"encoding/pem"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -21,10 +23,66 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin:     func(r *http.Request) bool { return true },
 }
 
-// Dial connects to a remote WebSocket server. certPath is the optional CA cert
+// P19-01: an explicit global opt-out from TLS certificate verification,
+// read once per Dial from PROBE_TLS_SKIP_VERIFY. The silent insecure default
+// is gone: a wss:// dial without a CA now fails loudly unless the operator
+// sets this. The opt-out is logged on every dial that uses it.
+//
+// Callers that own an explicit operator flag may set this programmatically
+// via SetSkipVerify at startup, before any dial.
+var skipVerify = strings.EqualFold(strings.TrimSpace(os.Getenv("PROBE_TLS_SKIP_VERIFY")), "true")
+
+// SetSkipVerify sets the process-wide skip-verify opt-out. Call at startup
+// only, before any dial, from an explicit operator flag.
+func SetSkipVerify(v bool) {
+	skipVerify = v
+}
+
+// SkipVerify reports the current opt-out state (for tests and config dumps).
+func SkipVerify() bool { return skipVerify }
+
+// tlsConfigFor builds the client TLS config for a wss:// dial. certPath is
+// the CA cert PEM; when empty verification cannot be performed and the call
+// FAILS LOUDLY unless the explicit PROBE_TLS_SKIP_VERIFY=true opt-out is set.
+func tlsConfigFor(certPath string) (*tls.Config, error) {
+	return TLSConfigFor(certPath)
+}
+
+// TLSConfigFor is the exported form of tlsConfigFor, for the relay's upstream
+// dial (candidates.go) and any other internal dialer that must enforce the
+// same P19-01 rule: wss:// without a CA fails loudly unless the explicit
+// PROBE_TLS_SKIP_VERIFY=true opt-out is set.
+func TLSConfigFor(certPath string) (*tls.Config, error) {
+	cfg := &tls.Config{
+		MinVersion: tls.VersionTLS13,
+	}
+	if certPath != "" {
+		certPool := x509.NewCertPool()
+		certPEM, err := os.ReadFile(certPath)
+		if err != nil {
+			return nil, fmt.Errorf("read cert: %w", err)
+		}
+		if !certPool.AppendCertsFromPEM(certPEM) {
+			return nil, fmt.Errorf("failed to parse cert")
+		}
+		cfg.RootCAs = certPool
+		return cfg, nil
+	}
+	if skipVerify {
+		log.Printf("[tls] WARNING: wss:// dial without CA — verification SKIPPED (PROBE_TLS_SKIP_VERIFY=true)")
+		cfg.InsecureSkipVerify = true
+		return cfg, nil
+	}
+	return nil, fmt.Errorf("wss:// dial refused: no CA certificate configured and verification cannot proceed — provide the server's CA cert (cert / --cert-file), or opt out explicitly with PROBE_TLS_SKIP_VERIFY=true")
+}
+
+// Dial connects to a remote WebSocket server. certPath is the CA cert
 // used to verify the server's TLS certificate (for wss:// URLs). When
 // clientCertFile and clientKeyFile are both non-empty they are loaded as a
 // client certificate for TLS mutual authentication.
+//
+// P19-01: a wss:// URL with an empty certPath FAILS LOUDLY unless the
+// explicit PROBE_TLS_SKIP_VERIFY=true opt-out is set (see tlsConfigFor).
 func Dial(rawURL string, certPath string, clientCertFile string, clientKeyFile string, token string) (*websocket.Conn, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -39,23 +97,11 @@ func Dial(rawURL string, certPath string, clientCertFile string, clientKeyFile s
 
 	// Only apply TLS config for wss:// URLs; ws:// uses plain HTTP
 	if u.Scheme == "wss" {
-		dialer.TLSClientConfig = &tls.Config{
-			MinVersion: tls.VersionTLS13,
+		tlsCfg, err := tlsConfigFor(certPath)
+		if err != nil {
+			return nil, fmt.Errorf("dial %s: %w", rawURL, err)
 		}
-		// Server certificate verification.
-		if certPath != "" {
-			certPool := x509.NewCertPool()
-			certPEM, err := os.ReadFile(certPath)
-			if err != nil {
-				return nil, fmt.Errorf("read cert: %w", err)
-			}
-			if !certPool.AppendCertsFromPEM(certPEM) {
-				return nil, fmt.Errorf("failed to parse cert")
-			}
-			dialer.TLSClientConfig.RootCAs = certPool
-		} else {
-			dialer.TLSClientConfig.InsecureSkipVerify = true
-		}
+		dialer.TLSClientConfig = tlsCfg
 		// Client certificate for TLS mutual authentication (mTLS).
 		if clientCertFile != "" && clientKeyFile != "" {
 			cert, err := tls.LoadX509KeyPair(clientCertFile, clientKeyFile)

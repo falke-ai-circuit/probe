@@ -155,17 +155,10 @@ func runSupervisor(args []string) {
 
 		if startRelay && uc.Relay != nil {
 			relayCfg := uc.ToRelayConfig()
-			cfgJSON, _ := json.Marshal(struct {
-				Upstream    []string `json:"upstream"`
-				Token       string `json:"token"`
-				Listen      string `json:"listen"`
-				AgentTokens string `json:"agent_tokens"`
-			}{
-				Upstream:    relayCfg.UpstreamURLs,
-				Token:       relayCfg.Token,
-				Listen:      relayCfg.ListenAddr,
-				AgentTokens: relayCfg.AgentTokens,
-			})
+			// P19-01: full relay.Config passthrough — every field, including
+			// the opt-outs, survives the supervisor hop (factory below
+			// decodes this exact shape).
+			cfgJSON, _ := json.Marshal(relayCfg)
 			if err := mgr.StartMode("relay", cfgJSON); err != nil {
 				fmt.Fprintf(os.Stderr, "Failed to start relay: %v\n", err)
 			} else {
@@ -306,17 +299,10 @@ func runSupervisorWithAutoStart(uc *UnifiedConfig, configPath string) {
 	// Start relay mode
 	if startRelay && uc != nil && uc.Relay != nil {
 		relayCfg := uc.ToRelayConfig()
-		cfgJSON, _ := json.Marshal(struct {
-			Upstream    []string `json:"upstream"`
-			Token       string `json:"token"`
-			Listen      string `json:"listen"`
-			AgentTokens string `json:"agent_tokens"`
-		}{
-			Upstream:    relayCfg.UpstreamURLs,
-			Token:       relayCfg.Token,
-			Listen:      relayCfg.ListenAddr,
-			AgentTokens: relayCfg.AgentTokens,
-		})
+		// Pass the whole relay.Config straight through: the factory (below)
+		// decodes this exact shape, so every field — including the P19-01
+		// opt-outs — survives the supervisor hop.
+		cfgJSON, _ := json.Marshal(relayCfg)
 		if err := mgr.StartMode("relay", cfgJSON); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to start relay: %v\n", err)
 		} else {
@@ -376,6 +362,12 @@ func registerFactories(mgr *modes.Manager) {
 		if opts.AllowedCIDR == "" {
 			opts.AllowedCIDR = "0.0.0.0/0"
 		}
+		// P19-01 §11.4: E2E defaults ON for supervisor-managed serve modes,
+		// matching `probe serve` / probe-server. Zero-value = absent = on;
+		// the factory's other defaults follow the same zero-value pattern.
+		if !opts.E2EEnabled {
+			opts.E2EEnabled = true
+		}
 		opts.Version = appVersion
 		return modes.NewServerMode(opts), nil
 	})
@@ -388,6 +380,7 @@ func registerFactories(mgr *modes.Manager) {
 			Mode        string             `json:"mode"`
 			Permissions string             `json:"permissions"`
 			ConfigPath  string             `json:"config_path"`
+			E2EEnabled  *bool              `json:"e2e_enabled"`
 		}
 		if len(cfg) > 0 {
 			if err := json.Unmarshal(cfg, &c); err != nil {
@@ -418,40 +411,65 @@ func registerFactories(mgr *modes.Manager) {
 			Name:        name,
 			Permissions: perms,
 			ConfigPath:  c.ConfigPath,
+			// P19-01 §11.4: E2E defaults ON for agents started via supervisor
+			// connect config; e2e_enabled in the JSON overrides explicitly.
+			E2EEnabled: resolveE2EEnabled(true, c.E2EEnabled),
 		}
 		return modes.NewConnectMode(ac), nil
 	})
 
 	mgr.RegisterFactory("relay", func(cfg json.RawMessage) (modes.Mode, error) {
-		var c struct {
-			Upstream    RelayUpstreams `json:"upstream"`
-			Token       string `json:"token"`
-			Listen      string `json:"listen"`
-			AgentTokens string `json:"agent_tokens"`
+		// P19-01: accept BOTH shapes — the supervisor pass-through
+		// (relay.Config marshalled verbatim, Go field names) and the operator
+		// JSON config (snake_case). The pass-through wins when it decoded to
+		// anything real; otherwise the operator shape is re-mapped.
+		var pt relay.Config
+		if err := json.Unmarshal(cfg, &pt); err != nil {
+			return nil, fmt.Errorf("invalid relay config: %w", err)
 		}
-		if len(cfg) > 0 {
-			if err := json.Unmarshal(cfg, &c); err != nil {
-				return nil, fmt.Errorf("invalid relay config: %w", err)
-			}
+		var op struct {
+			Upstream           RelayUpstreams `json:"upstream"`
+			Token              string         `json:"token"`
+			Listen             string         `json:"listen"`
+			AgentTokens        string         `json:"agent_tokens"`
+			CertFile           string         `json:"cert_file"`
+			KeyFile            string         `json:"key_file"`
+			AllowAnyDownstream bool           `json:"allow_any_downstream"`
+			UpstreamCAFile     string         `json:"upstream_ca_file"`
+			UpstreamClientCert string         `json:"upstream_client_cert"`
+			UpstreamClientKey  string         `json:"upstream_client_key"`
 		}
-		if len(c.Upstream) == 0 {
+		_ = json.Unmarshal(cfg, &op)
+
+		if pt.Token != "" || len(pt.UpstreamURLs) > 0 || pt.ListenAddr != "" {
+			// Pass-through form: Validate in New enforces the P19-01 refusals.
+			return modes.NewRelayMode(pt), nil
+		}
+		if len(op.Upstream) == 0 {
 			return nil, fmt.Errorf("upstream is required")
 		}
-		if c.Token == "" {
+		if op.Token == "" {
 			return nil, fmt.Errorf("token is required")
 		}
-		listen := c.Listen
+		listen := op.Listen
 		if listen == "" {
 			listen = ":7701"
 		}
 		rc := relay.Config{
-			UpstreamURL:  firstUpstream(c.Upstream),
-			UpstreamURLs: []string(c.Upstream),
-			ListenAddr:  listen,
-			Token:       c.Token,
-			AgentTokens: c.AgentTokens,
-			MaxAgents:   100,
-			MaxPerIP:    10,
+			UpstreamURL:  firstUpstream(op.Upstream),
+			UpstreamURLs: []string(op.Upstream),
+			ListenAddr:   listen,
+			Token:        op.Token,
+			AgentTokens:  op.AgentTokens,
+			CertFile:     op.CertFile,
+			KeyFile:      op.KeyFile,
+			MaxAgents:    100,
+			MaxPerIP:     10,
+
+			AllowAnyDownstream: op.AllowAnyDownstream,
+			UpstreamCAFile:     op.UpstreamCAFile,
+			UpstreamClientCert: op.UpstreamClientCert,
+			UpstreamClientKey:  op.UpstreamClientKey,
 		}
 		return modes.NewRelayMode(rc), nil
 	})

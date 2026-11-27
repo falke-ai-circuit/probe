@@ -80,7 +80,9 @@ func (s *ServerMode) Start() error {
 	s.srv.SetTokenTTL(s.opts.TokenTTL)
 	s.srv.SetVersion(s.opts.Version)
 
-	// Step 13: E2E encryption
+	// Step 13 / P19-01 §11.4: E2E defaults ON — ServerOptions.E2EEnabled is
+	// set by every production entrypoint; a zero-value literal (tests) keeps
+	// Today, E2E absent-friendly behaviour.
 	if s.opts.E2EEnabled && s.opts.Token != "" {
 		s.srv.SetE2E(s.opts.Token, true)
 	}

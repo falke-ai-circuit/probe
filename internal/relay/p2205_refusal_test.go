@@ -161,6 +161,8 @@ func p2205StartRelayAt(t *testing.T, url string) *Relay {
 		ListenAddr:   listen,
 		Token:        "relay-token",
 		DialTimeout:  2 * time.Second,
+
+		AllowAnyDownstream: true, // P19-01: refusal pin, not an admission pin
 	})
 	go func() { _ = rl.Run() }()
 	t.Cleanup(rl.Stop)

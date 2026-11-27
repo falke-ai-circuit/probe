@@ -40,11 +40,37 @@ type Config struct {
 	MaxAgents   int    // max concurrent downstream agents (default 100)
 	MaxPerIP    int    // max connections per IP (default 10)
 	RelayID     string // relay identifier (auto-generated if empty)
+	// P19-01: admit downstream agents without any shared token. The default
+	// flips: an empty AgentTokens now refuses to run unless this is set.
+	AllowAnyDownstream bool
+	// P19-01: CA cert file PEM for verifying the upstream server on wss://
+	// candidates; client cert + key for mTLS on the upstream hop.
+	UpstreamCAFile      string
+	UpstreamClientCert  string
+	UpstreamClientKey   string
+}
+
+// Validate returns the first refusing condition in the config, or nil. P19-01:
+// a config that LISTENS downstream (ListenAddr set) with an empty AgentTokens
+// is a refusal, not an accept-all; the explicit AllowAnyDownstream opt-out
+// must be set for a tokenless downstream listener to start. A pure-uplink
+// relay (empty ListenAddr) never admits agents and is unaffected.
+func (c Config) Validate() error {
+	if strings.TrimSpace(c.ListenAddr) == "" {
+		return nil
+	}
+	if strings.TrimSpace(c.AgentTokens) == "" && !c.AllowAnyDownstream {
+		return fmt.Errorf("relay: refusing to start downstream listener with no agent tokens — pass --agent-tokens <comma-separated tokens>, or set --allow-any-downstream to accept unauthenticated agents explicitly")
+	}
+	return nil
 }
 
 // Relay is the bridge between downstream agents and upstream server.
 type Relay struct {
 	cfg        Config
+	// startErr holds the Validate refusal from New (P19-01): a config that
+	// would have started with accept-all downstream. Run returns it.
+	startErr error
 	magic      byte
 	channels   *ChannelMap
 	upstream   *websocket.Conn
@@ -109,6 +135,12 @@ var upgrader = &websocket.Upgrader{
 
 // New creates a new Relay with the given configuration.
 func New(cfg Config) *Relay {
+	if err := cfg.Validate(); err != nil {
+		// Fail loud at construction: the relay must never come up admitting
+		// everything downstream by accident. Returning a dead relay with the
+		// error attached keeps the constructor signature; Start surfaces it.
+		return &Relay{cfg: cfg, startErr: err}
+	}
 	if cfg.MaxAgents <= 0 {
 		cfg.MaxAgents = 100
 	}
@@ -175,6 +207,11 @@ func (r *Relay) setToken(secret string) {
 
 // Run starts the relay: connects upstream, then listens for downstream agents.
 func (r *Relay) Run() error {
+	// P19-01: a config New refused (empty agent tokens without the explicit
+	// opt-out, or an empty upstream token) never reaches the network.
+	if r.startErr != nil {
+		return r.startErr
+	}
 	// 1. Connect to upstream server
 	if err := r.connectUpstream(); err != nil {
 		return fmt.Errorf("upstream connect: %w", err)

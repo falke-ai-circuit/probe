@@ -43,7 +43,9 @@ type ServerConfig struct {
 	KeyFile         string  `json:"key_file"`
 	VTAPIKey        string  `json:"vt_api_key"`
 	Proxy           string  `json:"proxy"`
-	E2EEnabled      bool    `json:"e2e_enabled"` // Step 13: end-to-end encryption
+	// P19-01: pointer so "e2e_enabled": false is honoured verbatim; absent
+	// resolves to default-on in applyDefaults.
+	E2EEnabled      *bool   `json:"e2e_enabled,omitempty"`
 }
 
 // ClientConfig holds settings for connect mode.
@@ -65,7 +67,18 @@ type ClientConfig struct {
 	KeyFile     string   `json:"keyFile"`
 	SandboxDir  string   `json:"sandbox_dir"`
 	Capabilities []string `json:"capabilities"`
-	E2EEnabled bool `json:"e2e_enabled,omitempty"` // Step 13: end-to-end encryption
+	// P19-01: pointer so "e2e_enabled": false is honoured verbatim; absent
+	// resolves to default-on in applyDefaults.
+	E2EEnabled *bool `json:"e2e_enabled,omitempty"`
+}
+
+// resolveE2EEnabled is the single P19-01 default-on resolver: an explicit
+// pointer value wins verbatim, an absent field takes the default (true).
+func resolveE2EEnabled(def bool, p *bool) bool {
+	if p != nil {
+		return *p
+	}
+	return def
 }
 
 // RelayUpstreams is the relay's ordered upstream candidate list. The config
@@ -97,6 +110,12 @@ type RelayConfig struct {
 	AgentTokens string `json:"agent_tokens"`
 	CertFile    string `json:"cert_file"`
 	KeyFile     string `json:"key_file"`
+	// P19-01: explicit opt-out mirroring --allow-any-downstream — required
+	// for a relay config that listens downstream with empty agent_tokens.
+	AllowAnyDownstream bool     `json:"allow_any_downstream,omitempty"`
+	UpstreamCAFile     string   `json:"upstream_ca_file,omitempty"`
+	UpstreamClientCert string   `json:"upstream_client_cert,omitempty"`
+	UpstreamClientKey  string   `json:"upstream_client_key,omitempty"`
 }
 
 // LoadConfig reads a JSON config file and returns a UnifiedConfig.
@@ -336,7 +355,9 @@ func (uc *UnifiedConfig) ToAgentConfig() agent.Config {
 		Permissions:    c.Permissions,
 		SandboxDir:     c.SandboxDir,
 		Capabilities:   c.Capabilities,
-		E2EEnabled:      c.E2EEnabled,
+		// P19-01 §11.4: E2E defaults ON; e2e_enabled in the client config
+		// overrides explicitly (pointer, so false is honoured).
+		E2EEnabled:      resolveE2EEnabled(true, c.E2EEnabled),
 	}
 
 	return cfg
@@ -349,15 +370,20 @@ func (uc *UnifiedConfig) ToRelayConfig() relay.Config {
 	}
 	r := uc.Relay
 	return relay.Config{
-		UpstreamURL:  firstUpstream(r.Upstream),
-		UpstreamURLs: append([]string(nil), r.Upstream...),
-		ListenAddr:   r.Listen,
-		Token:        strings.Trim(r.Token, "\"'"),
-		AgentTokens:  r.AgentTokens,
-		CertFile:     r.CertFile,
-		KeyFile:      r.KeyFile,
-		MaxAgents:    100,
-		MaxPerIP:     10,
+	UpstreamURL:  firstUpstream(r.Upstream),
+	UpstreamURLs: append([]string(nil), r.Upstream...),
+	ListenAddr:   r.Listen,
+	Token:        strings.Trim(r.Token, "\"'"),
+	AgentTokens:  r.AgentTokens,
+	CertFile:     r.CertFile,
+	KeyFile:      r.KeyFile,
+	MaxAgents:    100,
+	MaxPerIP:     10,
+
+	AllowAnyDownstream: r.AllowAnyDownstream,
+	UpstreamCAFile:     r.UpstreamCAFile,
+	UpstreamClientCert: r.UpstreamClientCert,
+	UpstreamClientKey:  r.UpstreamClientKey,
 	}
 }
 

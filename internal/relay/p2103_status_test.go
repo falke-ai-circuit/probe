@@ -149,6 +149,8 @@ func TestP2103_RelayStatusServesPeerHello(t *testing.T) {
 		ListenAddr:  listen,
 		Token:       "relay-token",
 		MaxAgents:   12,
+
+		AllowAnyDownstream: true, // P19-01: status pin, not an admission pin
 	})
 	go func() { _ = rl.Run() }()
 	defer rl.Stop()
@@ -194,6 +196,8 @@ func TestP2103_RelayStatusSurvivesUpstreamLoss(t *testing.T) {
 		UpstreamURL: "ws" + strings.TrimPrefix(upstream.URL, "http"),
 		ListenAddr:  listen,
 		Token:       "relay-token",
+
+		AllowAnyDownstream: true, // P19-01: status pin, not an admission pin
 	})
 	go func() { _ = rl.Run() }()
 	defer rl.Stop()

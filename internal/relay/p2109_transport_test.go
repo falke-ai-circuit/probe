@@ -207,6 +207,8 @@ func p2109Relay(t *testing.T, cands []string, dialTimeout time.Duration) (*Relay
 		Token:        "relay-token",
 		MaxAgents:    10,
 		DialTimeout:  dialTimeout,
+
+		AllowAnyDownstream: true, // P19-01: transport pin, not an admission pin
 	})
 	go func() { _ = rl.Run() }()
 	t.Cleanup(rl.Stop)
@@ -378,6 +380,8 @@ func TestP2109_SingleStringIsOneCandidate(t *testing.T) {
 		UpstreamURL: "ws://" + good.addr + "/ws", // legacy single-string form
 		ListenAddr:  listen,
 		Token:       "relay-token",
+
+		AllowAnyDownstream: true, // P19-01: transport pin, not an admission pin
 	})
 	if got := len(rl.candidates); got != 1 {
 		t.Fatalf("legacy UpstreamURL resolved to %d candidates, want 1", got)

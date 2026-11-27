@@ -404,6 +404,11 @@ func (pm *peerManager) buildRelay(id string) (*relay.Relay, error) {
 		Token:       raw,
 		MaxAgents:   rec.MaxAgents,
 		ListenAddr:  rec.Listen,
+		// P19-01 compat: peer records carry no downstream agent-token field,
+		// so a nested-relay peer keeps its pre-P19-01 admission. The gap —
+		// per-peer downstream tokens for nested relays — is flagged for
+		// P19-02, which owns the protocol work this unit defers.
+		AllowAnyDownstream: true,
 	}), nil
 }
 

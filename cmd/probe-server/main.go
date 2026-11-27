@@ -26,7 +26,9 @@ func main() {
 	rateLimit := flag.Float64("rate-limit", 10.0, "LLM proxy rate limit: requests per second per agent (default 10)")
 	rateBurst := flag.Int("rate-burst", 20, "LLM proxy burst size: max tokens accumulated per agent (default 20)")
 	maxConcurrent := flag.Int("max-concurrent", 5, "LLM proxy max concurrent in-flight requests across all agents (default 5)")
-	tokenTTL := flag.Duration("token-ttl", 24*time.Hour, "token rotation interval; the server proactively rotates each agent's token before it expires. 0 disables rotation.")
+	tokenTTL := flag.Duration("token-ttl", 24*time.Hour, "token rotation interval; the server proactively rotates each agent's token before it expires. 0 disables rotation (P19-01: requires --allow-disabled-token-ttl).")
+	allowZeroTTL := flag.Bool("allow-disabled-token-ttl", false, "explicit opt-out for --token-ttl=0 (disables token rotation)")
+	e2e := flag.Bool("e2e", true, "E2E AES-GCM encryption of agent↔server traffic (P19-01: default ON; --e2e=false to disable)")
 	certFile := flag.String("cert-file", "", "TLS certificate file (PEM) for the server; enables TLS when provided with --key-file")
 	keyFile := flag.String("key-file", "", "TLS key file (PEM) for the server; enables TLS when provided with --cert-file")
 	clientCA := flag.String("client-ca", "", "Client CA certificate file (PEM) for TLS mutual authentication; requires --cert-file/--key-file")
@@ -65,6 +67,17 @@ func main() {
 	}
 	if *addr == "" {
 		*addr = "localhost:7700"
+	}
+	// P19-01: an explicit --token-ttl=0 disables agent token rotation
+	// entirely; refused unless the operator passes --allow-disabled-token-ttl.
+	// The default (24h) path is unchanged. Rule lives in internal/server so
+	// both server entrypoints enforce the same line.
+	ttlWasSet := false
+	flag.Visit(func(f *flag.Flag) { if f.Name == "token-ttl" { ttlWasSet = true } })
+	if err := server.ValidateTokenTTL(ttlWasSet, *tokenTTL, *allowZeroTTL); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n\n", err)
+		flag.Usage()
+		os.Exit(1)
 	}
 	if *token == "" {
 		*token = os.Getenv("PROBE_TOKEN")
@@ -164,6 +177,8 @@ func main() {
 		srv = server.NewServerWithRateLimit(*addr, *token, *registryPath, rlCfg)
 	}
 	srv.SetTokenTTL(*tokenTTL)
+	// P19-01 §11.4: E2E defaults ON (matches `probe serve`); --e2e disables.
+	srv.SetE2E(*token, *e2e)
 	// F1: the version string was parsed for the banner but never handed to
 	// the server, so /api/v1/health served "server_version":"" on this
 	// binary while `probe serve` reported correctly. One line, same source.

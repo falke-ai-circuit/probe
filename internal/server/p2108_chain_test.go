@@ -105,6 +105,9 @@ func p2108StartRelay(t *testing.T, upstreamURL, relayID string) (*relay.Relay, s
 		ListenAddr:  addr,
 		Token:       "test-token",
 		RelayID:     relayID,
+
+		// P19-01: this rig pins chain identity, not downstream admission.
+		AllowAnyDownstream: true,
 	})
 	go func() {
 		if err := r.Run(); err != nil && !strings.Contains(err.Error(), "Server closed") {
