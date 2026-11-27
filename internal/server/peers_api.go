@@ -31,11 +31,14 @@ func (s *Server) registerPeersRoutes() {
 }
 
 // peerBody is the POST/PUT request shape. Token is write-only (§6).
+// Uplink (P25-05R) marks the peer as the server's forward uplink; the
+// wiring fires when the peer adopts, not at config time.
 type peerBody struct {
 	ID        string `json:"id"`
 	Upstream  string `json:"upstream"`
 	Token     string `json:"token"`
 	Enabled   *bool  `json:"enabled"`
+	Uplink    *bool  `json:"uplink"`
 	Listen    string `json:"listen"`
 	MaxAgents int    `json:"max_agents"`
 }
@@ -122,6 +125,10 @@ func (s *Server) handleV1CreatePeer(w http.ResponseWriter, r *http.Request) {
 	if body.Enabled != nil {
 		enabled = *body.Enabled
 	}
+	uplink := false
+	if body.Uplink != nil {
+		uplink = *body.Uplink
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	rec := defaultPeerRecord{
 		ID:          body.ID,
@@ -129,6 +136,7 @@ func (s *Server) handleV1CreatePeer(w http.ResponseWriter, r *http.Request) {
 		TokenSealed: sealed,
 		TokenFP:     fp,
 		Enabled:     enabled,
+		Uplink:      uplink,
 		Listen:      strings.TrimSpace(body.Listen),
 		MaxAgents:   body.MaxAgents,
 		CreatedAt:   now,
@@ -210,6 +218,9 @@ func (s *Server) handleV1PutPeer(w http.ResponseWriter, r *http.Request) {
 	enabled := existing.Enabled
 	if body.Enabled != nil {
 		enabled = *body.Enabled
+	}
+	if body.Uplink != nil {
+		existing.Uplink = *body.Uplink
 	}
 	existing.Upstream = strings.TrimSpace(body.Upstream)
 	existing.Enabled = enabled

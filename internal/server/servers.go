@@ -237,6 +237,12 @@ type defaultPeerRecord struct {
 	TokenSealed string `json:"token_sealed"`
 	TokenFP     string `json:"token_fp"`
 	Enabled     bool   `json:"enabled"`
+	// P25-05R: operator intent that this peer is also the server's forward
+	// uplink. When the peer adopts (reaches connected), the forward policy's
+	// forwardURL/forwardToken are wired from this record's Upstream+token.
+	// Default false: a peer without the flag never changes the chain-root
+	// behaviour (A3 back-compat).
+	Uplink      bool   `json:"uplink"`
 	Listen      string `json:"listen"`
 	MaxAgents   int    `json:"max_agents"`
 	CreatedAt   string `json:"created_at"`

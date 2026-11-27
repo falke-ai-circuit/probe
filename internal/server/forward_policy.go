@@ -338,6 +338,15 @@ func (s *Server) forwardLinkIDLocked() string {
 	return "fwd-" + s.serverChainID()
 }
 
+// uplinkForwardTarget returns the currently configured forward target
+// (P25-05R): the address/DTO pair adoption compares against so re-adopting
+// the same uplink is a no-op rather than a forwarder reset.
+func (s *Server) uplinkForwardTarget() (addr, token string) {
+	s.forwardMu.RLock()
+	defer s.forwardMu.RUnlock()
+	return s.forwardURL, s.forwardToken
+}
+
 // SetUplinkForwardTarget points this server at the upstream it forwards
 // clients into. An empty address means no uplink: relay/relay_all terminate
 // here as a chain root, which is also the default for every standalone

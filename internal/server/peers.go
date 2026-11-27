@@ -453,6 +453,14 @@ func (pm *peerManager) attachRelay(id string, rl *relay.Relay) {
 			return
 		}
 		pm.transition(id, peerStateConnected, linkStateDetail{})
+		// P25-05R: adoption is the moment the forward policy learns its
+		// uplink. A peer flagged `uplink` wires THIS server's forwardURL to
+		// the adopted peer's server URL + token, so relay/relay_all stop
+		// deferring on chain root the moment the peer is live. Idempotent
+		// per value: re-adopting the same target is a logged no-op.
+		// Config is re-read by id inside applyPeerUplink (hook contract:
+		// capture id, never the runtime pointer).
+		pm.applyPeerUplink(id)
 		pm.srv.auditPeer(id, "peer.registered", "", map[string]any{"state": peerStateConnected})
 	})
 
@@ -479,6 +487,41 @@ func (pm *peerManager) attachRelay(id string, rl *relay.Relay) {
 			}
 		}()
 	}
+}
+
+// applyPeerUplink wires the server's forward target to an adopted peer's
+// server URL + token (P25-05R). A no-op unless the peer's config carries
+// uplink:true. The token is unsealed here, inside the adoption path, and
+// handed to SetUplinkForwardTarget; sealed bytes never leave the call
+// chain (§6). Same-target re-adoption is a no-op so a peer redial does
+// not reset a live forwarder.
+func (pm *peerManager) applyPeerUplink(id string) {
+	pm.mu.Lock()
+	rt := pm.peers[id]
+	if rt == nil || rt.stopped || !rt.cfg.Uplink {
+		pm.mu.Unlock()
+		return
+	}
+	peerURL := rt.cfg.Upstream
+	sealed := rt.cfg.TokenSealed
+	pm.mu.Unlock()
+
+	cur, curTok := pm.srv.uplinkForwardTarget()
+	if cur == peerURL && curTok != "" {
+		return
+	}
+	store, err := pm.srv.peerCredentials()
+	if err != nil {
+		log.Printf("[peers] %s: uplink wiring skipped, credential store unavailable: %v", id, err)
+		return
+	}
+	raw, err := unsealPeerToken(store, sealed)
+	if err != nil {
+		log.Printf("[peers] %s: uplink wiring skipped, token unsealable: %v", id, err)
+		return
+	}
+	pm.srv.SetUplinkForwardTarget(peerURL, raw)
+	log.Printf("[peers] %s: uplink wired — forward target set to %s (peer adoption)", id, peerURL)
 }
 
 // transition updates the state machine with the §7 audit trail. Safe to call
@@ -619,6 +662,7 @@ func (pm *peerManager) snapshot() []peerConfigView {
 			TokenFP:      rt.cfg.TokenFP,
 			TokenPresent: rt.cfg.TokenSealed != "",
 			Enabled:      rt.cfg.Enabled,
+			Uplink:       rt.cfg.Uplink,
 			Listen:       rt.cfg.Listen,
 			MaxAgents:    rt.cfg.MaxAgents,
 			CreatedAt:    rt.cfg.CreatedAt,
@@ -652,6 +696,9 @@ type peerConfigView struct {
 	TokenFP      string          `json:"token_fp"`
 	TokenPresent bool            `json:"token_present"`
 	Enabled      bool            `json:"enabled"`
+	// P25-05R: true when this peer is wired as the server's forward uplink
+	// on adoption (R3: every config key is emitted).
+	Uplink       bool            `json:"uplink"`
 	Listen       string          `json:"listen"`
 	MaxAgents    int             `json:"max_agents"`
 	CreatedAt    string          `json:"created_at"`
@@ -672,5 +719,6 @@ func getenvDefault(key, def string) string {
 func (r defaultPeerRecord) equal(other defaultPeerRecord) bool {
 	return r.ID == other.ID && r.Upstream == other.Upstream &&
 		r.TokenFP == other.TokenFP && r.Enabled == other.Enabled &&
-		r.Listen == other.Listen && r.MaxAgents == other.MaxAgents
+		r.Listen == other.Listen && r.MaxAgents == other.MaxAgents &&
+		r.Uplink == other.Uplink
 }
