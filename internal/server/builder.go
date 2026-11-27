@@ -86,6 +86,23 @@ const (
 // DefaultBuildOutputDir is the directory where built agent binaries are stored.
 const DefaultBuildOutputDir = "/tmp/probe-builds"
 
+// P23-15 wiring defaults. The manager carries IMAGE-layout defaults: the
+// shipped runtime image compiles from /src with the toolchain on PATH
+// (/usr/local/go/bin/go). The dev-host toolchain is only a last fallback so a
+// bare dev checkout keeps working; no image path is hardcoded here — every
+// value is derived at CONSTRUCTION from the live filesystem (deriveGoBin /
+// deriveSourceRoot in wiring_p2315.go), never assumed.
+const (
+	DefaultClientPkg = "./cmd/probe-client/"
+	DefaultGoBinPath = "go"
+)
+
+// fallbackDevGoBin is a dev-host convenience, never assumed to exist —
+// deriveGoBin consults it only after stat proves it real (wiring_p2315.go).
+// A var ONLY so the P23-15 tests can point it at a nonexistent alias to prove
+// the stat gate; production code and the other tests never write it.
+var fallbackDevGoBin = "/opt/data/go/bin/go1.23.12"
+
 // validCapabilities is the set of capability names an agent can advertise.
 var validCapabilities = map[string]bool{
 	"exec":       true,
@@ -137,12 +154,18 @@ func NewBuilderManager(savePath, outputDir string) *BuilderManager {
 	if outputDir == "" {
 		outputDir = DefaultBuildOutputDir
 	}
+	// P23-15: the build path is derived from the LIVE filesystem at
+	// construction — never a hardcoded dev-host path. See wiring_p2315.go.
+	// The setters remain the explicit override layer on top of these defaults
+	// (flags/env in cmd/probe/serve.go call them).
+	clientPkg := deriveSourceRoot(DefaultClientPkg)
+	probeSourceRoot = clientPkg
 	bm := &BuilderManager{
 		builds:    make(map[string]*BuildConfig),
 		savePath:  savePath,
 		outputDir: outputDir,
-		goBinPath: "/opt/data/go/bin/go1.23.12",
-		clientPkg: "./cmd/probe-client/",
+		goBinPath: deriveGoBin(),
+		clientPkg: clientPkg,
 	}
 	bm.load()
 	return bm
@@ -158,10 +181,22 @@ func (bm *BuilderManager) SetGoBinPath(path string) {
 }
 
 // SetClientPkg overrides the Go package path for the probe-client binary.
+// P23-15: the flag/env layer (cmd/probe/serve.go) may hand in a source ROOT
+// (/src, /data/projects/probe) or a plain absolute directory instead of the
+// package path itself — normalize any directory that holds cmd/probe-client
+// into the package path, and leave a genuine package path untouched.
 func (bm *BuilderManager) SetClientPkg(pkg string) {
 	bm.mu.Lock()
 	defer bm.mu.Unlock()
 	if pkg != "" {
+		if clean := filepath.Clean(pkg); filepath.Base(clean) != "probe-client" {
+			if st, err := os.Stat(filepath.Join(clean, "cmd", "probe-client")); err == nil && st.IsDir() {
+				// A source ROOT was handed in (flag/env layer, P23-15): fold
+				// it into the package path so planTarget compiles the right
+				// package.
+				pkg = filepath.Join(clean, "cmd", "probe-client")
+			}
+		}
 		bm.clientPkg = pkg
 	}
 }

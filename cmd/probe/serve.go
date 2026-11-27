@@ -35,8 +35,8 @@ func runServe(args []string) {
 	caDir := fs.String("ca-dir", "", "directory for CA cert/key storage (default: PROBE_CA_DIR env or /tmp/probe-ca)")
 	builderPath := fs.String("builder-db", "", "agent builder records file path (default: PROBE_BUILDER_DB env or /tmp/probe-builds.json)")
 	builderOutputDir := fs.String("builder-output-dir", "", "directory for built agent binaries (default: PROBE_BUILDER_OUTPUT_DIR env or /tmp/probe-builds)")
-	builderGoPath := fs.String("builder-go", "", "path to the go binary for agent cross-compilation (default: /opt/data/go/bin/go1.23.12)")
-	builderSource := fs.String("builder-source", "", "path to the probe-client package for cross-compilation (default: ./cmd/probe-client/)")
+	builderGoPath := fs.String("builder-go", "", "path to the go binary for agent cross-compilation (default: derived — PATH lookup, then /usr/local/go/bin/go; env PROBE_BUILDER_GO)")
+	builderSource := fs.String("builder-source", "", "source directory for the probe-client package (default: derived — ./cmd/probe-client/, or /src in the image; env PROBE_BUILDER_SOURCE / PROBE_SOURCE_DIR)")
 	profilesPath := fs.String("profiles-db", "", "build profiles file path (default: PROBE_PROFILES_DB env or /tmp/probe-profiles.json)")
 	allowedCIDR := fs.String("allowed-cidr", "100.64.0.0/10,10.10.10.0/24,172.16.0.0/12", "CIDR ranges allowed for WebUI/API HTTP routes (default: Tailscale 100.64.0.0/10 + subnet-routed 10.10.10.0/24 + Docker bridges 172.16.0.0/12). Comma-separated for multiple. /ws is always open from any IP. Set to 0.0.0.0/0 to disable.")
 	blacklistCIDR := fs.String("blacklist-cidr", "", "Comma-separated CIDR ranges to block from ALL routes including /ws (e.g., \"1.2.3.0/24,5.6.7.8/32\"). Blocks known-bad IPs from connecting.")
@@ -109,6 +109,18 @@ func runServe(args []string) {
 	}
 	if *builderOutputDir == "" {
 		*builderOutputDir = "/tmp/probe-builds"
+	}
+	// P23-15: builder wiring env fallbacks. The manager derives image-correct
+	// defaults itself (wiring_p2315.go); these env vars are the explicit
+	// override layer, mirroring the flag file's env conventions.
+	if *builderGoPath == "" {
+		*builderGoPath = os.Getenv("PROBE_BUILDER_GO")
+	}
+	if *builderSource == "" {
+		*builderSource = os.Getenv("PROBE_BUILDER_SOURCE")
+	}
+	if *builderSource == "" {
+		*builderSource = os.Getenv("PROBE_SOURCE_DIR")
 	}
 	if *profilesPath == "" {
 		*profilesPath = os.Getenv("PROBE_PROFILES_DB")
