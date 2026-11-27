@@ -84,10 +84,21 @@ func (s *Server) encryptAgentFrame(env protocol.Envelope) (int, []byte, error) {
 // writeEncryptedJSON marshals env, seals it under the active posture, and
 // writes it on conn under the caller-provided locking already held. It is the
 // one call every direct-connection agent-ward write uses (P23-13).
+// PARENT FIX (orchestrator, c0b4c6d regression): when the posture is INACTIVE
+// the write must go through conn.WriteJSON exactly as before this commit -
+// every transport shim (direct conn, virtualConn, test harness conns) hooks
+// its reply logic on WriteJSON; WriteMessage bypasses those hooks and strands
+// the caller until the timeout. Active posture keeps the sealed-BinaryMessage
+// WriteMessage path, which no E2E-off deploy ever exercises.
 func (s *Server) writeEncryptedJSON(agentID string, conn Conn, env protocol.Envelope) error {
 	msgType, payload, err := s.encryptAgentFrame(env)
 	if err != nil {
 		return err
+	}
+	if msgType == websocket.TextMessage {
+		// E2E inactive: plain JSON envelope, written through WriteJSON so
+		// transport shims and test conns keep their reply hooks firing.
+		return conn.WriteJSON(env)
 	}
 	return conn.WriteMessage(msgType, payload)
 }
