@@ -330,7 +330,7 @@ func (s *Server) pingAgent(agentID string) error {
 	if _, isVirtual := conn.(*virtualConn); !isVirtual {
 		writeMu.Lock()
 	}
-	err := conn.WriteJSON(protocol.Envelope{ID: reqID, Type: protocol.TypePing})
+	err := s.writeEncryptedJSON(agentID, conn, protocol.Envelope{ID: reqID, Type: protocol.TypePing})
 	if _, isVirtual := conn.(*virtualConn); !isVirtual {
 		writeMu.Unlock()
 	}

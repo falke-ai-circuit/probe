@@ -917,7 +917,8 @@ func (s *Server) forwardToAgentWithTimeout(agentID string, msgType string, param
 	if tr.NeedsWriteLock {
 		tr.WriteMu.Lock()
 	}
-	err := conn.WriteJSON(env)
+	// P23-13: seal the command — the wire shows exec params were readable.
+	err := s.writeEncryptedJSON(agentID, conn, env)
 	if tr.NeedsWriteLock {
 		tr.WriteMu.Unlock()
 	}
