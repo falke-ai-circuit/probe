@@ -103,9 +103,29 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if msgType == websocket.BinaryMessage {
-		// Relay connection — handle in relay mode
-		s.handleRelayConnection(conn, firstData)
-		return
+		// P23-12 (input: P23-07 CHECK 6): an E2E-active agent's first frame is
+		// BinaryMessage — AES-GCM ciphertext of its agent-info envelope (agent.go
+		// writeMessage encrypts before sending; the agent hello is sent first) —
+		// which the old code misread as relay framing: relay_ws.go's channel-0
+		// guard parsed ciphertext bytes [1:5] as the channel id "got channel
+		// 2993237412" and closed 21/22 live dials with 1006. Classification is
+		// exact by GCM auth: same-key ciphertext decrypts (it IS an agent hello),
+		// a genuine plaintext relay frame never authenticates (relay framing is
+		// not E2E-sealed), so the relay path is unchanged in shape.
+		if s.e2eMgr != nil && s.e2eMgr.IsActive() {
+			plaintext, derr := s.e2eMgr.Decrypt(firstData)
+			if derr != nil {
+				// Relay connection — handle in relay mode
+				s.handleRelayConnection(conn, firstData)
+				return
+			}
+			// E2E-sealed agent hello: continue with the plaintext envelope.
+			firstData = plaintext
+		} else {
+			// E2E inactive: a binary first frame can only be relay framing.
+			s.handleRelayConnection(conn, firstData)
+			return
+		}
 	}
 
 	// Direct agent connection — parse first message as JSON Envelope
