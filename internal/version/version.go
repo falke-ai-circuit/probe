@@ -18,7 +18,7 @@ import "strings"
 
 // Semver is the release version in canonical form (no "v" prefix). Overridable
 // with -X at build time; see the package doc.
-var Semver = "1.20.0"
+var Semver = "1.20.1"
 
 // Normalize converts any accepted spelling ("v1.18.6", " 1.18.6 ") into the
 // canonical wire form ("1.18.6"). It is the only place the prefix is stripped.
