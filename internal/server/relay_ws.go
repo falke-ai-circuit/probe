@@ -124,6 +124,13 @@ type virtualConn struct {
 	// onClose releases whatever the channel owns upstream (a forwarded link,
 	// if the policy re-forwarded it). nil when nothing is owned.
 	onClose func()
+	// P27-02R (spec P27-01 §2.4 rule 2/3): sealed is this channel's wire
+	// classification, proved by GCM auth on the payload — decrypt success
+	// under an active posture means the agent's frames are sealed. It is
+	// written under session.channelsMu beside agentID (P15-12 discipline)
+	// and read to stamp the relayed row's e2e.sealed. The mirror is a byte
+	// pipe: sealed only describes the bytes, it never re-encrypts them.
+	sealed bool
 }
 
 // WriteJSON writes a JSON value as a framed message on the relay's
@@ -176,6 +183,38 @@ func (vc *virtualConn) Close() error {
 	delete(vc.session.channels, vc.channelID)
 	vc.session.channelsMu.Unlock()
 	return nil
+}
+
+// E2E refusal codes this path emits. E2E_KEY_REQUIRED is the code the direct
+// path already uses for a TLS-clear-text plaintext hello (docs/SECURITY.md §2).
+// A channel payload that is not plaintext AND does not authenticate is a
+// different condition, so it carries its own code rather than borrowing that
+// one (spec §2.4 rule 2: E2E_KEY_REQUIRED is "never for classified ciphertext").
+const (
+	refusalE2EKeyRequired   = "E2E_KEY_REQUIRED"
+	refusalE2EDecryptFailed = "E2E_DECRYPT_FAILED"
+)
+
+// relayE2ERefusal types a channel payload that failed GCM auth under an active
+// E2E posture (spec P27-01 §2.4 rule 2). Classification is by evidence, never
+// by hope: a payload that parses as a plaintext protocol.Envelope is the
+// cleartext downgrade the posture forbids (E2E_KEY_REQUIRED — same posture,
+// same refusal, no exemption for forwarded agents); anything else is
+// ciphertext we cannot open, refused as E2E_DECRYPT_FAILED so a broken key
+// never reads as cleartext. Never returns nil: the caller refuses the channel,
+// it does not fall through to a plaintext parse.
+func relayE2ERefusal(payload []byte, cause error) *ForwardRefusalError {
+	var env protocol.Envelope
+	if json.Unmarshal(payload, &env) == nil && env.Type != "" {
+		return &ForwardRefusalError{
+			Code:   refusalE2EKeyRequired,
+			Reason: "server requires e2e; relayed agent sent a plaintext frame (E2E_KEY_REQUIRED)",
+		}
+	}
+	return &ForwardRefusalError{
+		Code:   refusalE2EDecryptFailed,
+		Reason: fmt.Sprintf("relayed channel payload did not authenticate under the e2e key (%v); refused, never parsed as plaintext", cause),
+	}
 }
 
 // handleRelayConnection processes a WebSocket connection that has been
@@ -375,9 +414,32 @@ func (s *Server) handleRelayConnection(conn *websocket.Conn, firstData []byte) {
 		// never registers ("envelope parse error: invalid character ':'") and
 		// the channel closes agent-less. One shared helper, not a second copy
 		// of the decrypt logic.
+		//
+		// P27-02R (spec §2.4): wire keeps the bytes the agent actually sent.
+		// The decrypted copy is for THIS server's parse only — the mirror and
+		// the re-forward carry `wire`, so the upstream sees the same frame the
+		// agent sent (rule 3: no re-encryption, no double encryption).
+		wire := payload
 		plain, active, derr := s.decryptAgentPayload(payload)
 		if derr != nil {
-			log.Printf("[server] relay %s channel %d: e2e decrypt error: %v", reg.RelayID, chanID, derr)
+			// FAIL CLOSED (§2.4 rule 2, P23-14 b parity): a channel payload
+			// that does not authenticate under an active posture is never
+			// parsed as plaintext and never silently dropped. A plaintext
+			// envelope is the downgrade the posture forbids on every entry
+			// path — E2E_KEY_REQUIRED, the same code the direct path emits.
+			// Anything else is its own refusal, so a broken key can never
+			// read as cleartext.
+			ref := relayE2ERefusal(wire, derr)
+			s.refuseRelayChannel(session, chanID, ref)
+			log.Printf("[server] relay %s channel %d: refused (%s): %s", reg.RelayID, chanID, ref.Code, ref.Reason)
+			// A channel that never classified has nothing to keep alive: drop
+			// the pending slot so no later frame can register through a
+			// refused opening (§5.3 rule 5: no ghost row).
+			session.channelsMu.Lock()
+			if vc.agentID == "" {
+				delete(session.channels, chanID)
+			}
+			session.channelsMu.Unlock()
 			continue
 		}
 		if active {
@@ -421,6 +483,9 @@ func (s *Server) handleRelayConnection(conn *websocket.Conn, firstData []byte) {
 					// the P15-12 concurrency test caught.
 					session.channelsMu.Lock()
 					vc.agentID = agentID
+					// P27-02R (§2.4 rule 2): the channel's classification,
+					// written under the same lock as the identity flip.
+					vc.sealed = active
 					session.channelsMu.Unlock()
 					// P21-04: policy decides whether this relayed client is
 					// served here or carried further up OUR uplink. relay_all
@@ -429,7 +494,7 @@ func (s *Server) handleRelayConnection(conn *websocket.Conn, firstData []byte) {
 					if s.forwardPolicyFor(agentID) == PolicyRelayAll {
 						link, ferr := s.forwardArrival(agentID, session.chain, func(p []byte) {
 							_ = vc.WriteMessage(websocket.TextMessage, p)
-						}, payload)
+						}, wire)
 						if ferr != nil {
 							s.refuseRelayChannel(session, chanID, ferr)
 							log.Printf("[server] relayed agent %s refused: %v", agentID, ferr)
@@ -443,6 +508,10 @@ func (s *Server) handleRelayConnection(conn *websocket.Conn, firstData []byte) {
 						}
 					}
 					s.registry.Register(agentID, info.Name, info.Version, info.OS, info.Arch, info.Mode, info.Capabilities)
+					// P27-02R (spec §2.2/§2.4): the sealed classification this
+					// frame proved, stamped on the relayed row exactly as the
+					// direct path stamps it — wire-proved, never self-reported.
+					s.registry.MarkE2E(agentID, active)
 					s.sessions.CreateSession(agentID)
 					// P21-08: per-link counters, hooked where the agent is
 					// admitted on this link.

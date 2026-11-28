@@ -63,6 +63,17 @@ const (
 	// latencyUnmeasured marks a probe latency that was not measured. A zero
 	// would read as "instant", which is a claim, not an absence.
 	latencyUnmeasured int64 = -1
+
+	// §5.3 rule 4 registration_state vocabulary (spec P27-01). It answers one
+	// question per chain, from measured counters: did the server hop's
+	// forwarding lane get its registration? registered = positive evidence
+	// (an upstream frame confirmed a channel); refused = the upstream's last
+	// answer was a forward_refused and nothing has confirmed since;
+	// unanswered = channels are open upstream and none has been confirmed or
+	// refused yet. Absent = no uplink is configured, so nothing was asked.
+	registrationRegistered = "registered"
+	registrationRefused    = "refused"
+	registrationUnanswered = "unanswered"
 )
 
 // LinkCounters is the per-link counter set served inside a chain hop.
@@ -316,6 +327,11 @@ type chainHop struct {
 	Link     *LinkCounters `json:"link,omitempty"` // counters for the link INTO this hop
 	Observed bool          `json:"observed"`       // false = last known, not read this request
 	LastSeen string        `json:"last_seen,omitempty"`
+	// P27-02R (spec §5.3 rule 4): the server-role hop's registration answer.
+	// Set on the root hop only (registered|refused|unanswered); omitted where
+	// the question does not apply, because an absent key is an honest "not
+	// asked" while an invented value is a claim.
+	RegistrationState string `json:"registration_state,omitempty"`
 }
 
 // chainFailing names the hop that broke the path. "degraded" without this is
@@ -477,6 +493,35 @@ func (s *Server) liveRelays() []liveRelay {
 	return out
 }
 
+// uplinkRegistrationState derives the §5.3 rule 4 registration_state for a
+// chain's server-role hop from the §5.2 carrying counters the prior leg
+// shipped (UplinkForwarder.Carrying) plus the last refusal code. It reports
+// the state name and, when refused, the detail that names the failure.
+//
+// Order is deliberate: a confirmed registration outranks an older refusal (the
+// lane recovered, so the row must stop reading refused), a refusal outranks
+// "nothing yet" (the upstream's last answer was no), and channels open with no
+// answer are answered honestly as unanswered rather than green. No uplink
+// configured means nothing was asked, which is an empty state, not a value.
+func (s *Server) uplinkRegistrationState() (state, detail string) {
+	s.forwardMu.RLock()
+	f := s.forwarder
+	s.forwardMu.RUnlock()
+	if f == nil {
+		return "", ""
+	}
+	open, registered, last := f.Carrying()
+	switch {
+	case registered > 0:
+		return registrationRegistered, ""
+	case last != nil:
+		return registrationRefused, fmt.Sprintf("upstream refused registration (%s: %s)", last.Code, last.Reason)
+	case open > 0:
+		return registrationUnanswered, "channels are open upstream and none has been confirmed"
+	}
+	return "", ""
+}
+
 // observeChains reads one relay's link (bounded) and composes one chain per
 // agent on it, plus a relay-only chain when it carries no agent yet.
 func (s *Server) observeChains(lr liveRelay) []chainView {
@@ -490,6 +535,16 @@ func (s *Server) observeChains(lr liveRelay) []chainView {
 
 	counters := lr.link.snapshot()
 	rootHop := chainHop{ID: "server", Role: "server", State: chainStateUp, Observed: true}
+	// P27-02R (spec §5.3 rule 4): the server-role hop carries what the
+	// forwarding lane actually proved. A refused registration is folded by
+	// deriveChainState into a failing hop, so a chain can never terminate
+	// at "server" in green while the upstream is refusing its registrations.
+	if rs, detail := s.uplinkRegistrationState(); rs != "" {
+		rootHop.RegistrationState = rs
+		if rs == registrationRefused {
+			rootHop.Error = detail
+		}
+	}
 
 	relayHop := chainHop{
 		ID:       lr.relayID,
@@ -625,6 +680,16 @@ func deriveChainState(cv *chainView) {
 	broken := false
 	for i := range cv.Hops {
 		h := &cv.Hops[i]
+		// P27-02R (spec §5.3 rule 4): an engaged-forwarding but refused
+		// registration is not a healthy hop — it is treated exactly like a
+		// down hop, named as the failing hop, so a chain never reads up while
+		// the server hop's own registration was refused.
+		if h.RegistrationState == registrationRefused && h.State == chainStateUp {
+			h.State = chainStateDown
+			if h.Error == "" {
+				h.Error = "registration refused and no refusal text was recorded"
+			}
+		}
 		if broken && h.State == chainStateUp {
 			h.State = chainStateDegraded
 			h.Observed = false
