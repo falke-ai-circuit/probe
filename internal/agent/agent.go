@@ -611,6 +611,31 @@ func (a *Agent) handleConnection(conn *websocket.Conn) {
 				return
 			}
 			agentMsgRecv.Add(1)
+			// P23-13: symmetric inbound decrypt. With the E2E posture active
+			// the server seals every agent-ward envelope (server_ws.go
+			// encryptAgentFrame: pings, exec, credentials, token init,
+			// pongs). The read loop used to hand those bytes straight to
+			// json.Unmarshal — parse failed, pings were never answered, and
+			// the agent died at the miss threshold (P23-17 live s4 on BOTH
+			// legs). The key is the same shared token the agent->server
+			// direction already seals with (a.e2eMgr, SHA-256(token), no
+			// negotiation — P25-08). Mirror of the server's
+			// decryptAgentPayload: under an ACTIVE posture every inbound
+			// frame is decrypted, regardless of the WebSocket message type —
+			// msgType is a transport label, not the posture (the one-hop
+			// relay forwards agent-ward payloads via
+			// ch.Conn.WriteMessage(TextMessage, payload), relay.go, so a
+			// sealed frame arrives TEXT-labeled on that leg). A decrypt
+			// failure is an error, never a pass-through: fail closed.
+			// Inactive posture keeps today's pass-through exactly.
+			if a.e2eMgr != nil && a.e2eMgr.IsActive() {
+				plain, derr := a.e2eMgr.Decrypt(msg)
+				if derr != nil {
+					log.Printf("e2e decrypt error on server frame: %v", derr)
+					continue
+				}
+				msg = plain
+			}
 			var env protocol.Envelope
 			if err := json.Unmarshal(msg, &env); err != nil {
 				resp := protocol.NewError("", protocol.ErrInvalidParams, "invalid JSON")

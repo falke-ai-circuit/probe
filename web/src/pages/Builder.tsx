@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { api } from '../api/client'
+import { api, DownloadError } from '../api/client'
 import type { BuildConfig, Profile } from '../api/types'
 import { StatusBadge } from '../components/StatusBadge'
 
@@ -128,8 +128,15 @@ export default function Builder() {
     }, 2000)
   }
 
-  const downloadBuild = (id: string) => {
-    window.open(api.downloadBuildUrl(id), '_blank')
+  const downloadBuild = async (id: string) => {
+    setSuccess('')
+    setError('')
+    try {
+      await api.downloadBuild(id)
+      setSuccess('Download started.')
+    } catch (e) {
+      setError(`Download failed: ${e instanceof DownloadError ? `HTTP ${e.status}` : (e as Error).message}`)
+    }
   }
 
   // applyPreset copies a saved template into the wizard fields, so the next
