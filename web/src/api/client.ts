@@ -33,6 +33,17 @@ export class ApiError extends Error {
   }
 }
 
+// DownloadError carries the HTTP status of a failed artefact download so the
+// UI can surface a typed message (e.g. "Download failed: 401") instead of
+// silently opening a blank tab.
+export class DownloadError extends Error {
+  status: number
+  constructor(status: number) {
+    super(`Download failed: HTTP ${status}`)
+    this.status = status
+  }
+}
+
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   const token = getToken()
   const res = await fetch(`${BASE}${path}`, {
@@ -237,7 +248,43 @@ export const api = {
       body: JSON.stringify(cfg),
     }),
   getBuild: (id: string) => apiFetch<BuildConfig>(`/builds/${id}`),
+  // downloadBuildUrl kept for reference/tests: the download itself must be an
+  // authenticated fetch (window.open carries no Authorization header and the
+  // server correctly returns 401 — the old blank-page behaviour).
   downloadBuildUrl: (id: string) => `${BASE}/builds/${id}/download`,
+
+  // downloadBuild fetches the artefact with the operator's bearer token and
+  // triggers a browser download via an object URL. Non-2xx responses throw a
+  // DownloadError naming the status; the token never appears in a URL.
+  downloadBuild: async (id: string): Promise<void> => {
+    const token = getToken()
+    const res = await fetch(`${BASE}/builds/${id}/download`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+    if (!res.ok) {
+      throw new DownloadError(res.status)
+    }
+    const blob = await res.blob()
+    // Preferred filename comes from Content-Disposition: attachment; filename="x"
+    const cd = res.headers.get('Content-Disposition') || ''
+    let filename = ''
+    const m = cd.match(/filename\*?=(?:UTF-8'')?"([^"]+)"/i) || cd.match(/filename\*?=(?:UTF-8'')?([^;\s]+)/i)
+    if (m) filename = m[1]
+    if (!filename) {
+      // Fall back to a build-name-based name by target OS.
+      let cfg: BuildConfig | null = null
+      try { cfg = await api.getBuild(id) } catch { /* name fallback only */ }
+      filename = `${cfg?.name || 'build'}${cfg?.os === 'linux' || cfg?.os === 'darwin' ? '.bin' : '.exe'}`
+    }
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  },
   deleteBuild: (id: string) =>
     apiFetch<{ deleted: string }>(`/builds/${id}`, { method: 'DELETE' }),
 
