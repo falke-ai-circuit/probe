@@ -3,6 +3,7 @@ import type {
   Operator, EnrollmentToken, AuditEntry, RevokedAgent, FileTransfer,
   SecurityStatus, LoginAttemptsStatus, SettingsStatus, FlowRecord, FlowRun, FlowTemplate, SurveyEvent,
   SensorInfo, SensorAssignment, SensorState, PeerConfigView, ServersResponse,
+  ChainResponse, UplinkType,
 } from './types'
 
 const BASE = '/api/v1'
@@ -506,13 +507,31 @@ export const api = {
 
   // Peers / uplink (P17-02) — POST validates and seals the token server-side;
   // the secret appears only in a request body, never in any response (§6).
+  //
+  // P27-03 (spec P27-01 §3.2): the optional dial-discipline keys ride the SAME
+  // body — there is no second "uplink" endpoint and no parallel payload.
+  // `uplink` (P25-05R: forward target) and `uplink_type` (dial discipline) are
+  // INDEPENDENT: a standalone manual link is uplink:false + uplink_type:manual.
   listPeers: () =>
     apiFetch<{ peers: PeerConfigView[] }>('/peers'),
-  createPeer: (cfg: { id: string; upstream: string; token: string; enabled?: boolean; listen?: string; max_agents?: number }) =>
+  createPeer: (cfg: {
+    id: string
+    upstream: string
+    token: string
+    enabled?: boolean
+    listen?: string
+    max_agents?: number
+    uplink?: boolean
+    uplink_type?: UplinkType
+    schedule_start?: string
+    schedule_end?: string
+  }) =>
     apiFetch<PeerConfigView>('/peers', { method: 'POST', body: JSON.stringify(cfg) }),
   deletePeer: (id: string) =>
     apiFetch<unknown>(`/peers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-  peerAction: (id: string, action: 'enable' | 'disable' | 'dial-now') =>
+  // 'dial' (P27-02) is the ONLY way a manual uplink connects; 'dial-now' is the
+  // always-on/scheduled redial kick. They are different server cases (§3.3).
+  peerAction: (id: string, action: 'enable' | 'disable' | 'dial-now' | 'dial') =>
     apiFetch<{ id: string; state: string }>(`/peers/${encodeURIComponent(id)}/action`, {
       method: 'POST',
       body: JSON.stringify({ action }),
@@ -521,5 +540,10 @@ export const api = {
   // P18-06: server inventory (P21-02/P22-02) — the ONE badge endpoint.
   // First entry is this process; see servers.go handleV1Servers.
   listServers: () => apiFetch<ServersResponse>('/servers'),
+
+  // P27-03 (spec P27-01 §5.3 rule 4): per-path chain objects. The server hop
+  // carries registration_state; a refused hop folds the chain to degraded with
+  // failing_hop named. Read-only — the UI never synthesises a chain.
+  listChains: () => apiFetch<ChainResponse>('/chain'),
 
 }

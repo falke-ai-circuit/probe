@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api/client'
+import { stateChip } from '../lib/servers-view'
 import type { HealthInfo, ServerEntry } from '../api/types'
 
 // P18-06: shell-level host badge — ONE component, TWO variants.
@@ -79,7 +80,17 @@ function ShellBadge() {
     return () => clearInterval(t)
   }, [refresh])
 
-  const down = unreachable ? 'UNREACHABLE' : entry && entry.state !== 'up' ? `DEGRADED:${entry.state}` : ''
+  // P27-03: the local row's state now carries the six-value §1.1 vocabulary
+  // (`connected`, not the migrated-away `up`). Comparing to the old word made
+  // every page render "DEGRADED:connected"; the chip now comes from the same
+  // mapping the Servers table uses, so an unmapped value reads as unknown
+  // rather than as a healthy or a degraded guess.
+  const localState = stateChip(entry?.state)
+  const down = unreachable
+    ? 'UNREACHABLE'
+    : entry && !(localState.known && entry.state === 'connected')
+      ? `DEGRADED:${localState.label}`
+      : ''
   const counts = entry?.counts
 
   return (
