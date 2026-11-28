@@ -574,6 +574,31 @@ func (s *Server) handleV1Health(w http.ResponseWriter, r *http.Request) {
 		}
 		pingTimeouts += a.PingTimeouts
 	}
+	// P27-02 (spec P27-01 §2.1): the server's E2E posture, read from the
+	// manager that decides every refusal — never from a constant. cipher_error
+	// is surfaced, not swallowed: a posture-ok badge over a failed key build
+	// would be the lie this unit exists to remove.
+	e2e := map[string]interface{}{"active": false, "cipher_error": ""}
+	if s.e2eMgr != nil {
+		e2e["active"] = s.e2eMgr.IsActive()
+		if err := s.e2eMgr.CipherError(); err != nil {
+			e2e["cipher_error"] = err.Error()
+		}
+	}
+	// P27-02 (spec P27-01 §5.3 rule 6): the uplink roll-up. A glance-level
+	// "ok" must never print while an engaged uplink carries nothing.
+	var upTotal, upConnected, upCarrying int
+	if pm := s.existingPeerManager(); pm != nil {
+		for _, v := range pm.snapshot() {
+			upTotal++
+			if uplinkStateOf(v) == peerStateConnected {
+				upConnected++
+			}
+			if c := s.carryingForPeer(v.ID); c.AgentsRegistered > 0 {
+				upCarrying++
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status":                  "ok",
 		"server_version":          s.version,
@@ -583,6 +608,10 @@ func (s *Server) handleV1Health(w http.ResponseWriter, r *http.Request) {
 		"ping_timeouts_total":     pingTimeouts,
 		"stale_threshold_seconds": int64(staleThreshold.Seconds()),
 		"uptime_seconds":          int64(time.Since(startTime).Seconds()),
+		"e2e":                     e2e,
+		"uplinks_total":           upTotal,
+		"uplinks_connected":       upConnected,
+		"uplinks_carrying":        upCarrying,
 		// P22-02 §3.1: a four-key projection of the SAME builder that
 		// produces servers[0], so the login screen and the authenticated
 		// badge cannot disagree. Nothing here reads a request header.

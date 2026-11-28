@@ -69,6 +69,9 @@ type UplinkForwarder struct {
 	links     map[uint32]*uplinkChannel // upstream channel -> local deliver + refusal hook
 	closed    bool
 	onLoss    func() // mirror liveness callback
+	// P27-02 (spec §5.2): last forward_refusal observed on this forwarder,
+	// carried into the servers view's carrying object. Guarded by mu.
+	lastRefusal *carryingRefusal
 }
 
 // NewUplinkForwarder builds a forwarder for an upstream URL. linkID is this
@@ -197,6 +200,8 @@ func (f *UplinkForwarder) connect(chain Chain) error {
 		// accepted
 	case "forward_refused":
 		c.Close()
+		// P27-02 (§5.2): a registration-phase refusal is carrying-truth too.
+		f.noteRefusal(ctrl.Code, ctrl.Reason)
 		return &ForwardRefusalError{Code: ctrl.Code, Reason: ctrl.Reason}
 	default:
 		c.Close()
@@ -254,6 +259,9 @@ func (f *UplinkForwarder) dispatch() {
 				Reason    string `json:"reason"`
 			}
 			if json.Unmarshal(payload, &ctrl) == nil && ctrl.Type == "forward_refused" {
+				// P27-02 (§5.2): the refusal is carrying-truth, not just a
+				// channel event — record it before the twin teardown.
+				f.noteRefusal(ctrl.Code, ctrl.Reason)
 				f.mu.Lock()
 				ch := f.links[ctrl.ChannelID]
 				f.mu.Unlock()
@@ -273,6 +281,12 @@ func (f *UplinkForwarder) dispatch() {
 		ch := f.links[chanID]
 		f.mu.Unlock()
 		if ch != nil {
+			// P27-02 (§5.2): an upstream frame delivered for this channel is
+			// positive evidence the registration was accepted (P21-03:
+			// exactly one answer per relay_register). First delivery confirms.
+			f.mu.Lock()
+			ch.confirmed = true
+			f.mu.Unlock()
 			ch.deliver(payload)
 		}
 	}
@@ -283,9 +297,52 @@ func (f *UplinkForwarder) dispatch() {
 // refuses this channel after it opened — the refusal means the upstream
 // registration never happened, so the channel's local twin must be torn
 // down before anyone is told the registration failed.
+//
+// P27-02 (spec P27-01 §5.2): carrying-truth counters. confirmed flips on the
+// first upstream frame delivered for the channel — positive evidence the
+// upstream registered the forwarded agent (a refused channel is torn down
+// and never confirms). agentID names the local agent the channel carries.
 type uplinkChannel struct {
 	deliver   func([]byte)
 	onRefused func(code, reason string)
+	// P27-02 carrying truth:
+	agentID   string
+	confirmed bool
+}
+
+// carryingRefusal is the §5.2 last_refusal payload: the most recent
+// forward_refused code/reason this forwarder saw, stamped at observation.
+type carryingRefusal struct {
+	Code   string `json:"code"`
+	Reason string `json:"reason"`
+	At     string `json:"at"`
+}
+
+// noteRefusal records the last refusal (§5.2), link-level or per-channel.
+func (f *UplinkForwarder) noteRefusal(code, reason string) {
+	f.mu.Lock()
+	f.lastRefusal = &carryingRefusal{
+		Code: code, Reason: reason,
+		At: time.Now().UTC().Format(time.RFC3339),
+	}
+	f.mu.Unlock()
+}
+
+// Carrying returns the §5.2 counters: channels currently open on the
+// upstream, channels confirmed registered (positive relay evidence), and
+// the last refusal (nil when none).
+func (f *UplinkForwarder) Carrying() (open, registered int, last *carryingRefusal) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, ch := range f.links {
+		if ch != nil {
+			open++
+			if ch.confirmed {
+				registered++
+			}
+		}
+	}
+	return open, registered, f.lastRefusal
 }
 
 // ForwardRegistration is what ForwardAgent needs: the agent's id, the chain to
@@ -358,7 +415,7 @@ func (f *UplinkForwarder) ForwardAgent(req ForwardRegistration, first []byte) (*
 	chID := f.nextCh
 	f.nextCh++
 	if req.Deliver != nil {
-		f.links[chID] = &uplinkChannel{deliver: req.Deliver, onRefused: req.OnRefused}
+		f.links[chID] = &uplinkChannel{deliver: req.Deliver, onRefused: req.OnRefused, agentID: req.AgentID}
 	}
 	c := f.conn
 	f.mu.Unlock()

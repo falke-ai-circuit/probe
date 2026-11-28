@@ -129,6 +129,45 @@ type serverEntry struct {
 	PeerMeta  *peerMetaRow `json:"peer_meta"`
 	LinkState *string      `json:"link_state"`
 	ConfigRef *configRef   `json:"config_ref"`
+
+	// P27-02 (spec P27-01 §1): the uplink-server row model. Additive — the
+	// P22-02 keys above are unchanged (C1), these are emitted on EVERY row
+	// (R3) and read null where the truth is unknown. direction/state/
+	// uplink_type/schedule/in_window/encrypted/carrying are the keys the
+	// dashboard binds to; none of them is a constant (A8).
+	Address        string          `json:"address"`
+	Direction      string          `json:"direction"`
+	UplinkType     *string         `json:"uplink_type"`
+	ScheduleWindow *scheduleWindow `json:"schedule_window"`
+	InWindow       bool            `json:"in_window"`
+	Enabled        bool            `json:"enabled"`
+	PeerVersion    *string         `json:"peer_version"`
+	RequiredMin    *string         `json:"required_min"`
+	Encrypted      encryptedPair   `json:"encrypted"`
+	Carrying       carryingCounts  `json:"carrying"`
+	Source         string          `json:"source"`
+}
+
+// scheduleWindow is the §1.1 schedule_window object: non-null only for
+// scheduled rows (null is the honest absence for the other two types).
+type scheduleWindow struct {
+	Start string `json:"start"`
+	End   string `json:"end"`
+}
+
+// encryptedPair is the §2.3 server-LINK encryption truth. `payload` is always
+// "none" for server rows: the relay/uplink control plane is TLS-only, never
+// E2E-sealed — the agent e2e badge must not be inherited onto a link row.
+type encryptedPair struct {
+	Transport string `json:"transport"` // wss | ws | "" (unknown/scheme-less)
+	Payload   string `json:"payload"`   // always "none" for server rows
+}
+
+// carryingCounts is the §5.2 connected-but-not-carrying probe.
+type carryingCounts struct {
+	ChannelsOpen     int              `json:"channels_open"`
+	AgentsRegistered int              `json:"agents_registered"`
+	LastRefusal      *carryingRefusal `json:"last_refusal"`
 }
 
 // peerMetaRow is one peer's relay_register metadata as the row carries it.
@@ -242,11 +281,22 @@ type defaultPeerRecord struct {
 	// forwardURL/forwardToken are wired from this record's Upstream+token.
 	// Default false: a peer without the flag never changes the chain-root
 	// behaviour (A3 back-compat).
-	Uplink      bool   `json:"uplink"`
-	Listen      string `json:"listen"`
-	MaxAgents   int    `json:"max_agents"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
+	Uplink bool `json:"uplink"`
+	// P27-02 (spec P27-01 §3.1): the dial discipline of this peer.
+	// always-on (default when absent — every pre-P27 record reads as
+	// always-on, which is what the spawnLoop always did), scheduled (dials
+	// only inside [schedule_start,schedule_end] server-local, midnight
+	// crossing wraps), manual (dials ONLY via the action endpoint — never
+	// auto-dialed, never auto-redialed).
+	UplinkType string `json:"uplink_type,omitempty"`
+	// P27-02 (spec §3.1): the scheduled window. "HH:MM" server-local
+	// strings; empty when not scheduled. No tz field by design (D5).
+	ScheduleStart string `json:"schedule_start,omitempty"`
+	ScheduleEnd   string `json:"schedule_end,omitempty"`
+	Listen        string `json:"listen"`
+	MaxAgents     int    `json:"max_agents"`
+	CreatedAt     string `json:"created_at"`
+	UpdatedAt     string `json:"updated_at"`
 }
 
 type serversLocalRecord struct {
@@ -810,6 +860,17 @@ func (s *Server) handleV1Servers(w http.ResponseWriter, r *http.Request) {
 
 	entries := []serverEntry{local}
 	entries = append(entries, s.peerEntries(now)...)
+
+	// P27-02 (spec P27-01 §1): one row model for every server row. The
+	// P22-02 rows get the additive keys' defaults, then the peers snapshot
+	// contributes the configured-but-not-currently-connected half — the join
+	// that makes "wired but not carrying" visible instead of absent.
+	have := make(map[string]bool, len(entries))
+	for i := range entries {
+		normalizeUplinkRow(&entries[i])
+		have[entries[i].ID] = true
+	}
+	entries = append(entries, s.p27PeerEntries(now, have)...)
 
 	st := s.inventory()
 	st.flush(false) // bounded: at most one write per floor, and only if dirty

@@ -160,6 +160,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Relay connections send BinaryMessage with framing header.
 	// Direct agents send TextMessage (plaintext posture) or BinaryMessage
 	// (E2E-sealed envelope) with JSON Envelope.
+	// P27-02 (spec §2.2): sealedAtHello carries the wire-level classification
+	// into the registry stamp below; false means plaintext hello (measured).
+	sealedAtHello := false
 	msgType, firstData, err := conn.ReadMessage()
 	if err != nil {
 		log.Printf("[server] failed to read first message: %v", err)
@@ -168,6 +171,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if msgType == websocket.BinaryMessage {
+		// P27-02 (spec §2.2): the classification this branch proves is
+		// recorded on the agent record after registration — sealed=true.
+		sealedAtHello = true
 		// P23-12 (input: P23-07 CHECK 6): an E2E-active agent's first frame is
 		// BinaryMessage — AES-GCM ciphertext of its agent-info envelope (agent.go
 		// writeMessage encrypts before sending; the agent hello is sent first) —
@@ -261,6 +267,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		// link map records the channel so a policy toggle can pull it back
 		// down live without touching the client's socket.
 		s.registry.Register(agentID, info.Name, info.Version, info.OS, info.Arch, info.Mode, info.Capabilities)
+		s.registry.MarkE2E(agentID, sealedAtHello) // P27-02 §2.2
 		s.sessions.CreateSession(agentID)
 		s.mu.Lock()
 		s.conns[agentID] = conn
@@ -276,6 +283,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	// Register agent
 	s.registry.Register(agentID, info.Name, info.Version, info.OS, info.Arch, info.Mode, info.Capabilities)
+	s.registry.MarkE2E(agentID, sealedAtHello) // P27-02 §2.2: wire-proved, not self-reported
 
 	// Create session
 	s.sessions.CreateSession(agentID)

@@ -59,6 +59,21 @@ const (
 	peerStateRetrying        = "retrying"
 	peerStateAuthRejected    = "auth-rejected"
 	peerStateVersionMismatch = "version-mismatch"
+	// P27-02 (spec P27-01 §1.2): two derived states, additive to §4.
+	// disabled — not dialing by operator/window rule choice (enabled=false,
+	// scheduled outside window, or the detail names the rule). unreachable —
+	// a manual dial was attempted and failed, or a connected manual link
+	// dropped, with NO auto-redial to follow (§5.4).
+	peerStateDisabled    = "disabled"
+	peerStateUnreachable = "unreachable"
+)
+
+// State-detail reasons the spec §3.3 matrix names verbatim.
+const (
+	detailOutsideScheduleWindow = "outside_schedule_window"
+	detailManualUplinkNotDialed = "manual-uplink-not-dialed"
+	detailManualPolicyChanged   = "policy changed to manual"
+	detailManualNoAutoRedial    = "link dropped; manual uplink does not auto-redial"
 )
 
 // linkStateDetail is the state's payload on the peers view (§4: the
@@ -70,6 +85,76 @@ type linkStateDetail struct {
 	RefusalCode     string `json:"refusal_code,omitempty"`
 	RefusalReason   string `json:"refusal_reason,omitempty"`
 	TokenUnsealable bool   `json:"token_unsealable,omitempty"`
+	// P27-02 (spec P27-01 §1.1/§5.4): the rule-reason the row reports, e.g.
+	// detailOutsideScheduleWindow / detailManualUplinkNotDialed.
+	Reason string `json:"reason,omitempty"`
+}
+
+// ---------------------------------------------------------------------------
+// Uplink dial disciplines (P27-02, spec P27-01 §3.1/§3.3)
+// ---------------------------------------------------------------------------
+
+const (
+	uplinkTypeAlwaysOn  = "always-on"
+	uplinkTypeScheduled = "scheduled"
+	uplinkTypeManual    = "manual"
+)
+
+// peerWindowWatchTick is how often a running loop re-checks the scheduled
+// window gate (§3.3 window-exit watcher).
+const peerWindowWatchTick = 2 * time.Second
+
+// validUplinkType enforces the §3.1 enum exactly.
+func validUplinkType(v string) bool {
+	switch v {
+	case uplinkTypeAlwaysOn, uplinkTypeScheduled, uplinkTypeManual:
+		return true
+	}
+	return false
+}
+
+// validateScheduleWindow enforces the §3.1 pair rules: both keys present and
+// "HH:MM" (seconds-strict — "9:30" and "10:00:00" are refused). A
+// midnight-crossing window (start > end) is legal and wraps through 00:00.
+func validateScheduleWindow(start, end string) error {
+	if _, _, ok := parseHHMM(start); !ok {
+		return fmt.Errorf("schedule_start must be HH:MM (got %q)", start)
+	}
+	if _, _, ok := parseHHMM(end); !ok {
+		return fmt.Errorf("schedule_end must be HH:MM (got %q)", end)
+	}
+	return nil
+}
+
+// parseHHMM parses a strict "HH:MM" clock string into minutes-since-midnight.
+func parseHHMM(v string) (int, int, bool) {
+	t, err := time.Parse("15:04", strings.TrimSpace(v))
+	if err != nil {
+		return 0, 0, false
+	}
+	return t.Hour(), t.Minute(), true
+}
+
+// inWindowNow reports whether the record's scheduled window (server-local
+// time) contains right now. start == end means the full 24h window.
+func (r defaultPeerRecord) inWindowNow() bool {
+	sh, sm, ok1 := parseHHMM(r.ScheduleStart)
+	eh, em, ok2 := parseHHMM(r.ScheduleEnd)
+	if !ok1 || !ok2 {
+		return false
+	}
+	s := sh*60 + sm
+	e := eh*60 + em
+	n := time.Now()
+	cur := n.Hour()*60 + n.Minute()
+	if s == e {
+		return true
+	}
+	if s < e {
+		return cur >= s && cur < e
+	}
+	// Midnight-crossing: window runs s..24:00 and 00:00..e.
+	return cur >= s || cur < e
 }
 
 // isTerminalState reports states that never auto-retry (§4 rules).
@@ -91,6 +176,15 @@ type peerRuntime struct {
 	stop    chan struct{}
 	stopped bool
 	dialNow chan struct{} // dial-now signal (§2 action)
+	// P27-02 (spec §3.3): the scheduled-window watcher's stop channel, set
+	// while a scheduled link runs and closed when the run exits. Guarded by
+	// peerManager.mu like every other field here.
+	windowWatch chan struct{}
+	// P27-02 (spec §3.3): closed when a manual inline dial run ends (any
+	// outcome). Guards a second dial while a run is live, and is the join
+	// point the manual→always-on keep-link takeover waits on. nil when no
+	// inline run has ever been started. Guarded by peerManager.mu.
+	runOver chan struct{}
 }
 
 // peerManager owns every configured default_peer.
@@ -239,6 +333,111 @@ func (pm *peerManager) registerRuntime(rec defaultPeerRecord) *peerRuntime {
 }
 
 // ---------------------------------------------------------------------------
+// Dial-discipline helpers (P27-02, spec P27-01 §3.3). All read the runtime
+// under peerManager.mu (single-writer contract FM-1.3) with default-on
+// semantics: an absent/unknown uplink_type IS always-on (C1 backward compat).
+// ---------------------------------------------------------------------------
+
+// dialDiscipline resolves the effective discipline for a running peer.
+func (pm *peerManager) dialDiscipline(id string) string {
+	pm.mu.Lock()
+	rt := pm.peers[id]
+	pm.mu.Unlock()
+	if rt == nil {
+		return uplinkTypeAlwaysOn
+	}
+	switch rt.cfg.UplinkType {
+	case uplinkTypeScheduled, uplinkTypeManual:
+		return rt.cfg.UplinkType
+	default:
+		// "" and "always-on" (validation refuses anything else at the API
+		// boundary — legacy docs carry the empty value and read always-on).
+		return uplinkTypeAlwaysOn
+	}
+}
+
+// inWindow reports the record's current scheduled-window state.
+func (pm *peerManager) inWindow(id string) bool {
+	pm.mu.Lock()
+	rt := pm.peers[id]
+	pm.mu.Unlock()
+	if rt == nil {
+		return false
+	}
+	return rt.cfg.inWindowNow()
+}
+
+// loopExpired reports whether this peer's lifecycle slot was taken over
+// (stop/replace) — the guard that keeps a stale spawnLoop from dialing after
+// its runtime was replaced or stopped.
+func (pm *peerManager) loopExpired(id string) bool {
+	pm.mu.Lock()
+	rt := pm.peers[id]
+	pm.mu.Unlock()
+	return rt == nil || rt.stopped
+}
+
+// stopChan exposes the runtime's stop channel to the spawn loop's selects.
+func (pm *peerManager) stopChan(id string) chan struct{} {
+	pm.mu.Lock()
+	rt := pm.peers[id]
+	pm.mu.Unlock()
+	if rt == nil {
+		return nil
+	}
+	return rt.stop
+}
+
+// setWindowWatch records the scheduled-window watcher's stop channel; a nil
+// value clears it. Closing happens on watch exit.
+func (pm *peerManager) setWindowWatch(id string, ch chan struct{}) {
+	pm.mu.Lock()
+	if rt := pm.peers[id]; rt != nil {
+		rt.windowWatch = ch
+	}
+	pm.mu.Unlock()
+}
+
+// stopWindowWatch tears down the scheduled-window watcher if one is armed
+// and this (wch) is still the armed watch. Single-close owner: the spawn
+// loop; the watcher itself never closes (it exits via this channel or a
+// loopExpired check, leaving the channel to be GC'd there).
+func (pm *peerManager) stopWindowWatch(id string, wch chan struct{}) {
+	pm.mu.Lock()
+	rt := pm.peers[id]
+	if rt != nil && rt.windowWatch == wch {
+		rt.windowWatch = nil
+		close(wch)
+	}
+	pm.mu.Unlock()
+}
+
+// watchScheduledWindow is the §3.3 window-exit watcher: while a scheduled
+// link runs, exiting the window stops the link NOW (mirror flips through the
+// existing onLoss path). The run loop continues past RunUplinkOnly's return
+// and re-parks as disabled/outside_schedule_window. Exits when wch is closed
+// (run over / configured away) or the runtime is gone.
+func (pm *peerManager) watchScheduledWindow(id string, rl *relay.Relay, wch chan struct{}) {
+	tick := time.NewTicker(peerWindowWatchTick)
+	defer tick.Stop()
+	for {
+		select {
+		case <-wch:
+			return
+		case <-tick.C:
+			if pm.loopExpired(id) {
+				return
+			}
+			if !pm.inWindow(id) {
+				log.Printf("[peers] %s: scheduled window closed — stopping link (outside_schedule_window)", id)
+				rl.Stop()
+				return
+			}
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Credential sealing (§6)
 // ---------------------------------------------------------------------------
 
@@ -314,6 +513,38 @@ func (pm *peerManager) spawnLoop(id string) {
 	}()
 	backoff := peerBackoffInitial
 	for {
+		// P27-02 (spec §3.3): a peer whose config changed discipline (or was
+		// disabled) while this loop ran is stopped before its next dial.
+		if pm.loopExpired(id) {
+			return
+		}
+		// P27-02 (spec §3.3): the discipline gate. always-on dials as before;
+		// scheduled dials only inside its server-local window; manual NEVER
+		// auto-dials (its dial is the action endpoint's single bounded dial).
+		switch pm.dialDiscipline(id) {
+		case uplinkTypeManual:
+			// Spec §5.4: a manual uplink's truth after boot is "not dialed
+			// (manual)" — disabled/manual-uplink-not-dialed, NOT the
+			// pre-restart unreachable (stale unreachable reads as an
+			// outage; "not dialed yet" reads as intention).
+			pm.transition(id, peerStateDisabled, linkStateDetail{Reason: detailManualUplinkNotDialed})
+			return // no auto-dial, no auto-redial — operator action only
+		case uplinkTypeScheduled:
+			// Recomputed before every dial: outside the window the loop parks
+			// as disabled and re-checks on the window tick until re-entry.
+			for !pm.inWindow(id) {
+				if pm.loopExpired(id) {
+					return
+				}
+				pm.transition(id, peerStateDisabled, linkStateDetail{Reason: detailOutsideScheduleWindow})
+				select {
+				case <-pm.stopChan(id):
+					return
+				case <-time.After(peerWindowWatchTick):
+				}
+			}
+			// In-window: dial like always-on below.
+		}
 		rl, err := pm.buildRelay(id)
 		if err != nil {
 			// Unsealable token (§5.1): mark auth-rejected, NO retry.
@@ -325,7 +556,23 @@ func (pm *peerManager) spawnLoop(id string) {
 		}
 		pm.attachRelay(id, rl)
 
+		if pm.loopExpired(id) {
+			return
+		}
+		// P27-02 (spec §3.3): a scheduled link's window is re-checked while
+		// the loop runs — window exit mid-link stops the link NOW.
+		var wch chan struct{}
+		if pm.dialDiscipline(id) == uplinkTypeScheduled {
+			wch = make(chan struct{})
+			go pm.watchScheduledWindow(id, rl, wch)
+			pm.setWindowWatch(id, wch)
+		}
+
 		runErr := rl.RunUplinkOnly()
+
+		if wch != nil {
+			pm.stopWindowWatch(id, wch)
+		}
 
 		pm.mu.Lock()
 		rt := pm.peers[id]
@@ -350,7 +597,15 @@ func (pm *peerManager) spawnLoop(id string) {
 				return // terminal: no retry, ever
 			}
 		}
-		// Transport drop after having been up → retrying (§4).
+		// Transport drop after having been up → retrying (§4) — EXCEPT a
+		// manual link, which must never auto-redial (spec §3.3): it lands
+		// unreachable with no retry loop behind it.
+		if pm.dialDiscipline(id) == uplinkTypeManual {
+			pm.transition(id, peerStateUnreachable, linkStateDetail{Reason: detailManualNoAutoRedial})
+			pm.srv.auditPeer(id, "peer.state_changed", "", map[string]any{
+				"from": peerStateConnected, "to": peerStateUnreachable, "reason": detailManualNoAutoRedial})
+			return // NEVER redial a manual uplink
+		}
 		rt.state = peerStateRetrying
 		rt.detail = linkStateDetail{}
 		pm.mu.Unlock()
@@ -582,6 +837,19 @@ func (pm *peerManager) applyConfig(rec defaultPeerRecord) {
 			return
 		}
 	}
+	// P27-02 (spec §3.3 PUT transitions):
+	//   manual→always-on while CONNECTED ⇒ keep the healthy link, arm the
+	//   takeover goroutine (no forced redial — re-dialing a live link would
+	//   violate the no-op equality predicate);
+	//   always-on→manual ⇒ no keep: the replace below tears the link down
+	//   at apply (an unattended tunnel must not survive the loss of its
+	//   always-on justification) and the fresh runtime parks as
+	//   disabled/manual-uplink-not-dialed via the spawnLoop gate (the
+	//   park-reason names the policy change).
+	wasRuntime := rt != nil && !rt.stopped
+	wasLive := wasRuntime && rt.relay != nil && rt.relay.UplinkConnected()
+	wasManual := wasRuntime && rt.cfg.effectiveUplinkType() == uplinkTypeManual
+	nowAlwaysOn := rec.effectiveUplinkType() == uplinkTypeAlwaysOn
 	if rt != nil && !rt.stopped {
 		rt.stopped = true
 		close(rt.stop)
@@ -602,7 +870,30 @@ func (pm *peerManager) applyConfig(rec defaultPeerRecord) {
 		return
 	}
 
+	if wasManual && wasLive && nowAlwaysOn {
+		// Keep-link transition: preserve the live link by NOT replacing its
+		// runtime. Store the new config on the existing runtime, stamp the
+		// policy reason, and arm the retry-loop takeover for when the inline
+		// run eventually ends.
+		pm.mu.Lock()
+		rt.cfg = rec
+		rt.stopped = false
+		rt.detail = linkStateDetail{Reason: detailManualNoAutoRedial}
+		pm.peers[rec.ID] = rt
+		id := rec.ID
+		pm.mu.Unlock()
+		pm.armAlwaysOnTakeover(id)
+		return
+	}
+
 	pm.registerRuntime(rec)
+	// P27-02 (spec §3.3): an always-on→manual apply must not silently keep
+	// or restart a link — the new runtime parks; report the policy change.
+	if rec.effectiveUplinkType() == uplinkTypeManual && wasRuntime && !wasManual {
+		pm.transition(rec.ID, peerStateDisabled, linkStateDetail{Reason: detailManualPolicyChanged})
+		go pm.spawnLoop(rec.ID) // the gate re-parks + returns (no dial)
+		return
+	}
 	go pm.spawnLoop(rec.ID)
 }
 
@@ -657,18 +948,21 @@ func (pm *peerManager) snapshot() []peerConfigView {
 			continue
 		}
 		out = append(out, peerConfigView{
-			ID:           rt.cfg.ID,
-			Upstream:     rt.cfg.Upstream,
-			TokenFP:      rt.cfg.TokenFP,
-			TokenPresent: rt.cfg.TokenSealed != "",
-			Enabled:      rt.cfg.Enabled,
-			Uplink:       rt.cfg.Uplink,
-			Listen:       rt.cfg.Listen,
-			MaxAgents:    rt.cfg.MaxAgents,
-			CreatedAt:    rt.cfg.CreatedAt,
-			UpdatedAt:    rt.cfg.UpdatedAt,
-			LinkState:    rt.state,
-			StateDetail:  rt.detail,
+			ID:            rt.cfg.ID,
+			Upstream:      rt.cfg.Upstream,
+			TokenFP:       rt.cfg.TokenFP,
+			TokenPresent:  rt.cfg.TokenSealed != "",
+			Enabled:       rt.cfg.Enabled,
+			Uplink:        rt.cfg.Uplink,
+			UplinkType:    rt.cfg.effectiveUplinkType(),
+			ScheduleStart: rt.cfg.ScheduleStart,
+			ScheduleEnd:   rt.cfg.ScheduleEnd,
+			Listen:        rt.cfg.Listen,
+			MaxAgents:     rt.cfg.MaxAgents,
+			CreatedAt:     rt.cfg.CreatedAt,
+			UpdatedAt:     rt.cfg.UpdatedAt,
+			LinkState:     rt.state,
+			StateDetail:   rt.detail,
 		})
 	}
 	return out
@@ -691,20 +985,27 @@ func (pm *peerManager) configView(id string) *peerConfigView {
 // ---------------------------------------------------------------------------
 
 type peerConfigView struct {
-	ID           string          `json:"id"`
-	Upstream     string          `json:"upstream"`
-	TokenFP      string          `json:"token_fp"`
-	TokenPresent bool            `json:"token_present"`
-	Enabled      bool            `json:"enabled"`
+	ID           string `json:"id"`
+	Upstream     string `json:"upstream"`
+	TokenFP      string `json:"token_fp"`
+	TokenPresent bool   `json:"token_present"`
+	Enabled      bool   `json:"enabled"`
 	// P25-05R: true when this peer is wired as the server's forward uplink
 	// on adoption (R3: every config key is emitted).
-	Uplink       bool            `json:"uplink"`
-	Listen       string          `json:"listen"`
-	MaxAgents    int             `json:"max_agents"`
-	CreatedAt    string          `json:"created_at"`
-	UpdatedAt    string          `json:"updated_at"`
-	LinkState    string          `json:"link_state"`
-	StateDetail  linkStateDetail `json:"state_detail"`
+	Uplink bool `json:"uplink"`
+	// P27-02 (spec §3.2): the same three keys the stored record carries —
+	// one contract for the POST read-back and the list view. Empty
+	// UplinkType still renders always-on via effectiveUplinkType() at
+	// write side; here the stored resolution is echoed.
+	UplinkType    string          `json:"uplink_type"`
+	ScheduleStart string          `json:"schedule_start"`
+	ScheduleEnd   string          `json:"schedule_end"`
+	Listen        string          `json:"listen"`
+	MaxAgents     int             `json:"max_agents"`
+	CreatedAt     string          `json:"created_at"`
+	UpdatedAt     string          `json:"updated_at"`
+	LinkState     string          `json:"link_state"`
+	StateDetail   linkStateDetail `json:"state_detail"`
 }
 
 // getenvDefault is the local env fallback (no global import churn in tests).
@@ -715,10 +1016,141 @@ func getenvDefault(key, def string) string {
 	return def
 }
 
+// effectiveUplinkType resolves the §3.1 discipline with C1 defaulting: an
+// absent/empty stored value reads always-on (every pre-P27 record behaved
+// always-on; the doc never grows a fake value — the view layer resolves it).
+func (r defaultPeerRecord) effectiveUplinkType() string {
+	if validUplinkType(r.UplinkType) {
+		return r.UplinkType
+	}
+	return uplinkTypeAlwaysOn
+}
+
+// manualDial is the spec §3.3 manual action: ONE bounded dial — one
+// connect+registration wait, no retry loop, no watcher. Connected ⇒ nil
+// (the link keeps running on the relay's dispatch goroutine); refused or
+// failed ⇒ unreachable (refusal carried in the state detail, cleared by the
+// next operator dial). A manual peer has NO lifecycle goroutine in the
+// parked state: the runtime is registered without a spawnLoop and this call
+// runs the relay inline. The HTTP handler never blocks on a live link: it
+// returns at registration; the link's eventual drop is handled by the run
+// goroutine (unreachable, no auto-redial).
+func (pm *peerManager) manualDial(id string) error {
+	pm.mu.Lock()
+	rt := pm.peers[id]
+	if rt != nil && rt.runOver != nil {
+		select {
+		case <-rt.runOver: // previous run already over — safe to dial again
+		default:
+			pm.mu.Unlock()
+			return fmt.Errorf("PEER_ALREADY_CONNECTED: peer %s is connected; repeated dial refused", id)
+		}
+	}
+	pm.mu.Unlock()
+	if rt == nil || rt.stopped {
+		return fmt.Errorf("PEER_NOT_RUNNING: peer %s is not enabled", id)
+	}
+	if rt.relay != nil && rt.relay.UplinkConnected() {
+		return fmt.Errorf("PEER_ALREADY_CONNECTED: peer %s is connected", id)
+	}
+
+	rl, err := pm.buildRelay(id)
+	if err != nil {
+		pm.transition(id, peerStateUnreachable, linkStateDetail{Reason: "dial failed: " + err.Error()})
+		return fmt.Errorf("dial failed: %v", err)
+	}
+	pm.attachRelay(id, rl)
+
+	done := make(chan error, 1)
+	ro := make(chan struct{})
+	pm.mu.Lock()
+	if rt2 := pm.peers[id]; rt2 != nil {
+		rt2.runOver = ro // the keep-link takeover (applyConfig) waits on this
+	}
+	pm.mu.Unlock()
+
+	go func() {
+		defer close(ro)
+		err := rl.RunUplinkOnly()
+		if err != nil {
+			// Registration refusal or transport failure: the dial failed.
+			if rf := rl.LastRefusal(); rf != nil {
+				pm.transition(id, peerStateUnreachable, linkStateDetail{
+					RefusalCode: rf.Code, RefusalReason: rf.Reason})
+			} else {
+				pm.transition(id, peerStateUnreachable, linkStateDetail{Reason: "dial failed: " + err.Error()})
+			}
+			done <- err
+			return
+		}
+		// Run exited without error ⇒ the link dropped after having been up
+		// (or Stop fired). A manual uplink does not auto-redial (§3.3).
+		if pm.dialDiscipline(id) == uplinkTypeManual && !pm.loopExpired(id) {
+			pm.transition(id, peerStateUnreachable, linkStateDetail{Reason: detailManualNoAutoRedial})
+		}
+		done <- nil
+	}()
+
+	// Bounded wait for the registration (≈ the forwardRegTimeout discipline,
+	// with headroom for the dial itself).
+	deadline := time.After(10 * time.Second)
+	for {
+		if rl.UplinkConnected() {
+			return nil // connected transition stamped by the up-callback
+		}
+		select {
+		case err := <-done: // refused / failed fast
+			if rf := rl.LastRefusal(); rf != nil {
+				return fmt.Errorf("%s: %s", rf.Code, rf.Reason)
+			}
+			return fmt.Errorf("dial failed: %v", err)
+		case <-deadline:
+			rl.Stop() // bounded: stop the run, reap it
+			<-done
+			return fmt.Errorf("dial failed: timeout waiting for registration")
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// armAlwaysOnTakeover is the §3.3 keep-link transition's back half: a
+// manual→always-on apply keeps the healthy link and arms the goroutine that
+// enters the standard retry loop only when the current inline run ends (link
+// drops). Until then re-dialing it would violate the no-op equality
+// predicate — the link is healthy, not respawned.
+func (pm *peerManager) armAlwaysOnTakeover(id string) {
+	pm.mu.Lock()
+	ro := chan (struct{})(nil)
+	if rt := pm.peers[id]; rt != nil {
+		ro = rt.runOver
+	}
+	pm.mu.Unlock()
+	if ro == nil {
+		// No inline run recorded (e.g. disabled→enable re-apply): spawn now.
+		if !pm.loopExpired(id) {
+			go pm.spawnLoop(id)
+		}
+		return
+	}
+	go func() {
+		<-ro
+		if !pm.loopExpired(id) {
+			go pm.spawnLoop(id)
+		}
+	}()
+}
+
 // equal is the FM-1.3 config-equality predicate (spec: "Config equality").
+// P27-02: the dial-discipline keys join the predicate — a type or window
+// change is NOT an identical-config re-apply, so it live-applies (spec §3.3
+// PUT transitions; including always-on→manual tearing the link down at
+// apply, which applyConfig does via stop+respawn below).
 func (r defaultPeerRecord) equal(other defaultPeerRecord) bool {
 	return r.ID == other.ID && r.Upstream == other.Upstream &&
 		r.TokenFP == other.TokenFP && r.Enabled == other.Enabled &&
 		r.Listen == other.Listen && r.MaxAgents == other.MaxAgents &&
-		r.Uplink == other.Uplink
+		r.Uplink == other.Uplink &&
+		r.UplinkType == other.UplinkType &&
+		r.ScheduleStart == other.ScheduleStart &&
+		r.ScheduleEnd == other.ScheduleEnd
 }

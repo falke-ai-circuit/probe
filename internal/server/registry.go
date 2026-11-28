@@ -101,10 +101,44 @@ type AgentRecord struct {
 	// cannot inherit a carrier it no longer has.
 	Via string `json:"via,omitempty"`
 
+	// P27-02 (spec P27-01 §2.2): the wire-level sealed-truth classification,
+	// stamped at the hello that proved it. nil = never classified since this
+	// process started (honest absence: the row renders null, not "sealed:
+	// false", which would be a claim nobody measured). GCM auth is the
+	// evidence — a wrong key cannot authenticate, a self-report can lie.
+	E2E *agentE2E `json:"e2e"`
+
 	// internal — not serialized; parsed from the string fields on load.
 	connectedAt         time.Time `json:"-"`
 	lastHeartbeat       time.Time `json:"-"`
 	connectionStartedAt time.Time `json:"-"`
+}
+
+// agentE2E is the §2.2 sealed-truth stamp: what the wire proved at hello,
+// and when. observed_at lets a reader grey a stale claim out — an old true
+// is never shown as a current true.
+type agentE2E struct {
+	Sealed     bool   `json:"sealed"`
+	ObservedAt string `json:"observed_at"`
+}
+
+// MarkE2E stamps the sealed classification proved by GCM auth at hello
+// (sealed=true: the first frame decrypted under the posture key; false: the
+// hello arrived as plaintext). Called from the two classification points in
+// server_ws.go; a record that does not exist yet is left alone (the caller
+// registers first).
+func (r *Registry) MarkE2E(agentID string, sealed bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rec := r.agents[agentID]
+	if rec == nil {
+		return
+	}
+	rec.E2E = &agentE2E{
+		Sealed:     sealed,
+		ObservedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	r.save()
 }
 
 // computeHealthScore calculates a 0.0-1.0 composite health score:
