@@ -181,11 +181,24 @@ func TestP2702R_SealedRelayedAgentStampedSealed(t *testing.T) {
 		t.Error("vc.sealed is false for a channel whose first frame authenticated under the e2e key")
 	}
 
+	// §2.2 stamp ordering: Register publishes the row, MarkE2E stamps it
+	// immediately after — the same shape the direct path already uses
+	// (server_ws.go:270/286). A row seen inside that window carries e2e:null,
+	// which is the honest "not measured yet", so poll for the classification
+	// instead of pretending the insert and the stamp are one atomic step.
 	var stamp *agentE2E
-	for _, rec := range srv.registry.ListAgents() {
-		if rec.AgentID == agentID {
-			stamp = rec.E2E
+	stampDeadline := time.Now().Add(2 * time.Second)
+	for {
+		stamp = nil
+		for _, rec := range srv.registry.ListAgents() {
+			if rec.AgentID == agentID {
+				stamp = rec.E2E
+			}
 		}
+		if stamp != nil || time.Now().After(stampDeadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	if stamp == nil {
 		t.Fatal("relayed row carries e2e:null — the wire classification was never persisted (§2.2)")
