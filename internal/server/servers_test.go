@@ -186,7 +186,9 @@ func TestP2202_ServersShapeAndLocalFirst(t *testing.T) {
 	if local.UptimeSeconds == nil || *local.UptimeSeconds < 0 {
 		t.Errorf("uptime_seconds = %v, want a real measurement", local.UptimeSeconds)
 	}
-	if local.State != "up" || local.StateReason != stateReasonServing {
+	// P27-02 (spec P27-01 §1.1): bootstrap/local rows carry the six-value
+	// vocabulary — ws_state up maps to connected, else unreachable.
+	if local.State != peerStateConnected || local.StateReason != stateReasonServing {
 		t.Errorf("state/state_reason = %q/%q, want up/serving", local.State, local.StateReason)
 	}
 	if local.DownSince != nil {
@@ -263,7 +265,8 @@ func TestP2202_PeerUpDownRetainedAndBackUp(t *testing.T) {
 	if up == nil {
 		t.Fatalf("peer missing while its socket is open: %s", body)
 	}
-	if up.State != "up" || up.StateReason != stateReasonSocketOpen {
+	// P27-02 (spec P27-01 §1.1): socket-open maps to connected.
+	if up.State != peerStateConnected || up.StateReason != stateReasonSocketOpen {
 		t.Fatalf("peer state = %q/%q, want up/socket_open", up.State, up.StateReason)
 	}
 	if up.ListenAddr != net.JoinHostPort(mustHostname(t), "7701") {
@@ -308,7 +311,7 @@ func TestP2202_PeerUpDownRetainedAndBackUp(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		d, _ := getServers(t, srv, nil)
-		if p := peerByID(d.Servers, "relay-loopback-1"); p != nil && p.State == "down" {
+		if p := peerByID(d.Servers, "relay-loopback-1"); p != nil && p.State == peerStateUnreachable {
 			down = p
 			break
 		}
@@ -350,7 +353,7 @@ func TestP2202_PeerUpDownRetainedAndBackUp(t *testing.T) {
 	deadline = time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		d, _ := getServers(t, srv, nil)
-		if p := peerByID(d.Servers, "relay-loopback-1"); p != nil && p.State == "up" {
+		if p := peerByID(d.Servers, "relay-loopback-1"); p != nil && p.State == peerStateConnected {
 			back = p
 			break
 		}

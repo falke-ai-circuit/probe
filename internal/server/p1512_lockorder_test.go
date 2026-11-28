@@ -268,7 +268,9 @@ func TestP1512ServersPathSnapshotOrder(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > 1500*time.Millisecond {
 		t.Fatalf("P15-12: livePeerEntry blocked %v behind a relayMu writer — a nested relayMu read crept onto the row path (>1.5s)", elapsed)
 	}
-	if entry.State != "up" {
+	// P27-02 (spec P27-01 §1.1): the live-row state vocabulary is the
+	// six-value enum; socket-open reads connected.
+	if entry.State != peerStateConnected {
 		t.Fatalf("live peer row state = %q, want up", entry.State)
 	}
 	<-relFree
